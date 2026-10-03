@@ -1,0 +1,37 @@
+{
+  "name": "savior-attendance-portal",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "npx vite build",
+    "preview": "vite preview",
+    "server": "node scripts/start-server.mjs",
+    "server:direct": "node server/index.js",
+    "start": "node scripts/start-server.mjs",
+    "verify:email": "node scripts/verify-email-provider.cjs",
+    "verify:email:ui": "node scripts/verify-email-ui.cjs"
+  },
+  "dependencies": {
+    "@fontsource/plus-jakarta-sans": "^5.1.1",
+    "@fortawesome/fontawesome-free": "^6.7.2",
+    "chart.js": "^4.5.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "expo": "^57.0.26",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2",
+    "mssql": "^11.0.1",
+    "nodemailer": "^10.0.10",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.13",
+    "@vitejs/plugin-react": "^5.0.2",
+    "tailwindcss": "^4.1.13",
+    "vite": "^7.1.7"
+  }
+}
