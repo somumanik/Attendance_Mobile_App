@@ -18,7 +18,8 @@
  *   ├── Daily Master Tab → HRDailyMasterScreen
  *   ├── Celebrations Tab → HRCelebrationsScreen
  *   ├── Marriage Tab → HRMarriageScreen
- *   └── Leave Mgmt Tab → HRLeaveManagementScreen
+ *   ├── Leave Mgmt Tab → HRLeaveManagementScreen
+ *   └── Holidays Tab → HRHolidayManagementScreen
  * 
  * Email Configuration TAB NAHI HAI - mobile app se exclude kiya gaya hai.
  * Backend APIs: /api/hr/* (HR role required)
@@ -36,6 +37,7 @@ import { HRDailyMasterScreen } from '../screens/hr/HRDailyMasterScreen';
 import { HRCelebrationsScreen } from '../screens/hr/HRCelebrationsScreen';
 import { HRMarriageScreen } from '../screens/hr/HRMarriageScreen';
 import { HRLeaveManagementScreen } from '../screens/hr/HRLeaveManagementScreen';
+import { HRHolidayManagementScreen } from '../screens/hr/HRHolidayManagementScreen';
 import { HREmployeeCredentialsScreen } from '../screens/hr/HREmployeeCredentialsScreen';
 import { COLORS } from '../utils/colors';
 
@@ -53,6 +55,7 @@ const TAB_ICON_COLORS = {
   Celebrations: '#CA8A04',
   Marriage: '#DC2626',
   LeaveMgmt: '#059669',
+  Holidays: '#4F46E5',
 };
 
 /** Selected icons use the full color; unselected icons use a muted version. */
@@ -137,20 +140,27 @@ const HRTabs = () => (
           tabBarIcon: ({ focused, size }) => tabIcon('Marriage', focused, 'heart', 'heart-outline', size),
         }}
       />
-      {/* Leave Management is HIDE-ONLY (Phase 6): the screen, its import and all of
-          its backend/website code stay in the project untouched. Leave Management is
-          not implemented yet, so its tab is not registered. To restore it later, add
-          back the Tab.Screen block below exactly as it was:
-
-          <Tab.Screen
-            name="LeaveMgmt"
-            component={HRLeaveManagementScreen}
-            options={{
-              tabBarLabel: 'Leave Mgmt',
-              tabBarIcon: ({ focused, size }) => tabIcon('LeaveMgmt', focused, 'calendar', 'calendar-outline', size),
-            }}
-          />
-      */}
+      {/* Leave Management (Phase J): now backed by REAL application leave data, so
+          this tab is registered again. It was hidden in Phase 6 only because leave
+          was not implemented. Nothing else about the screen or its backend changed
+          beyond Phase J. */}
+      <Tab.Screen
+        name="LeaveMgmt"
+        component={HRLeaveManagementScreen}
+        options={{
+          tabBarLabel: 'Leave Mgmt',
+          tabBarIcon: ({ focused, size }) => tabIcon('LeaveMgmt', focused, 'calendar', 'calendar-outline', size),
+        }}
+      />
+      {/* Holiday Management (Phase G): the only NEW HR tab in this phase. */}
+      <Tab.Screen
+        name="Holidays"
+        component={HRHolidayManagementScreen}
+        options={{
+          tabBarLabel: 'Holidays',
+          tabBarIcon: ({ focused, size }) => tabIcon('Holidays', focused, 'flag', 'flag-outline', size),
+        }}
+      />
     </Tab.Navigator>
 );
 

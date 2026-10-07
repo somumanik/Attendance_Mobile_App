@@ -279,3 +279,37 @@ export const getCurrentUserData = async () => {
   const data = await getItem(STORAGE_KEYS.USER_DATA);
   return data ? JSON.parse(data) : null;
 };
+// ---------------------------------------------------------------------------
+// Employee Profile (self-service)
+// The employee is resolved from the authenticated session on the server; no
+// paycode is ever sent from the client.
+// ---------------------------------------------------------------------------
+
+/**
+ * Load the logged-in employee's own profile (master + self-service fields).
+ * @returns {Promise<object>}
+ */
+export const getMyProfile = async () => {
+  const response = await api.get(API_ENDPOINTS.EMPLOYEE_PROFILE);
+  return response?.profile || null;
+};
+
+/**
+ * Save ONLY the self-service fields of the logged-in employee.
+ * Master fields (name, paycode, department, company, dates, ...) are rejected by
+ * the server, so they can never be overwritten from here.
+ * @param {{mobile?:string,email?:string,address?:string,pincode?:string,
+ *          emergencyName?:string,emergencyNumber?:string}} fields
+ * @returns {Promise<{profile: object}>}
+ */
+export const saveMyProfile = async (fields) => {
+  const response = await api.put(API_ENDPOINTS.EMPLOYEE_PROFILE, {
+    mobile: fields.mobile || '',
+    email: fields.email || '',
+    address: fields.address || '',
+    pincode: fields.pincode || '',
+    emergencyName: fields.emergencyName || '',
+    emergencyNumber: fields.emergencyNumber || '',
+  });
+  return response;
+};

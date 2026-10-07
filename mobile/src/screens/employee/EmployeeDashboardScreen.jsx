@@ -34,9 +34,11 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { View, Text, ScrollView, StyleSheet, RefreshControl, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useNavigation } from '@react-navigation/native';
 import { useTheme } from '../../theme';
 import { ScreenContainer } from '../../components';
-import { StatCard, Button, Card, AttendanceBadge, MonthNavigator, currentMonthKey } from '../../components';
+import { StatCard, Button, Card, AttendanceBadge } from '../../components';
+import EmployeeMonthNav, { currentMonthKey } from '../../components/EmployeeMonthNav';
 import { useAuth } from '../../hooks/useAuth';
 import { api } from '../../services/api';
 import { API_ENDPOINTS } from '../../utils/constants';
@@ -91,6 +93,7 @@ const statusColor = (status) => {
  */
 export const EmployeeDashboardScreen = () => {
   const { theme } = useTheme();
+  const navigation = useNavigation();
   // Identity comes from the authenticated session only.
   const { userData } = useAuth();
   const employeeName = clean(userData?.empname) || 'Employee';
@@ -104,6 +107,18 @@ export const EmployeeDashboardScreen = () => {
   // Single Employee Audit uses for that month). Only earlier months can be
   // selected, so a future month is never shown.
   const [month, setMonth] = useState(currentMonthKey());
+  // Today's organisation celebrations (real data, logged-in employee excluded
+  // server-side). Loaded in ONE extra request that runs alongside the attendance
+  // call - not one request per employee.
+  const [celebrations, setCelebrations] = useState(null);
+
+  const loadCelebrations = useCallback(async () => {
+    try {
+      setCelebrations(await api.get(API_ENDPOINTS.EMPLOYEE_CELEBRATIONS));
+    } catch (e) {
+      setCelebrations(null);
+    }
+  }, []);
 
   const load = useCallback(async (isRefresh, targetMonth) => {
     if (isRefresh) setIsRefreshing(true); else setIsLoading(true);
@@ -124,6 +139,7 @@ export const EmployeeDashboardScreen = () => {
   }, [month]);
 
   useEffect(() => { load(false, month); }, [month]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadCelebrations(); }, [loadCelebrations]);
 
   // Rows come newest-first from the API (same order the website/HR audit use).
   const rows = useMemo(() => (Array.isArray(data?.attendance) ? data.attendance : []), [data]);
@@ -197,6 +213,26 @@ export const EmployeeDashboardScreen = () => {
 
   const todayStatus = todayRow ? statusOf(todayRow) : (rows.length ? PLACEHOLDER : 'No record');
 
+  /**
+   * Today's organisation celebrations, flattened from the real celebrations
+   * response. The logged-in employee is already excluded by the backend
+   * (`paycode <> @self`), so nothing is filtered here and nothing is invented.
+   */
+  const todayCelebrations = useMemo(() => {
+    const g = celebrations;
+    if (!g) return [];
+    const out = [];
+    const add = (list, icon, label) => {
+      (Array.isArray(list) ? list : []).forEach((it, i) => {
+        out.push({ key: `${label}-${clean(it.date)}-${i}`, icon, label, name: clean(it.name), date: clean(it.date) });
+      });
+    };
+    add(g.birthdays && g.birthdays.today, '🎂', 'Birthday');
+    add(g.workAnniversaries && g.workAnniversaries.today, '🎉', 'Work Anniversary');
+    add(g.marriageAnniversaries && g.marriageAnniversaries.today, '💍', 'Marriage Anniversary');
+    return out;
+  }, [celebrations]);
+
   return (
     <ScreenContainer title="" showHeader={false}>
       <ScrollView
@@ -243,7 +279,32 @@ export const EmployeeDashboardScreen = () => {
           <>
             {/* Month navigation — same control the HR month views use, forward disabled
             at the current month so a future month is never selected */}
-            <MonthNavigator month={month} onChange={setMonth} />
+            <EmployeeMonthNav month={month} onChange={setMonth} theme={theme} />
+
+            {/* ---------- Today's Celebrations (real org data, self excluded) ---------- */}
+            {todayCelebrations.length ? (
+              <View style={[styles.celebCard, { borderColor: theme.border, backgroundColor: theme.surface || '#FFFFFF' }]}>
+                <View style={styles.celebHead}>
+                  <Text style={styles.celebHeadText}>Today's Celebrations</Text>
+                  <TouchableOpacity
+                    style={[styles.celebViewAll, { borderColor: `${theme.primary}44`, backgroundColor: `${theme.primary}12` }]}
+                    onPress={() => navigation.navigate('BdayAnniversary')}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={[styles.celebViewAllText, { color: theme.primary }]}>View All</Text>
+                  </TouchableOpacity>
+                </View>
+                {todayCelebrations.map((c) => (
+                  <View key={c.key} style={styles.celebRow}>
+                    <Text style={styles.celebIcon}>{c.icon}</Text>
+                    <View style={styles.celebBody}>
+                      <Text style={[styles.celebName, { color: theme.textPrimary }]} numberOfLines={1}>{c.name}</Text>
+                      <Text style={[styles.celebType, { color: theme.textSecondary }]} numberOfLines={1}>{c.label}</Text>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            ) : null}
 
             {/* Period label comes from the window the backend actually aggregated */}
             <Text style={[styles.periodLabel, { color: theme.textTertiary }]}>{periodLabel}</Text>
@@ -567,6 +628,17 @@ const styles = StyleSheet.create({
   trendAxis: { flexDirection: 'row', justifyContent: 'space-between' },
   trendAxisText: { fontSize: 9.5 },
   trendLegend: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 4 },
+  // Today's celebrations (compact notification card)
+  celebCard: { borderRadius: 14, borderWidth: 1, padding: 12, marginBottom: 12 },
+  celebHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
+  celebHeadText: { fontSize: 13.5, fontWeight: '800' },
+  celebViewAll: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, borderWidth: 1 },
+  celebViewAllText: { fontSize: 11, fontWeight: '800' },
+  celebRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 5 },
+  celebIcon: { fontSize: 18 },
+  celebBody: { flex: 1 },
+  celebName: { fontSize: 13, fontWeight: '700' },
+  celebType: { fontSize: 11 },
 });
 
 export default EmployeeDashboardScreen;

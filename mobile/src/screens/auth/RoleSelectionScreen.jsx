@@ -46,7 +46,7 @@ export const RoleSelectionScreen = () => {
           <View style={[styles.logoCircle, { backgroundColor: theme.primary }]}>
             <Text style={styles.logoIcon}>📊</Text>
           </View>
-          <Text style={[styles.appTitle, { color: theme.textPrimary }]}>Savior Attendance</Text>
+          <Text style={[styles.appTitle, { color: theme.textPrimary }]}>Mohani Attendance</Text>
           <Text style={[styles.appSubtitle, { color: theme.textSecondary }]}>Mobile Portal</Text>
         </View>
 

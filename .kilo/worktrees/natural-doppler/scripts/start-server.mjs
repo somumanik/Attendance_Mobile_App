@@ -5,7 +5,7 @@
 import { execSync, spawn } from 'node:child_process';
 import net from 'node:net';
 
-const port = Number(process.env.PORT || process.env.API_PORT || 4000);
+const port = Number(process.env.API_PORT || 4000);
 
 function isPortFree(p) {
   // Express app.listen(port) binds '::' (IPv6-any, dual-stack). Sirf 0.0.0.0 check

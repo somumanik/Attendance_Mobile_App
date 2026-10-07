@@ -1,473 +1,406 @@
 // ============================================================================
 // FILE: mobile/src/screens/hr/HRCelebrationsScreen.jsx
-// PURPOSE: HR Birthdays & Anniversaries - Today's and upcoming celebrations
+// PURPOSE: HR Birthdays & Anniversaries - real birthday + work-anniversary lists
 // ============================================================================
 
 /**
- * Ye screen HR ko birthdays, work anniversaries, aur marriage anniversaries dikhati hai.
- * 
+ * Mobile Birthdays & Anniversaries — website-matched logic, phone-friendly UI.
+ *
  * Navigation Flow:
- * HRNavigator (Celebrations Tab) → HRCelebrationsScreen
- * 
- * Data Flow (Phase 2):
- * Screen Mount → API Service (GET /api/hr/celebrations) → Backend
- * 
- * Backend API: GET /api/hr/celebrations
- * Response: { employees[], marriages[] }
- * Employee fields: paycode, empname, presentcardno, companycode, departmentcode, designation, dateofbirth, dateofjoin
- * Marriage fields: paycode, presentcardno, anniversarydate, createddate, updateddate, importedby
- * 
- * Phase 1: Placeholder UI with today's and upcoming celebrations
- * Phase 2: Real API integration
+ * HRNavigator (Birthdays Tab) -> HRCelebrationsScreen
+ *
+ * Data Flow (existing endpoints only, no new business logic):
+ * GET /api/employees?active=Y (paged)  -> real dbo.tblemployee employee master
+ * GET /api/hr/filters                   -> dbo.tbldepartment code -> name map
+ *
+ * Data sources (exactly the website's):
+ *   Birthday            -> dbo.tblemployee.dateofbirth
+ *   Work Anniversary    -> dbo.tblemployee.dateofjoin
+ *   Employee identity   -> dbo.tblemployee.paycode
+ *
+ * All date maths mirrors index.html so both surfaces always agree:
+ *   daysUntilMonthDay() - next occurrence of a DAY+MONTH, rolling into next year
+ *                         when the date has already passed (correct across Dec->Jan).
+ *   ageFrom() / yearsCompleted() - whole years, decremented until the month+day
+ *                                  has been reached.
+ *   nextDateOf()        - the actual upcoming date for that DAY+MONTH.
+ *
+ * Windows are the website's, unchanged:
+ *   Today's Birthdays   -> DAY(dateofbirth)  + MONTH(dateofbirth) == today
+ *   Upcoming Birthdays  -> 0 < daysUntil(dateofbirth)  <= 30
+ *   Today's Anniversary -> DAY(dateofjoin)   + MONTH(dateofjoin)  == today
+ *   Upcoming Anniversary-> 0 < daysUntil(dateofjoin)   <= 45
+ *
+ * Birth year never affects birthday matching (day+month only), as required.
+ * Employee population = active employees, the same /employees?active=Y roster the
+ * Executive Overview and website celebrations widgets use.
  */
 
-import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, StyleSheet, TouchableOpacity } from 'react-native';
-import { COLORS, TYPOGRAPHY, SPACING, SHADOWS } from '../../utils/colors';
-import { formatDate } from '../../utils/format';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { View, Text, ScrollView, StyleSheet, TouchableOpacity, RefreshControl, ActivityIndicator } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { COLORS, SPACING, SHADOWS } from '../../utils/colors';
 import { ScreenContainer } from '../../components/ScreenContainer';
-import { PlaceholderCard } from '../../components/PlaceholderCard';
+import { Button } from '../../components/Button';
+import { api } from '../../services/api';
+
+// Website-equivalent windows (index.html renderCelebrationsPage).
+const UPCOMING_BIRTHDAY_DAYS = 30;
+const UPCOMING_ANNIVERSARY_DAYS = 45;
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+const clean = (v) => String(v == null ? '' : v).trim();
+const PLACEHOLDER = '—';
+
+const parseDateOnly = (v) => {
+  const s = clean(v).slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+  const d = new Date(`${s}T00:00:00`);
+  return Number.isNaN(d.getTime()) ? null : d;
+};
+
+const startOfToday = () => {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d;
+};
+
+const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+const pretty = (v) => {
+  const d = parseDateOnly(v);
+  return d ? `${String(d.getDate()).padStart(2, '0')}-${MONTHS[d.getMonth()]}-${d.getFullYear()}` : '—';
+};
 
 /**
- * HR Celebrations Screen Component
+ * Website port of index.html daysUntilMonthDay().
+ * 0 when the DAY+MONTH is today; rolls to next year when already passed.
+ */
+const daysUntilMonthDay = (dateStr) => {
+  const src = parseDateOnly(dateStr);
+  if (!src) return null;
+  const now = startOfToday();
+  let next = new Date(now.getFullYear(), src.getMonth(), src.getDate());
+  if (next < now) next = new Date(now.getFullYear() + 1, src.getMonth(), src.getDate());
+  return Math.round((next - now) / 86400000);
+};
+
+/** Website port of index.html nextDateOf(). */
+const nextDateOf = (dateStr) => {
+  const src = parseDateOnly(dateStr);
+  if (!src) return null;
+  const now = startOfToday();
+  let next = new Date(now.getFullYear(), src.getMonth(), src.getDate());
+  if (next < now) next = new Date(now.getFullYear() + 1, src.getMonth(), src.getDate());
+  return iso(next);
+};
+
+/** Website port of index.html ageFrom() / yearsCompleted() (identical formula). */
+const yearsSince = (dateStr) => {
+  const d = parseDateOnly(dateStr);
+  if (!d) return null;
+  const n = new Date();
+  let y = n.getFullYear() - d.getFullYear();
+  const m = n.getMonth() - d.getMonth();
+  if (m < 0 || (m === 0 && n.getDate() < d.getDate())) y -= 1;
+  return y;
+};
+
+/** DAY + MONTH match against today (year independent). */
+const isTodayMonthDay = (dateStr) => {
+  const d = parseDateOnly(dateStr);
+  if (!d) return false;
+  const n = new Date();
+  return d.getDate() === n.getDate() && d.getMonth() === n.getMonth();
+};
+
+/**
+ * HR Birthdays & Anniversaries Screen Component
  */
 export const HRCelebrationsScreen = () => {
-  const [celebrations, setCelebrations] = useState(null);
-  const [activeTab, setActiveTab] = useState('today');
-  const [isLoading, setIsLoading] = useState(true);
+  const [employees, setEmployees] = useState([]);
+  const [deptNames, setDeptNames] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState(null);
 
+  // Real department name map — same /hr/filters lookup used elsewhere in the app.
   useEffect(() => {
-    // Phase 2: Real API call
-    // const data = await api.get(API_ENDPOINTS.HR_CELEBRATIONS);
-    // setCelebrations(data);
-    
-    // Phase 1: Demo data
-    setTimeout(() => {
-      setCelebrations({
-        employees: [
-          { paycode: 'EMP001', empname: 'Rajesh Kumar', departmentcode: 'IT', companycode: 'SAVIOR INFOTECH', dateofbirth: '1990-05-15', dateofjoin: '2022-03-01' },
-          { paycode: 'EMP002', empname: 'Priya Sharma', departmentcode: 'HR', companycode: 'SAVIOR INFOTECH', dateofbirth: '1988-09-25', dateofjoin: '2020-01-15' },
-          { paycode: 'EMP003', empname: 'Amit Kumar', departmentcode: 'IT', companycode: 'SAVIOR INFOTECH', dateofbirth: '1992-11-03', dateofjoin: '2021-07-10' },
-          { paycode: 'EMP004', empname: 'Sunita Reddy', departmentcode: 'Finance', companycode: 'SAVIOR INFOTECH', dateofbirth: '1985-02-14', dateofjoin: '2019-05-20' },
-          { paycode: 'EMP005', empname: 'Vikram Singh', departmentcode: 'Operations', companycode: 'SAVIOR INFOTECH', dateofbirth: '1995-08-30', dateofjoin: '2023-02-01' },
-        ],
-        marriages: [
-          { paycode: 'EMP001', anniversarydate: '2018-06-15' },
-          { paycode: 'EMP002', anniversarydate: '2015-11-22' },
-          { paycode: 'EMP004', anniversarydate: '2010-02-14' },
-        ],
-      });
-      setIsLoading(false);
-    }, 500);
+    let active = true;
+    api.get('/hr/filters')
+      .then((f) => {
+        if (!active) return;
+        const map = {};
+        (Array.isArray(f?.departments) ? f.departments : []).forEach((d) => {
+          const c = clean(d?.code);
+          if (c) map[c] = clean(d?.name) || c;
+        });
+        setDeptNames(map);
+      })
+      .catch(() => { /* falls back to code, same as the website */ });
+    return () => { active = false; };
   }, []);
 
-  const tabs = [
-    { id: 'today', label: 'Today' },
-    { id: 'upcoming', label: 'Upcoming (7 days)' },
-    { id: 'this_month', label: 'This Month' },
-  ];
-
-  // Calculate celebrations based on demo data
-  const getTodayCelebrations = () => {
-    if (!celebrations) return { birthdays: [], workAnniversaries: [], marriageAnniversaries: [] };
-    const today = new Date();
-    const todayStr = today.toISOString().split('T')[0];
-    const mmdd = todayStr.slice(5); // MM-DD
-
-    const birthdays = celebrations.employees.filter(emp => {
-      if (!emp.dateofbirth) return false;
-      return emp.dateofbirth.slice(5) === mmdd;
-    });
-
-    const workAnniversaries = celebrations.employees.filter(emp => {
-      if (!emp.dateofjoin) return false;
-      return emp.dateofjoin.slice(5) === mmdd;
-    });
-
-    const marriageAnniversaries = celebrations.marriages.filter(m => {
-      if (!m.anniversarydate) return false;
-      return m.anniversarydate.slice(5) === mmdd;
-    }).map(m => {
-      const emp = celebrations.employees.find(e => e.paycode === m.paycode);
-      return { ...m, empname: emp?.empname, departmentcode: emp?.departmentcode };
-    });
-
-    return { birthdays, workAnniversaries, marriageAnniversaries };
-  };
-
-  const getUpcomingCelebrations = (days = 7) => {
-    if (!celebrations) return { birthdays: [], workAnniversaries: [], marriageAnniversaries: [] };
-    const today = new Date();
-    const upcomingBirthdays = [];
-    const upcomingWorkAnniversaries = [];
-    const upcomingMarriageAnniversaries = [];
-
-    celebrations.employees.forEach(emp => {
-      if (emp.dateofbirth) {
-        const bday = new Date(today.getFullYear(), new Date(emp.dateofbirth).getMonth(), new Date(emp.dateofbirth).getDate());
-        if (bday < today) bday.setFullYear(bday.getFullYear() + 1);
-        const diffDays = Math.ceil((bday - today) / (1000 * 60 * 60 * 24));
-        if (diffDays >= 0 && diffDays <= days) {
-          upcomingBirthdays.push({ ...emp, daysUntil: diffDays, date: bday.toISOString().split('T')[0] });
-        }
+  const load = useCallback(async (isRefresh) => {
+    if (isRefresh) setRefreshing(true); else setLoading(true);
+    setError(null);
+    try {
+      // Same roster source + paging shape as All Employees / Executive Overview.
+      const rows = [];
+      for (let p = 1; p <= 20; p += 1) {
+        const data = await api.get('/employees', { page: p, pageSize: 100, active: 'Y' });
+        const batch = Array.isArray(data?.rows) ? data.rows : [];
+        rows.push(...batch);
+        if (batch.length < 100) break;
       }
-      if (emp.dateofjoin) {
-        const anniv = new Date(today.getFullYear(), new Date(emp.dateofjoin).getMonth(), new Date(emp.dateofjoin).getDate());
-        if (anniv < today) anniv.setFullYear(anniv.getFullYear() + 1);
-        const diffDays = Math.ceil((anniv - today) / (1000 * 60 * 60 * 24));
-        if (diffDays >= 0 && diffDays <= days) {
-          upcomingWorkAnniversaries.push({ ...emp, daysUntil: diffDays, date: anniv.toISOString().split('T')[0] });
-        }
-      }
-    });
-
-    celebrations.marriages.forEach(m => {
-      if (m.anniversarydate) {
-        const emp = celebrations.employees.find(e => e.paycode === m.paycode);
-        const anniv = new Date(today.getFullYear(), new Date(m.anniversarydate).getMonth(), new Date(m.anniversarydate).getDate());
-        if (anniv < today) anniv.setFullYear(anniv.getFullYear() + 1);
-        const diffDays = Math.ceil((anniv - today) / (1000 * 60 * 60 * 24));
-        if (diffDays >= 0 && diffDays <= days) {
-          upcomingMarriageAnniversaries.push({ ...m, empname: emp?.empname, departmentcode: emp?.departmentcode, daysUntil: diffDays, date: anniv.toISOString().split('T')[0] });
-        }
-      }
-    });
-
-    return {
-      birthdays: upcomingBirthdays.sort((a, b) => a.daysUntil - b.daysUntil),
-      workAnniversaries: upcomingWorkAnniversaries.sort((a, b) => a.daysUntil - b.daysUntil),
-      marriageAnniversaries: upcomingMarriageAnniversaries.sort((a, b) => a.daysUntil - b.daysUntil),
-    };
-  };
-
-  const getThisMonthCelebrations = () => {
-    if (!celebrations) return { birthdays: [], workAnniversaries: [], marriageAnniversaries: [] };
-    const today = new Date();
-    const thisMonth = today.getMonth();
-    const thisYear = today.getFullYear();
-
-    const birthdays = celebrations.employees.filter(emp => {
-      if (!emp.dateofbirth) return false;
-      const bdayMonth = new Date(emp.dateofbirth).getMonth();
-      return bdayMonth === thisMonth;
-    }).map(emp => {
-      const bday = new Date(thisYear, new Date(emp.dateofbirth).getMonth(), new Date(emp.dateofbirth).getDate());
-      if (bday < today) bday.setFullYear(thisYear + 1);
-      return { ...emp, daysUntil: Math.ceil((bday - today) / (1000 * 60 * 60 * 24)), date: bday.toISOString().split('T')[0] };
-    }).sort((a, b) => a.daysUntil - b.daysUntil);
-
-    const workAnniversaries = celebrations.employees.filter(emp => {
-      if (!emp.dateofjoin) return false;
-      const annivMonth = new Date(emp.dateofjoin).getMonth();
-      return annivMonth === thisMonth;
-    }).map(emp => {
-      const anniv = new Date(thisYear, new Date(emp.dateofjoin).getMonth(), new Date(emp.dateofjoin).getDate());
-      if (anniv < today) anniv.setFullYear(thisYear + 1);
-      return { ...emp, daysUntil: Math.ceil((anniv - today) / (1000 * 60 * 60 * 24)), date: anniv.toISOString().split('T')[0] };
-    }).sort((a, b) => a.daysUntil - b.daysUntil);
-
-    const marriageAnniversaries = celebrations.marriages.filter(m => {
-      if (!m.anniversarydate) return false;
-      const annivMonth = new Date(m.anniversarydate).getMonth();
-      return annivMonth === thisMonth;
-    }).map(m => {
-      const emp = celebrations.employees.find(e => e.paycode === m.paycode);
-      const anniv = new Date(thisYear, new Date(m.anniversarydate).getMonth(), new Date(m.anniversarydate).getDate());
-      if (anniv < today) anniv.setFullYear(thisYear + 1);
-      return { ...m, empname: emp?.empname, departmentcode: emp?.departmentcode, daysUntil: Math.ceil((new Date(m.anniversarydate.replace(m.anniversarydate.slice(0,4), thisYear.toString())) - today) / (1000 * 60 * 60 * 24)), date: m.anniversarydate };
-    }).sort((a, b) => a.daysUntil - b.daysUntil);
-
-    return { birthdays, workAnniversaries, marriageAnniversaries };
-  };
-
-  if (!celebrations) {
-    return (
-      <ScreenContainer title="Celebrations" showHeader={true}>
-        <View style={styles.loadingContainer}>
-          <Text style={styles.loadingText}>Loading celebrations...</Text>
-        </View>
-      </ScreenContainer>
-    );
-  }
-
-  const todayCelebrations = getTodayCelebrations();
-  const upcomingCelebrations = getUpcomingCelebrations(7);
-  const thisMonthCelebrations = getThisMonthCelebrations();
-
-  const getCelebrationsForTab = () => {
-    switch (activeTab) {
-      case 'today': return todayCelebrations;
-      case 'upcoming': return upcomingCelebrations;
-      case 'this_month': return thisMonthCelebrations;
-      default: return todayCelebrations;
+      setEmployees(rows);
+    } catch (err) {
+      setEmployees([]);
+      setError('Unable to load celebration data.');
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
     }
-  };
+  }, []);
 
-  const celebrationsData = getCelebrationsForTab();
+  useEffect(() => { load(false); }, [load]);
 
-  const renderCelebrationList = (items, type) => {
-    if (!items || items.length === 0) return null;
+  const groups = useMemo(() => {
+    const birthdaysToday = [];
+    const birthdaysUpcoming = [];
+    const annivToday = [];
+    const annivUpcoming = [];
 
-    const icons = {
-      birthdays: '🎂',
-      workAnniversaries: '🏆',
-      marriageAnniversaries: '💍',
+    employees.forEach((e) => {
+      const dept = deptNames[clean(e.departmentcode)] || clean(e.departmentcode) || PLACEHOLDER;
+      const base = {
+        paycode: clean(e.paycode),
+        name: clean(e.empname),
+        dept,
+        designation: clean(e.designation) || PLACEHOLDER,
+      };
+      if (!base.paycode || !base.name) return;
+
+      if (clean(e.dateofbirth)) {
+        const days = daysUntilMonthDay(e.dateofbirth);
+        const item = { ...base, dob: clean(e.dateofbirth), age: yearsSince(e.dateofbirth), days, next: nextDateOf(e.dateofbirth) };
+        if (isTodayMonthDay(e.dateofbirth)) birthdaysToday.push(item);
+        else if (days !== null && days > 0 && days <= UPCOMING_BIRTHDAY_DAYS) birthdaysUpcoming.push(item);
+      }
+
+      if (clean(e.dateofjoin)) {
+        const days = daysUntilMonthDay(e.dateofjoin);
+        const item = { ...base, join: clean(e.dateofjoin), years: yearsSince(e.dateofjoin), days, next: nextDateOf(e.dateofjoin) };
+        if (isTodayMonthDay(e.dateofjoin)) annivToday.push(item);
+        else if (days !== null && days > 0 && days <= UPCOMING_ANNIVERSARY_DAYS) annivUpcoming.push(item);
+      }
+    });
+
+    const byName = (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+    const byDays = (a, b) => a.days - b.days || byName(a, b);
+    return {
+      birthdaysToday: birthdaysToday.sort(byName),
+      birthdaysUpcoming: birthdaysUpcoming.sort(byDays),
+      annivToday: annivToday.sort(byName),
+      annivUpcoming: annivUpcoming.sort(byDays),
     };
+  }, [employees, deptNames]);
 
-    const colors = {
-      birthdays: COLORS.error,
-      workAnniversaries: COLORS.warning,
-      marriageAnniversaries: COLORS.secondary,
-    };
+  const Section = ({ title, icon, tone, tint, count, emptyText, children }) => (
+    <View style={styles.section}>
+      <View style={[styles.sectionHeader, { backgroundColor: `${tint}14`, borderColor: `${tint}33` }]}>
+        <Text style={styles.sectionIcon}>{icon}</Text>
+        <Text style={[styles.sectionTitle, { color: tone }]}>{title}</Text>
+        <View style={[styles.sectionCount, { backgroundColor: tint }]}>
+          <Text style={styles.sectionCountText}>{count}</Text>
+        </View>
+      </View>
+      {children.length === 0
+        ? <Text style={styles.emptyText}>{emptyText}</Text>
+        : children}
+    </View>
+  );
 
+  const PersonCard = ({ item, kind }) => {
+    const tint = kind === 'birthday' ? '#DB2777' : '#D97706';
+    const tone = kind === 'birthday' ? '#A855F7' : '#F59E0B';
     return (
-      <View style={styles.categorySection}>
-        <View style={styles.categoryHeader}>
-          <Text style={[styles.categoryIcon]}>{icons[type]}</Text>
-          <Text style={styles.categoryTitle}>
-            {type === 'birthdays' ? 'Birthdays' : type === 'workAnniversaries' ? 'Work Anniversaries' : 'Marriage Anniversaries'}
+      <View style={[styles.personCard, { borderLeftColor: tint }, SHADOWS.sm]}>
+        <View style={styles.personTop}>
+          <View style={styles.personIdWrap}>
+            <Text style={styles.personId}>{item.paycode}</Text>
+          </View>
+          <Text style={styles.personName} numberOfLines={1}>{item.name}</Text>
+        </View>
+        <Text style={styles.personMeta} numberOfLines={1}>{item.dept}</Text>
+        <Text style={styles.personMeta} numberOfLines={1}>{item.designation}</Text>
+
+        <View style={styles.personStats}>
+          {kind === 'birthday' ? (
+            <>
+              <View style={styles.stat}>
+                <Text style={styles.statLabel}>DOB</Text>
+                <Text style={[styles.statValue, { color: tint }]}>{pretty(item.dob)}</Text>
+              </View>
+              <View style={styles.stat}>
+                <Text style={styles.statLabel}>AGE</Text>
+                <Text style={[styles.statValue, { color: tone }]}>{item.age === null ? PLACEHOLDER : `${item.age} yrs`}</Text>
+              </View>
+            </>
+          ) : (
+            <>
+              <View style={styles.stat}>
+                <Text style={styles.statLabel}>JOINED</Text>
+                <Text style={[styles.statValue, { color: tint }]}>{pretty(item.join)}</Text>
+              </View>
+              <View style={styles.stat}>
+                <Text style={styles.statLabel}>YEARS</Text>
+                <Text style={[styles.statValue, { color: tone }]}>{item.years === null ? PLACEHOLDER : `${item.years} yrs`}</Text>
+              </View>
+            </>
+          )}
+        </View>
+
+        {item.next ? (
+          <Text style={styles.personFoot}>
+            Next: {pretty(item.next)} · in {item.days} day{item.days === 1 ? '' : 's'}
+            {kind === 'birthday' && item.age !== null ? ` · turning ${item.age + 1}` : ''}
+            {kind === 'anniversary' && item.years !== null ? ` · completing ${item.years + 1}` : ''}
           </Text>
-          <Text style={styles.categoryCount}>{items.length}</Text>
-        </View>
-        <View style={styles.listContainer}>
-          {items.map((item, index) => (
-            <View key={`${type}-${index}`} style={styles.celebrationItem}>
-              <View style={[styles.celebrationAvatar, { backgroundColor: colors[type] + '15' }]}>
-                <Text style={styles.celebrationIcon}>{icons[type]}</Text>
-              </View>
-              <View style={styles.celebrationInfo}>
-                <Text style={styles.celebrationName}>{item.empname}</Text>
-                <Text style={styles.celebrationDept}>{item.departmentcode || item.departmentcode || '—'}</Text>
-                {item.daysUntil !== undefined && (
-                  <Text style={styles.celebrationDays}>
-                    {item.daysUntil === 0 ? 'Today!' : `In ${item.daysUntil} day(s)`}
-                  </Text>
-                )}
-              </View>
-              <TouchableOpacity style={styles.celebrationAction}>
-                <Text style={styles.celebrationActionText}>Wish</Text>
-              </TouchableOpacity>
-            </View>
-          ))}
-        </View>
+        ) : null}
       </View>
     );
   };
 
+  const loadingView = (
+    <View style={styles.stateBox}>
+      <ActivityIndicator size="large" color={COLORS.primary} />
+      <Text style={styles.stateText}>Loading celebrations from Savior...</Text>
+    </View>
+  );
+
   return (
-    <ScreenContainer title="Celebrations" showHeader={true}>
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        {/* Tab Bar */}
-        <View style={styles.tabBar}>
-          {[
-            { id: 'today', label: 'Today' },
-            { id: 'upcoming', label: 'Upcoming' },
-            { id: 'this_month', label: 'This Month' },
-          ].map((tab) => (
-            <TouchableOpacity
-              key={tab.id}
-              style={[
-                styles.tabButton,
-                activeTab === tab.id && styles.tabButtonActive,
-              ]}
-              onPress={() => setActiveTab(tab.id)}
-              activeOpacity={0.8}
-            >
-              <Text style={[
-                styles.tabButtonText,
-                activeTab === tab.id ? styles.tabButtonTextActive : styles.tabButtonTextInactive,
-              ]}>
-                {tab.label}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
+    <ScreenContainer title="Birthdays & Anniversaries" showHeader={true}>
+      <ScrollView
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} colors={[COLORS.primary]} />}
+        contentContainerStyle={styles.scrollContent}
+      >
+        <Text style={styles.subtitle}>Real employee master data (dbo.tblemployee)</Text>
 
-        {/* Summary Cards */}
-        <View style={styles.summaryCards}>
-          <PlaceholderCard
-            title="Birthdays Today"
-            value={todayCelebrations.birthdays.length}
-            color={COLORS.error}
-            subtitle="🎂"
-          />
-          <PlaceholderCard
-            title="Work Anniversaries"
-            value={todayCelebrations.workAnniversaries.length}
-            color={COLORS.warning}
-            subtitle="🏆"
-          />
-          <PlaceholderCard
-            title="Marriage Anniversaries"
-            value={todayCelebrations.marriageAnniversaries.length}
-            color={COLORS.secondary}
-            subtitle="💍"
-          />
-        </View>
+        {loading ? loadingView : null}
 
-        {/* Celebration Lists */}
-        {renderCelebrationList(celebrationsData.birthdays, 'birthdays')}
-        {renderCelebrationList(celebrationsData.workAnniversaries, 'workAnniversaries')}
-        {renderCelebrationList(celebrationsData.marriageAnniversaries, 'marriageAnniversaries')}
-
-        {celebrationsData.birthdays.length === 0 && 
-         celebrationsData.workAnniversaries.length === 0 && 
-         celebrationsData.marriageAnniversaries.length === 0 && (
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyText}>No celebrations {activeTab === 'today' ? 'today' : activeTab === 'upcoming' ? 'this week' : 'this month'}</Text>
+        {!loading && error ? (
+          <View style={styles.errorBox}>
+            <Text style={styles.errorText}>⚠️ {error}</Text>
+            <Button title="Retry" onPress={() => load(false)} variant="outline" size="small" style={styles.retryButton} />
           </View>
-        )}
+        ) : null}
 
-        {/* Phase 2 Notice */}
-        <View style={styles.phaseNotice}>
-          <Text style={[styles.phaseNoticeText, TYPOGRAPHY.caption]}>
-            ℹ️ Phase 1 - Demo data. Real API: GET /api/hr/celebrations
-          </Text>
-        </View>
+        {!loading && !error ? (
+          <>
+            <Section
+              title="Today's Birthdays" icon="🎂" tone="#A855F7" tint="#DB2777"
+              count={groups.birthdaysToday.length}
+              emptyText="Aaj koi birthday nahi hai."
+            >
+              {groups.birthdaysToday.map((i) => <PersonCard key={i.paycode} item={i} kind="birthday" />)}
+            </Section>
+
+            <Section
+              title={`Upcoming Birthdays (${UPCOMING_BIRTHDAY_DAYS} days)`} icon="🎉" tone="#A855F7" tint="#DB2777"
+              count={groups.birthdaysUpcoming.length}
+              emptyText={`Next ${UPCOMING_BIRTHDAY_DAYS} days me koi birthday nahi.`}
+            >
+              {groups.birthdaysUpcoming.map((i) => <PersonCard key={i.paycode} item={i} kind="birthday" />)}
+            </Section>
+
+            <Section
+              title="Today's Work Anniversaries" icon="🏆" tone="#F59E0B" tint="#D97706"
+              count={groups.annivToday.length}
+              emptyText="Aaj koi work anniversary nahi hai."
+            >
+              {groups.annivToday.map((i) => <PersonCard key={i.paycode} item={i} kind="anniversary" />)}
+            </Section>
+
+            <Section
+              title={`Upcoming Work Anniversaries (${UPCOMING_ANNIVERSARY_DAYS} days)`} icon="📅" tone="#F59E0B" tint="#D97706"
+              count={groups.annivUpcoming.length}
+              emptyText={`Next ${UPCOMING_ANNIVERSARY_DAYS} days me koi work anniversary nahi.`}
+            >
+              {groups.annivUpcoming.map((i) => <PersonCard key={i.paycode} item={i} kind="anniversary" />)}
+            </Section>
+          </>
+        ) : null}
       </ScrollView>
     </ScreenContainer>
   );
 };
 
 const styles = StyleSheet.create({
-  scrollContent: {
-    paddingHorizontal: SPACING.lg,
-    paddingBottom: SPACING.xxl,
-  },
-  tabBar: {
-    flexDirection: 'row',
-    backgroundColor: COLORS.surface,
+  scrollContent: { padding: SPACING.lg, paddingBottom: SPACING.xxl },
+  subtitle: { fontSize: 12, color: COLORS.textTertiary, marginBottom: SPACING.md },
+  stateBox: { paddingVertical: SPACING.xxl, alignItems: 'center', gap: SPACING.sm },
+  stateText: { color: COLORS.textSecondary, fontSize: 13 },
+  errorBox: {
+    backgroundColor: `${COLORS.error}12`,
+    borderWidth: 1,
+    borderColor: `${COLORS.error}33`,
     borderRadius: 12,
-    padding: 4,
-    marginBottom: SPACING.lg,
-    ...SHADOWS.sm,
+    padding: SPACING.md,
+    gap: SPACING.sm,
   },
-  tabButton: {
-    flex: 1,
-    paddingVertical: SPACING.md,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  tabButtonActive: {
-    backgroundColor: COLORS.primary,
-  },
-  tabButtonText: {
-    fontWeight: '600',
-    fontSize: 13,
-  },
-  tabButtonTextActive: {
-    color: COLORS.textOnPrimary,
-  },
-  tabButtonTextInactive: {
-    color: COLORS.textSecondary,
-  },
-  summaryCards: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-    marginBottom: SPACING.lg,
-    gap: SPACING.md,
-  },
-  categorySection: {
-    marginBottom: SPACING.xl,
-  },
-  categoryHeader: {
+  errorText: { color: COLORS.error, fontSize: 12 },
+  retryButton: { alignSelf: 'flex-start' },
+  section: { marginBottom: SPACING.lg },
+  sectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: SPACING.sm,
-    marginBottom: SPACING.md,
-    paddingBottom: SPACING.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.divider,
-  },
-  categoryIcon: {
-    fontSize: 20,
-  },
-  categoryTitle: {
-    fontWeight: '700',
-    fontSize: 16,
-    color: COLORS.textPrimary,
-  },
-  categoryCount: {
-    marginLeft: 'auto',
-    backgroundColor: COLORS.primary + '15',
     paddingHorizontal: SPACING.md,
-    paddingVertical: SPACING.xs,
-    borderRadius: 20,
-    color: COLORS.primary,
-    fontWeight: '700',
-    fontSize: 12,
+    paddingVertical: SPACING.sm,
+    borderRadius: 12,
+    borderWidth: 1,
+    marginBottom: SPACING.sm,
   },
-  listContainer: {
-    gap: SPACING.md,
-  },
-  celebrationItem: {
-    flexDirection: 'row',
+  sectionIcon: { fontSize: 15 },
+  sectionTitle: { flex: 1, fontSize: 12.5, fontWeight: '800' },
+  sectionCount: {
+    minWidth: 24,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 999,
     alignItems: 'center',
-    padding: SPACING.md,
+  },
+  sectionCountText: { color: '#FFFFFF', fontSize: 11, fontWeight: '800' },
+  emptyText: {
+    color: COLORS.textTertiary,
+    fontSize: 12,
+    paddingVertical: SPACING.md,
+    textAlign: 'center',
+  },
+  personCard: {
     backgroundColor: COLORS.surface,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: COLORS.divider,
-    ...SHADOWS.sm,
-  },
-  celebrationAvatar: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: SPACING.md,
-  },
-  celebrationIcon: {
-    fontSize: 20,
-  },
-  celebrationInfo: {
-    flex: 1,
-    gap: SPACING.xs,
-  },
-  celebrationName: {
-    fontWeight: '600',
-    color: COLORS.textPrimary,
-  },
-  celebrationDept: {
-    fontSize: 12,
-    color: COLORS.textTertiary,
-  },
-  celebrationDays: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: COLORS.primary,
-  },
-  celebrationAction: {
-    paddingHorizontal: SPACING.md,
-    paddingVertical: SPACING.xs,
-    backgroundColor: COLORS.primary + '15',
-    borderRadius: 20,
-  },
-  celebrationActionText: {
-    color: COLORS.primary,
-    fontWeight: '600',
-    fontSize: 12,
-  },
-  emptyState: {
-    alignItems: 'center',
-    paddingVertical: SPACING.xl,
-  },
-  emptyText: {
-    color: COLORS.textTertiary,
-    fontSize: 14,
-  },
-  phaseNotice: {
-    backgroundColor: COLORS.info + '15',
-    borderWidth: 1,
-    borderColor: COLORS.info + '30',
-    borderRadius: 12,
+    borderLeftWidth: 4,
     padding: SPACING.md,
-    marginTop: SPACING.lg,
+    marginBottom: SPACING.sm,
   },
-  phaseNoticeText: {
-    color: COLORS.info,
-    textAlign: 'center',
+  personTop: { flexDirection: 'row', alignItems: 'center', gap: SPACING.sm },
+  personIdWrap: {
+    backgroundColor: COLORS.surfaceVariant,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 6,
   },
+  personId: { fontSize: 10.5, fontWeight: '800', color: COLORS.textSecondary },
+  personName: { flex: 1, fontSize: 13.5, fontWeight: '700', color: COLORS.textPrimary },
+  personMeta: { fontSize: 11, color: COLORS.textTertiary, marginTop: 2 },
+  personStats: { flexDirection: 'row', marginTop: SPACING.sm, gap: SPACING.lg },
+  stat: {},
+  statLabel: { fontSize: 9, fontWeight: '800', color: COLORS.textTertiary, letterSpacing: 0.5 },
+  statValue: { fontSize: 12.5, fontWeight: '800', marginTop: 1 },
+  personFoot: { fontSize: 10.5, color: COLORS.textSecondary, marginTop: SPACING.sm },
 });

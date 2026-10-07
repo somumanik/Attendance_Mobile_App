@@ -29,6 +29,7 @@ import { EmployeeDashboardScreen } from '../screens/employee/EmployeeDashboardSc
 import { EmployeeAttendanceScreen } from '../screens/employee/EmployeeAttendanceScreen';
 import { EmployeeLeaveScreen } from '../screens/employee/EmployeeLeaveScreen';
 import { EmployeeReportsScreen } from '../screens/employee/EmployeeReportsScreen';
+import { EmployeeBdayAnniversaryScreen } from '../screens/employee/EmployeeBdayAnniversaryScreen';
 import { EmployeeProfileScreen } from '../screens/employee/EmployeeProfileScreen';
 import { PinSetupScreen } from '../screens/employee/PinSetupScreen';
 import { PinChangeScreen } from '../screens/employee/PinChangeScreen';
@@ -122,6 +123,22 @@ const EmployeeTabs = () => (
         }}
       />
       
+      {/* Birthday & Anniversary Tab */}
+      <Tab.Screen
+        name="BdayAnniversary"
+        component={EmployeeBdayAnniversaryScreen}
+        options={{
+          tabBarLabel: 'Celebrations',
+          tabBarIcon: ({ focused, color, size }) => (
+            <Ionicons
+              name={focused ? 'gift' : 'gift-outline'}
+              size={size}
+              color={color}
+            />
+          ),
+        }}
+      />
+
       {/* Profile Tab */}
       <Tab.Screen
         name="Profile"

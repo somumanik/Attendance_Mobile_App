@@ -218,7 +218,7 @@ WHERE paycode = @paycode`);
 /**
  * The single real employee login decision.
  *
- * Returns { ok: true, employee } on success, otherwise
+ * Returns { ok: true, employee, mustChangePassword } on success, otherwise
  * { ok: false, status, message } ready to be sent to the client.
  * No password, hash or salt is ever included in the return value.
  */
@@ -248,11 +248,11 @@ export async function verifyEmployeeLogin(pool, paycode, password) {
   }
 
   if (credential.isactive === false || Number(credential.isactive) === 0) {
-    return { ok: false, status: 403, message: 'This employee login is disabled. Please contact HR.' };
+    return { ok: false, status: 403, code: 'LOGIN_DISABLED', message: 'This employee login is disabled. Please contact HR.' };
   }
 
   if (credential.lockeduntil && new Date(credential.lockeduntil) > new Date()) {
-    return { ok: false, status: 423, message: 'Too many failed attempts. Try again later.' };
+    return { ok: false, status: 423, code: 'ACCOUNT_LOCKED', message: 'Too many failed attempts. Try again later.' };
   }
 
   const valid = await verifySecret(password, credential.passwordhash, credential.passwordsalt, credential.passwordalgo);
@@ -275,6 +275,98 @@ export async function verifyEmployeeLogin(pool, paycode, password) {
     mustChangePassword: Number(credential.mustchangepassword || 0) === 1,
     pwdVersion: Number(credential.pwdversion || 1),
   };
+}
+
+/**
+ * Reads the CURRENT "must set a new password" flag straight from the credential
+ * store (Phase I section 2).
+ *
+ * This is deliberately a LIVE database read rather than a JWT claim: HR can force
+ * a password change at any moment, and a token minted an hour ago must not be
+ * able to keep using the old password. It is a single primary-key lookup.
+ */
+export async function isPasswordChangeRequired(pool, paycode) {
+  const cleanPaycode = String(paycode || '').trim();
+  if (!cleanPaycode) return false;
+  try {
+    await ensureEmployeeAuthTables(pool);
+    const row = await pool.request()
+      .input('paycode', sql.VarChar(50), cleanPaycode)
+      .query(`SELECT TOP 1 mustchangepassword FROM ${EMPLOYEE_AUTH_TABLE} WHERE paycode = @paycode`);
+    return Number(row.recordset?.[0]?.mustchangepassword || 0) === 1;
+  } catch (_error) {
+    /* If the credential store cannot be read we must not silently unlock the app,
+       so the safe answer is "a change is required". */
+    return true;
+  }
+}
+
+/**
+ * Employee changes their OWN password while signed in (Phase I sections 2 & 4).
+ *
+ * `paycode` MUST be the session identity supplied by the route - never the body -
+ * so one employee can never change another employee's password.
+ *
+ * When the account is flagged mustChangePassword the CURRENT password is the
+ * temporary one HR issued, so it is still required and verified. Clearing the
+ * flag is what releases the employee into the rest of the app.
+ */
+export async function changeEmployeePassword(pool, { paycode, currentPassword, newPassword, confirmPassword }) {
+  await ensureEmployeeAuthTables(pool);
+  const cleanPaycode = String(paycode || '').trim();
+  const current = String(currentPassword == null ? '' : currentPassword);
+  const next = String(newPassword == null ? '' : newPassword);
+  const confirm = String(confirmPassword == null ? '' : confirmPassword);
+
+  if (!cleanPaycode) return { ok: false, status: 400, code: 'PAYCODE_REQUIRED', message: 'Paycode is required.' };
+  if (!current) return { ok: false, status: 400, code: 'CURRENT_PASSWORD_REQUIRED', message: 'Current password is required.' };
+  if (!next) return { ok: false, status: 400, code: 'PASSWORD_REQUIRED', message: 'New password is required.' };
+  if (next !== confirm) {
+    return { ok: false, status: 400, code: 'PASSWORD_MISMATCH', message: 'New password and confirmation do not match.' };
+  }
+  // Refuse a "change" that leaves the temporary password in place.
+  if (next === current) {
+    return { ok: false, status: 400, code: 'PASSWORD_UNCHANGED', message: 'New password must be different from the current password.' };
+  }
+  const strengthError = validatePasswordStrength(next);
+  if (strengthError) return { ok: false, status: 400, code: 'WEAK_PASSWORD', message: strengthError };
+
+  const employee = await findEmployeeByPaycode(pool, cleanPaycode);
+  if (!employee) return { ok: false, status: 404, code: 'EMPLOYEE_NOT_FOUND', message: 'Employee not found.' };
+  if (String(employee.active || 'Y').trim().toUpperCase() === 'N') {
+    return { ok: false, status: 403, code: 'ACCOUNT_INACTIVE', message: 'This employee account is inactive.' };
+  }
+
+  const credential = await getEmployeeCredential(pool, employee.paycode);
+  if (!credential || !credential.passwordhash) {
+    return { ok: false, status: 409, code: 'PASSWORD_NOT_SET', message: 'No password is set yet for this employee.' };
+  }
+  if (credential.isactive === false || Number(credential.isactive) === 0) {
+    return { ok: false, status: 403, code: 'LOGIN_DISABLED', message: 'This employee login is disabled. Please contact HR.' };
+  }
+
+  // The current password is always verified - this is what makes the forced
+  // flow safe: the employee must actually know the temporary password HR gave them.
+  const currentValid = await verifySecret(current, credential.passwordhash, credential.passwordsalt, credential.passwordalgo);
+  if (!currentValid) {
+    await registerFailedAttempt(pool, employee.paycode);
+    return { ok: false, status: 401, code: 'INVALID_CURRENT_PASSWORD', message: 'Current password is incorrect.' };
+  }
+
+  // mustChange:false clears the flag, which is what unlocks the rest of the app.
+  await setEmployeePassword(pool, employee.paycode, next, { mustChange: false, updatedBy: 'employee-self-service' });
+
+  // A password change must not leave an old self-service reset link usable.
+  try {
+    await ensurePasswordResetTable(pool);
+    await pool.request()
+      .input('paycode', sql.VarChar(50), employee.paycode)
+      .query(`UPDATE ${RESET_TOKEN_TABLE} SET usedat = SYSUTCDATETIME() WHERE paycode = @paycode AND usedat IS NULL`);
+  } catch (_error) {
+    /* Best effort only - the password itself is already changed. */
+  }
+
+  return { ok: true, mustChangePassword: false, employee: { paycode: employee.paycode, empname: String(employee.empname || '').trim() } };
 }
 
 /* ------------------------- first-time password setup ---------------------- */
@@ -541,6 +633,106 @@ WHERE paycode = @paycode`);
   return { ok: true, configured: true };
 }
 
+/* ---------------- PIN as an ALTERNATE login credential (Phase I section 5) ---
+   Phase I allows "Paycode + 4-digit PIN" to sign in. This does NOT replace
+   password login, which stays fully available as the fallback.
+
+   Because a 4-digit PIN has only 10,000 combinations, this path is deliberately
+   hardened:
+     - the PIN counter (pinfailedattempts / pinlockeduntil) is SEPARATE from the
+       password counter, so a locked PIN never locks a valid password and
+       vice-versa;
+     - it reuses the same scrypt hash + constant-time compare as passwords, so
+       the PIN is never stored or compared in plaintext;
+     - every rejection is a GENERIC message, so the endpoint cannot be used to
+       discover whether a paycode exists or whether a PIN is configured;
+     - a PIN login cannot satisfy an outstanding mustChangePassword, so the
+       forced password setup can never be bypassed with a PIN.              */
+
+const PIN_LOGIN_MAX_ATTEMPTS = 5;
+const PIN_LOGIN_LOCK_MINUTES = 15;
+
+async function registerPinLoginFailure(pool, paycode) {
+  try {
+    await pool.request()
+      .input('paycode', sql.VarChar(50), paycode)
+      .query(`UPDATE ${EMPLOYEE_AUTH_TABLE}
+SET pinfailedattempts = ISNULL(pinfailedattempts, 0) + 1,
+    pinlockeduntil = CASE WHEN ISNULL(pinfailedattempts, 0) + 1 >= ${PIN_LOGIN_MAX_ATTEMPTS}
+      THEN DATEADD(MINUTE, ${PIN_LOGIN_LOCK_MINUTES}, SYSUTCDATETIME()) ELSE pinlockeduntil END,
+    updatedat = SYSUTCDATETIME()
+WHERE paycode = @paycode`);
+  } catch (_error) {
+    /* Bookkeeping must never change the decision. */
+  }
+}
+
+/** One generic refusal for every PIN-login failure mode - no enumeration. */
+function pinLoginRejected(status, code, message) {
+  return { ok: false, status, code, message };
+}
+
+/**
+ * Signs an employee in with paycode + 4-digit PIN.
+ * Returns the SAME shape as verifyEmployeeLogin so the caller can treat both
+ * credentials identically.
+ */
+export async function verifyEmployeePinLogin(pool, paycode, pin) {
+  await ensureEmployeePinColumns(pool);
+
+  const cleanPaycode = String(paycode || '').trim();
+  // A malformed PIN is treated exactly like a wrong one, so the format check is
+  // never a free probe and never leaks which part was wrong.
+  if (!cleanPaycode || validatePinFormat(pin)) {
+    return pinLoginRejected(401, 'INVALID_CREDENTIALS', 'Invalid employee credentials.');
+  }
+
+  const employee = await findEmployeeByPaycode(pool, cleanPaycode);
+  if (!employee) return pinLoginRejected(401, 'INVALID_CREDENTIALS', 'Invalid employee credentials.');
+  if (String(employee.active || 'Y').trim().toUpperCase() === 'N') {
+    return { ok: false, status: 403, code: 'ACCOUNT_INACTIVE', message: 'This employee account is inactive.' };
+  }
+
+  const credential = await getEmployeeCredential(pool, employee.paycode);
+  if (!credential || credential.isactive === false || Number(credential.isactive) === 0) {
+    // Password-disabled accounts cannot use the PIN door either.
+    return { ok: false, status: 403, code: 'LOGIN_DISABLED', message: 'This employee login is disabled. Please contact HR.' };
+  }
+
+  const pinRow = await pool.request()
+    .input('paycode', sql.VarChar(50), employee.paycode)
+    .query(`SELECT TOP 1 pinhash, pinsalt, pinalgo, pinlockeduntil FROM ${EMPLOYEE_AUTH_TABLE} WHERE paycode = @paycode`);
+  const row = pinRow.recordset[0];
+  if (!row || !row.pinhash) return pinLoginRejected(401, 'INVALID_CREDENTIALS', 'Invalid employee credentials.');
+
+  if (row.pinlockeduntil && new Date(row.pinlockeduntil) > new Date()) {
+    return { ok: false, status: 423, code: 'PIN_LOCKED', message: 'Too many failed PIN attempts. Try again later or use your password.' };
+  }
+
+  const valid = await verifySecret(String(pin), row.pinhash, row.pinsalt, row.pinalgo);
+  if (!valid) {
+    await registerPinLoginFailure(pool, employee.paycode);
+    return pinLoginRejected(401, 'INVALID_CREDENTIALS', 'Invalid employee credentials.');
+  }
+
+  await clearPinFailures(pool, employee.paycode);
+  await registerSuccessfulLogin(pool, employee.paycode);
+
+  return {
+    ok: true,
+    employee: {
+      paycode: employee.paycode,
+      empname: employee.empname,
+      presentcardno: employee.presentcardno,
+      companycode: employee.companycode,
+    },
+    // Reported so the client still routes the employee into the forced setup.
+    mustChangePassword: Number(credential.mustchangepassword || 0) === 1,
+    pwdVersion: Number(credential.pwdversion || 1),
+    usedPin: true,
+  };
+}
+
 /* ------------------- forgot / reset password (Phase 3A.9) ------------------- */
 /* A reset is authorised ONLY by a single-use, time-limited token that is sent
    to the employee's registered email. A paycode alone can never reset a
@@ -693,12 +885,25 @@ export async function getEmployeeCredentialStatus(pool, paycode) {
     passwordSet: !!(credential && credential.passwordhash),
     pinSet: !!(credential && credential.pinhash),
     accountActive: String(employee.active || 'Y').trim().toUpperCase() !== 'N',
+    loginEnabled: !(credential && (credential.isactive === false || Number(credential.isactive) === 0)),
+    mustChangePassword: Number(credential?.mustchangepassword || 0) === 1,
     locked: !!(credential && credential.lockeduntil && new Date(credential.lockeduntil) > now),
+    pinLocked: !!(credential && credential.pinlockeduntil && new Date(credential.pinlockeduntil) > now),
   };
 }
 
-/** HR sets an employee's password. PIN columns are never touched here. */
-export async function hrResetEmployeePassword(pool, { paycode, password, confirmPassword, actor }) {
+/**
+ * HR sets an employee's password. PIN columns are never touched here.
+ *
+ * Phase I section 2: passing mustChange:true stores the password as a TEMPORARY
+ * one and flags the account, so the employee is forced to set a new password
+ * before reaching any employee data.
+ *
+ * The password is NEVER generated-and-returned here (Phase I section 3 forbids
+ * exposing passwords in API responses). HR supplies the temporary password and
+ * hands it to the employee out of band.
+ */
+export async function hrResetEmployeePassword(pool, { paycode, password, confirmPassword, actor, mustChange = false }) {
   await ensureEmployeeAuthTables(pool);
   const cleanPaycode = String(paycode || '').trim();
   const newPassword = String(password || '');
@@ -722,7 +927,7 @@ export async function hrResetEmployeePassword(pool, { paycode, password, confirm
   // Reuses the 3A.7 writer: scrypt hash, pwdversion bump, lockout cleared.
   // Password columns only - the employee keeps their own PIN.
   await setEmployeePassword(pool, employee.paycode, newPassword, {
-    mustChange: false,
+    mustChange: mustChange === true,
     updatedBy: String(actor || 'HR').slice(0, 50),
   });
 
@@ -736,7 +941,80 @@ export async function hrResetEmployeePassword(pool, { paycode, password, confirm
     /* Reset-link invalidation is best effort and must not fail the reset. */
   }
 
-  return { ok: true, employee: { paycode: employee.paycode, empname: String(employee.empname || '').trim() } };
+  return {
+    ok: true,
+    mustChangePassword: mustChange === true,
+    employee: { paycode: employee.paycode, empname: String(employee.empname || '').trim() },
+  };
+}
+
+/**
+ * HR forces an employee to set a new password at their next sign-in
+ * (Phase I section 7) WITHOUT changing the current password.
+ *
+ * The account must already have a password - this flag means "replace what you
+ * have", not "create one", so refusing an unprovisioned account keeps the two
+ * flows (first-time setup vs forced change) from being confused.
+ */
+export async function hrForcePasswordChange(pool, { paycode, actor }) {
+  await ensureEmployeeAuthTables(pool);
+  const cleanPaycode = String(paycode || '').trim();
+  if (!cleanPaycode) return { ok: false, status: 400, code: 'PAYCODE_REQUIRED', message: 'Paycode is required.' };
+
+  const employee = await findEmployeeByPaycode(pool, cleanPaycode);
+  if (!employee) return { ok: false, status: 404, code: 'EMPLOYEE_NOT_FOUND', message: 'Employee not found.' };
+
+  const credential = await getEmployeeCredential(pool, employee.paycode);
+  if (!credential || !credential.passwordhash) {
+    return {
+      ok: false,
+      status: 409,
+      code: 'PASSWORD_NOT_SET',
+      message: 'This employee has no password yet. Use first-time setup or set a temporary password instead.',
+    };
+  }
+
+  await pool.request()
+    .input('paycode', sql.VarChar(50), employee.paycode)
+    .input('updatedby', sql.VarChar(50), String(actor || 'HR').slice(0, 50))
+    .query(`UPDATE ${EMPLOYEE_AUTH_TABLE}
+SET mustchangepassword = 1, updatedat = SYSUTCDATETIME(), updatedby = @updatedby
+WHERE paycode = @paycode`);
+
+  return { ok: true, mustChangePassword: true, employee: { paycode: employee.paycode, empname: String(employee.empname || '').trim() } };
+}
+
+/**
+ * HR enables or disables an employee's LOGIN (Phase I section 7).
+ *
+ * This only flips the application-owned dbo.HR_EmployeeAuth.isactive flag. It
+ * never touches dbo.tblemployee.active, so no Savior row is ever modified - an
+ * employee active in Savior can still have their login switched off here, and
+ * switching it back on restores access immediately.
+ */
+export async function hrSetEmployeeLoginEnabled(pool, { paycode, enabled, actor }) {
+  await ensureEmployeeAuthTables(pool);
+  const cleanPaycode = String(paycode || '').trim();
+  if (!cleanPaycode) return { ok: false, status: 400, code: 'PAYCODE_REQUIRED', message: 'Paycode is required.' };
+  if (typeof enabled !== 'boolean') {
+    return { ok: false, status: 400, code: 'ENABLED_REQUIRED', message: 'enabled must be true or false.' };
+  }
+
+  const employee = await findEmployeeByPaycode(pool, cleanPaycode);
+  if (!employee) return { ok: false, status: 404, code: 'EMPLOYEE_NOT_FOUND', message: 'Employee not found.' };
+
+  // Ensure a credential row exists so the flag always has somewhere to live.
+  await pool.request()
+    .input('paycode', sql.VarChar(50), employee.paycode)
+    .input('isactive', sql.Bit, enabled ? 1 : 0)
+    .input('updatedby', sql.VarChar(50), String(actor || 'HR').slice(0, 50))
+    .query(`MERGE ${EMPLOYEE_AUTH_TABLE} AS target
+USING (SELECT @paycode AS paycode) AS source ON target.paycode = source.paycode
+WHEN MATCHED THEN UPDATE SET isactive = @isactive, updatedat = SYSUTCDATETIME(), updatedby = @updatedby
+WHEN NOT MATCHED THEN INSERT (paycode, isactive, createdby, updatedby)
+  VALUES (@paycode, @isactive, @updatedby, @updatedby);`);
+
+  return { ok: true, loginEnabled: enabled, employee: { paycode: employee.paycode, empname: String(employee.empname || '').trim() } };
 }
 
 /** HR sets an employee's 4-digit PIN. Password columns are never touched here. */

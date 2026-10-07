@@ -137,14 +137,20 @@ const HRTabs = () => (
           tabBarIcon: ({ focused, size }) => tabIcon('Marriage', focused, 'heart', 'heart-outline', size),
         }}
       />
-      <Tab.Screen
-        name="LeaveMgmt"
-        component={HRLeaveManagementScreen}
-        options={{
-          tabBarLabel: 'Leave Mgmt',
-          tabBarIcon: ({ focused, size }) => tabIcon('LeaveMgmt', focused, 'calendar', 'calendar-outline', size),
-        }}
-      />
+      {/* Leave Management is HIDE-ONLY (Phase 6): the screen, its import and all of
+          its backend/website code stay in the project untouched. Leave Management is
+          not implemented yet, so its tab is not registered. To restore it later, add
+          back the Tab.Screen block below exactly as it was:
+
+          <Tab.Screen
+            name="LeaveMgmt"
+            component={HRLeaveManagementScreen}
+            options={{
+              tabBarLabel: 'Leave Mgmt',
+              tabBarIcon: ({ focused, size }) => tabIcon('LeaveMgmt', focused, 'calendar', 'calendar-outline', size),
+            }}
+          />
+      */}
     </Tab.Navigator>
 );
 

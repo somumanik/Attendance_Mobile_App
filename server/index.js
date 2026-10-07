@@ -1,4 +1,4 @@
-import 'dotenv/config';
+ï»¿import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import jwt from 'jsonwebtoken';
@@ -20,6 +20,9 @@ import {
 // import it, so this hardening cannot change attendance or HR behaviour.
 import {
   verifyEmployeeLogin,
+  verifyEmployeePinLogin,
+  isPasswordChangeRequired,
+  changeEmployeePassword,
   firstTimeSetupState,
   completeFirstTimeSetup,
   getEmployeePinState,
@@ -34,7 +37,14 @@ import {
   getEmployeeCredentialStatus,
   hrResetEmployeePassword,
   hrResetEmployeePin,
+  hrForcePasswordChange,
+  hrSetEmployeeLoginEnabled,
 } from './employee-auth.js';
+// Employee Leave Management lives in ONE isolated module (server/leave-service.js)
+// so the storage backend can be swapped later (Phase J section 7 keeps the seam
+// ready for a future Navision integration - no Navision code exists here).
+// Attendance, holiday and HR login paths do not import it.
+import { ensureLeaveTables, getLeaveProvider } from './leave-service.js';
 
 const app = express();
 const port = Number(process.env.API_PORT || 4000);
@@ -143,6 +153,38 @@ function authenticate(req, res, next) {
 
 function requireRole(...roles) {
   return (req, res, next) => roles.includes(req.user?.role) ? next() : res.status(403).json({ success: false, message: 'Forbidden.' });
+}
+
+/**
+ * Phase I section 2 guard: an employee whose account is flagged
+ * mustChangePassword may NOT read any employee data until they set a new one.
+ *
+ * Identity comes from the verified JWT (req.user.paycode) - a paycode in the
+ * query or body is never read, so this cannot be bypassed or aimed at another
+ * employee. The flag is read LIVE from the credential store rather than trusted
+ * from the token, so an HR "force password change" takes effect immediately,
+ * even for a session that is already open.
+ *
+ * The employee password-change endpoint is deliberately NOT wrapped in this
+ * guard, otherwise the employee would have no way to satisfy it.
+ */
+function requirePasswordChanged(req, res, next) {
+  if (req.user?.role !== 'EMPLOYEE') return next();
+  if (req.user?.devEmployee === true) return next(); // dev bypass has no credential row
+  getPool()
+    .then((pool) => isPasswordChangeRequired(pool, req.user.paycode))
+    .then((required) => {
+      if (required) {
+        return res.status(403).json({
+          success: false,
+          code: 'PASSWORD_CHANGE_REQUIRED',
+          message: 'Please set your new password before continuing.',
+          mustChangePassword: true,
+        });
+      }
+      return next();
+    })
+    .catch(() => sendDbError(res, new Error('Credential store unavailable.')));
 }
 
 function requireConfiguredAuth(_req, res, next) {
@@ -528,7 +570,7 @@ function hasCompletePunch(row) {
 /* ---- Shift completion (REAL system data: dbo.tblshiftmaster; koi invented timing nahi) ----
    Miss Punch tab hi gina jata hai jab attendance period/shift COMPLETE ho chuka ho.
    Aaj ki chalti hui shift (IN ho chuka, OUT pending, aur configured shift end time abhi
-   nahi aaya) ko Miss Punch nahi gina jata — din/shift guzarne par existing rule apply
+   nahi aaya) ko Miss Punch nahi gina jata â€” din/shift guzarne par existing rule apply
    hota hai. End time lookup: register row ka shiftendtime ? tblshiftmaster (company
    match) ? tblshiftmaster (same shift ka koi bhi row) ? unknown shift = poora din
    "in progress" (day-granularity fallback, na ki banaya hua time). */
@@ -716,7 +758,7 @@ function classifyRow(row) {
   if (code === 'P' || code === 'PRESENT') return 'Present';
   if (code === 'LATE') return 'Present';
   if (code === 'A' || code === 'ABS' || code === 'ABSENT') {
-    // Real punch beats a stale Absent flag: IN without OUT = Miss Punch —
+    // Real punch beats a stale Absent flag: IN without OUT = Miss Punch â€”
     // lekin sirf shift/din complete hone ke baad (ongoing shift = abhi Present-at-work).
     if (row.in1 || row.in2) return ongoing ? 'Present' : 'Miss Punch';
     return 'Absent';
@@ -840,21 +882,33 @@ app.get('/api/diagnostics/schema', authenticate, requireRole('HR'), requireDbCon
   } catch (error) { sendDbError(res, error); }
 });
 
+// Employee sign-in. Two credentials are accepted (Phase I section 5):
+//   { paycode, password }  - the primary credential, unchanged from before
+//   { paycode, pin }       - the 4-digit PIN, as an ALTERNATIVE
+// Password login is never removed and remains the fallback. `credential: 'pin'`
+// selects the PIN explicitly; otherwise a supplied `pin` is used.
 app.post('/api/auth/employee/login', requireConfiguredAuth, async (req, res) => {
   const paycode = String(req.body?.paycode || '').trim();
   const password = String(req.body?.password || '');
-  if (!paycode || !password) return res.status(400).json({ success: false, message: 'Employee paycode and password are required.' });
+  const pin = String(req.body?.pin || '');
+  const usePin = String(req.body?.credential || '').trim().toLowerCase() === 'pin' || (!password && !!pin);
+  if (!paycode) return res.status(400).json({ success: false, message: 'Employee paycode is required.' });
+  if (usePin ? !pin : !password) {
+    return res.status(400).json({ success: false, message: usePin ? 'Employee PIN is required.' : 'Employee paycode and password are required.' });
+  }
   if (devEmployeeAuthEnabled && paycode === devEmployeePaycode) {
     if (password !== devEmployeePassword) return res.status(401).json({ success: false, message: 'Invalid employee credentials.' });
-    return res.json({ success: true, token: signUser({ id: paycode, role: 'EMPLOYEE', paycode, devEmployee: true }), role: 'EMPLOYEE', employee: { paycode, empname: 'Development Employee', presentcardno: null, companycode: null } });
+    return res.json({ success: true, token: signUser({ id: paycode, role: 'EMPLOYEE', paycode, devEmployee: true }), role: 'EMPLOYEE', employee: { paycode, empname: 'Development Employee', presentcardno: null, companycode: null }, mustChangePassword: false });
   }
   if (!process.env.DB_SERVER || !process.env.DB_DATABASE || !process.env.DB_USER || !process.env.DB_PASSWORD) return res.status(503).json({ success: false, message: 'Database connection unavailable.' });
   try {
     const pool = await getPool();
     // Real employee authentication: identity comes from dbo.tblemployee.paycode and
-    // the password is verified against the application-owned credential store.
-    // A wrong or missing password is rejected; no JWT is issued.
-    const outcome = await verifyEmployeeLogin(pool, paycode, password);
+    // the secret is verified against the application-owned credential store.
+    // A wrong or missing secret is rejected; no JWT is issued.
+    const outcome = usePin
+      ? await verifyEmployeePinLogin(pool, paycode, pin)
+      : await verifyEmployeeLogin(pool, paycode, password);
     if (!outcome.ok) {
       // firstTimeSetupRequired lets the mobile app route an employee who has not
       // created a password yet. Additive field: existing clients keep working.
@@ -863,9 +917,19 @@ app.post('/api/auth/employee/login', requireConfiguredAuth, async (req, res) => 
         message: outcome.message,
         code: outcome.code || 'LOGIN_FAILED',
         firstTimeSetupRequired: outcome.code === 'FIRST_TIME_SETUP_REQUIRED',
+        // mustChangePassword is advisory on a FAILED login (nothing is being
+        // unlocked), but it tells the client which screen to show next.
+        mustChangePassword: false,
       });
     }
-    res.json({ success: true, token: signUser({ id: outcome.employee.paycode, role: 'EMPLOYEE', paycode: outcome.employee.paycode }), role: 'EMPLOYEE', employee: outcome.employee });
+    // Additive response fields only - existing clients ignore unknown keys.
+    res.json({
+      success: true,
+      token: signUser({ id: outcome.employee.paycode, role: 'EMPLOYEE', paycode: outcome.employee.paycode }),
+      role: 'EMPLOYEE',
+      employee: outcome.employee,
+      mustChangePassword: outcome.mustChangePassword === true,
+    });
   } catch (error) { sendDbError(res, error); }
 });
 
@@ -900,6 +964,174 @@ app.post('/api/auth/employee/first-time-setup', requireConfiguredAuth, async (re
     res.json({ success: true, message: 'Password created. Please sign in.', employee: outcome.employee });
   } catch (error) { sendDbError(res, error); }
 });
+
+// ============================================================================
+// EMPLOYEE LEAVE MANAGEMENT (Phase J)
+// ============================================================================
+// Storage is 100% application-owned (dbo.HR_Leave*). dbo.tblemployee,
+// dbo.tblemployeeshiftmaster, dbo.tbltimeregister and dbo.tblcategory are only
+// ever READ (identity + real week-off day). No Savior table is created, altered
+// or written, and an APPROVED leave never changes a Savior attendance record â€”
+// it is an application-level overlay shown in the attendance calendar.
+//
+// IDENTITY RULE (Phase J section 8): every EMPLOYEE leave route takes the
+// paycode from the verified JWT (req.user.paycode). A paycode in the query or
+// body is ignored, so one employee can never read or touch another's leave.
+//
+// All business logic lives behind getLeaveProvider() so a future Navision
+// adapter can replace the storage without changing any route below.
+// ============================================================================
+
+/**
+ * Shared guard: leave tables must exist before any leave call.
+ *
+ * Deliberately NOT an async function â€” Express needs the middleware
+ * synchronously, so this must return the handler, not a promise of it.
+ */
+function withLeaveProvider(handler) {
+  return async (req, res) => {
+    if (!process.env.DB_SERVER || !process.env.DB_DATABASE || !process.env.DB_USER || !process.env.DB_PASSWORD) {
+      return res.status(503).json({ success: false, message: 'Database connection unavailable.' });
+    }
+    try {
+      const pool = await getPool();
+      await ensureLeaveTables(pool);
+      const provider = await getLeaveProvider();
+      await handler({ req, res, pool, provider });
+    } catch (error) { sendDbError(res, error); }
+  };
+}
+
+// ---- Leave types (employee read-only, HR read/write) ----
+app.get('/api/employee/leave/types', authenticate, requireRole('EMPLOYEE'), requirePasswordChanged, requireDbConfig,
+  withLeaveProvider(async ({ res, pool, provider }) => {
+    res.json({ success: true, types: await provider.listTypes(pool) });
+  }));
+
+app.get('/api/employee/leave/balance', authenticate, requireRole('EMPLOYEE'), requirePasswordChanged, requireDbConfig,
+  withLeaveProvider(async ({ req, res, pool, provider }) => {
+    // Paycode is ALWAYS the session identity; req.query.paycode is never read.
+    res.json({ success: true, ...(await provider.getBalance(pool, { paycode: req.user.paycode, leaveyear: req.query?.leaveyear })) });
+  }));
+
+app.get('/api/employee/leave/requests', authenticate, requireRole('EMPLOYEE'), requirePasswordChanged, requireDbConfig,
+  withLeaveProvider(async ({ req, res, pool, provider }) => {
+    const requests = await provider.listRequests(pool, {
+      paycode: req.user.paycode,
+      leaveyear: req.query?.leaveyear,
+      status: req.query?.status,
+    });
+    res.json({ success: true, requests });
+  }));
+
+// Employee creates a request for THEMSELVES.
+app.post('/api/employee/leave/requests', authenticate, requireRole('EMPLOYEE'), requirePasswordChanged, requireDbConfig,
+  withLeaveProvider(async ({ req, res, pool, provider }) => {
+    const outcome = await provider.createRequest(pool, {
+      paycode: req.user.paycode,
+      leavetype: req.body?.leavetype,
+      fromdate: req.body?.fromdate,
+      todate: req.body?.todate,
+      isHalfDay: req.body?.isHalfDay === true,
+      halfdaypart: req.body?.halfdaypart,
+      reason: req.body?.reason,
+      // Optional attachment is carried as a name (+ optional small data payload).
+      attachmentName: req.body?.attachmentName,
+      attachmentData: req.body?.attachmentData,
+      contactdetails: req.body?.contactdetails,
+    });
+    if (!outcome.ok) {
+      return res.status(outcome.status).json({ success: false, message: outcome.message, code: outcome.code });
+    }
+    res.status(201).json({ success: true, request: outcome.request });
+  }));
+
+// Employee cancels their OWN pending request.
+app.post('/api/employee/leave/requests/:id/cancel', authenticate, requireRole('EMPLOYEE'), requirePasswordChanged, requireDbConfig,
+  withLeaveProvider(async ({ req, res, pool, provider }) => {
+    const outcome = await provider.cancelRequest(pool, { paycode: req.user.paycode, id: req.params?.id });
+    if (!outcome.ok) return res.status(outcome.status).json({ success: false, message: outcome.message, code: outcome.code });
+    res.json({ success: true, message: 'Leave request cancelled.' });
+  }));
+
+/**
+ * Calendar overlay: approved leave dates for the signed-in employee.
+ * Read-only and identity-bound; the attendance calendar calls this per month.
+ */
+app.get('/api/employee/leave/calendar', authenticate, requireRole('EMPLOYEE'), requirePasswordChanged, requireDbConfig,
+  withLeaveProvider(async ({ req, res, pool, provider }) => {
+    const from = isValidIsoDate(req.query?.from) ? req.query.from : isoDate(new Date());
+    const to = isValidIsoDate(req.query?.to) ? req.query.to : from;
+    const overlay = await provider.calendarOverlay(pool, { paycode: req.user.paycode, fromdate: from, todate: to });
+    res.json({ success: true, ...overlay });
+  }));
+
+// ---- HR leave administration (HR role required on every route) ----
+app.get('/api/hr/leave/types', authenticate, requireRole('HR'), requireDbConfig,
+  withLeaveProvider(async ({ req, res, pool, provider }) => {
+    res.json({ success: true, types: await provider.listTypes(pool, { includeInactive: req.query?.includeInactive === 'true' }) });
+  }));
+
+app.post('/api/hr/leave/types', authenticate, requireRole('HR'), requireDbConfig,
+  withLeaveProvider(async ({ req, res, pool, provider }) => {
+    const outcome = await provider.addType(pool, { leavetype: req.body?.leavetype, typename: req.body?.typename, sortorder: req.body?.sortorder, actor: req.user?.sub });
+    if (!outcome.ok) return res.status(outcome.status).json({ success: false, message: outcome.message, code: outcome.code });
+    res.status(201).json({ success: true, leavetype: outcome.leavetype });
+  }));
+
+app.get('/api/hr/leave/config', authenticate, requireRole('HR'), requireDbConfig,
+  withLeaveProvider(async ({ res, pool, provider }) => {
+    res.json({ success: true, config: await provider.getConfig(pool) });
+  }));
+
+app.put('/api/hr/leave/config', authenticate, requireRole('HR'), requireDbConfig,
+  withLeaveProvider(async ({ req, res, pool, provider }) => {
+    const patch = {};
+    if (req.body?.allowNegativeBalance !== undefined) patch.AllowNegativeBalance = req.body.allowNegativeBalance ? 'Y' : 'N';
+    if (req.body?.maxBackdateDays !== undefined) patch.MaxBackdateDays = String(req.body.maxBackdateDays);
+    if (req.body?.attachmentRequiredAboveDays !== undefined) patch.AttachmentRequiredAboveDays = String(req.body.attachmentRequiredAboveDays);
+    const outcome = await provider.setConfig(pool, patch, req.user?.sub);
+    res.json({ success: true, applied: outcome.applied, config: outcome.config });
+  }));
+
+app.get('/api/hr/leave/balances', authenticate, requireRole('HR'), requireDbConfig,
+  withLeaveProvider(async ({ req, res, pool, provider }) => {
+    res.json({ success: true, ...(await provider.listBalances(pool, { leaveyear: req.query?.leaveyear, search: req.query?.search, limit: req.query?.limit })) });
+  }));
+
+app.get('/api/hr/leave/requests', authenticate, requireRole('HR'), requireDbConfig,
+  withLeaveProvider(async ({ req, res, pool, provider }) => {
+    const requests = await provider.listAllRequests(pool, {
+      leaveyear: req.query?.leaveyear,
+      status: req.query?.status,
+      search: req.query?.search,
+      limit: req.query?.limit,
+    });
+    const pending = requests.filter((r) => r.status === 'Pending').length;
+    res.json({ success: true, requests, counts: { total: requests.length, pending } });
+  }));
+
+app.post('/api/hr/leave/requests/:id/decision', authenticate, requireRole('HR'), requireDbConfig,
+  withLeaveProvider(async ({ req, res, pool, provider }) => {
+    const outcome = await provider.decideRequest(pool, { id: req.params?.id, decision: req.body?.decision, note: req.body?.note, actor: req.user?.sub });
+    if (!outcome.ok) return res.status(outcome.status).json({ success: false, message: outcome.message, code: outcome.code });
+    res.json({ success: true, request: outcome.request });
+  }));
+
+/**
+ * HR Excel import of opening balances.
+ * The client parses the workbook and posts plain row objects; this endpoint owns
+ * ALL validation, including identity matching against the real active roster, so
+ * an unmatched employee is reported as Failed rather than silently imported.
+ */
+app.post('/api/hr/leave/balances/import', authenticate, requireRole('HR'), requireDbConfig,
+  withLeaveProvider(async ({ req, res, pool, provider }) => {
+    const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+    if (!rows.length) return res.status(400).json({ success: false, message: 'No rows to import.', code: 'NO_ROWS' });
+    if (rows.length > 5000) return res.status(400).json({ success: false, message: 'Please import at most 5000 rows at a time.', code: 'TOO_MANY_ROWS' });
+    const summary = await provider.importBalances(pool, { rows, actor: req.user?.sub });
+    res.json({ success: true, summary });
+  }));
 
 // ---- Employee 4-digit PIN (Phase 3A.8) ----
 // The employee is taken from the verified JWT (req.user.paycode) on EVERY call.
@@ -1033,7 +1265,47 @@ async function readEmployeeProfile(pool, paycode) {
   };
 }
 
-app.get('/api/employee/profile', authenticate, requireRole('EMPLOYEE'), requireDbConfig, async (req, res) => {
+// ---- Employee-side cumulative grace timeline (presentation only) ----
+// computeMonthlyLateForEmployee() above is SHARED with HR Single Employee Audit and
+// is deliberately left untouched. It already returns the month's remaining grace at
+// the END of the month plus the chronological list of late events with the grace each
+// one consumed. That is enough to replay the SAME consumption sequence and expose
+// the grace position as of EACH late date, without re-deciding a single rule and
+// without changing any HR response.
+// initial allowance is derived from (final remaining + how many times each grace was used).
+function buildGraceTimeline(lateDetails, graceRemaining) {
+  const list = [...(lateDetails || [])].sort((a, b) => {
+    const da = new Date(a.date);
+    const db = new Date(b.date);
+    return da - db;
+  });
+  const used30 = list.filter((d) => d.graceUsed === '30min').length;
+  const used1hr = list.filter((d) => d.graceUsed === '1hr').length;
+  const used2hr = list.filter((d) => d.graceUsed === '2hr').length;
+  const init30 = Number(graceRemaining?.grace30min || 0) + used30;
+  const init1hr = Number(graceRemaining?.grace1hr || 0) + used1hr;
+  const init2hr = Number(graceRemaining?.grace2hr || 0) + used2hr;
+
+  let left30 = init30;
+  let left1hr = init1hr;
+  let left2hr = init2hr;
+  return list.map((d) => {
+    if (d.graceUsed === '30min') left30 = Math.max(0, left30 - 1);
+    else if (d.graceUsed === '1hr') left1hr = Math.max(0, left1hr - 1);
+    else if (d.graceUsed === '2hr') left2hr = Math.max(0, left2hr - 1);
+    return {
+      date: rowDateIso(d.date),
+      graceUsed: d.graceUsed,
+      lateMinutes: Number(d.lateMinutes || 0),
+      isFinalLate: d.isFinalLate !== false,
+      total: { grace30min: init30, grace1hr: init1hr, grace2hr: init2hr },
+      used: { grace30min: init30 - left30, grace1hr: init1hr - left1hr, grace2hr: init2hr - left2hr },
+      remaining: { grace30min: left30, grace1hr: left1hr, grace2hr: left2hr },
+    };
+  });
+}
+
+app.get('/api/employee/profile', authenticate, requireRole('EMPLOYEE'), requirePasswordChanged, requireDbConfig, async (req, res) => {
   try {
     const pool = await getPool();
     const profile = await readEmployeeProfile(pool, req.user.paycode);
@@ -1042,7 +1314,7 @@ app.get('/api/employee/profile', authenticate, requireRole('EMPLOYEE'), requireD
   } catch (error) { sendDbError(res, error); }
 });
 
-app.put('/api/employee/profile', authenticate, requireRole('EMPLOYEE'), requireDbConfig, async (req, res) => {
+app.put('/api/employee/profile', authenticate, requireRole('EMPLOYEE'), requirePasswordChanged, requireDbConfig, async (req, res) => {
   try {
     const pool = await getPool();
     const before = await readEmployeeProfile(pool, req.user.paycode);
@@ -1068,6 +1340,43 @@ app.put('/api/employee/profile', authenticate, requireRole('EMPLOYEE'), requireD
   } catch (error) { sendDbError(res, error); }
 });
 
+// ---- Employee changes their OWN password (Phase I sections 2 & 4) ----
+// This is the ONE employee route that is deliberately NOT wrapped in
+// requirePasswordChanged: it is how an employee satisfies that requirement.
+// Identity comes from the verified JWT, never from the request body, so one
+// employee can never change another employee's password.
+app.post('/api/employee/password/change', authenticate, requireRole('EMPLOYEE'), requireDbConfig, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const outcome = await changeEmployeePassword(pool, {
+      paycode: req.user.paycode,
+      currentPassword: req.body?.currentPassword,
+      newPassword: req.body?.newPassword,
+      confirmPassword: req.body?.confirmPassword,
+    });
+    if (!outcome.ok) {
+      return res.status(outcome.status).json({
+        success: false,
+        message: outcome.message,
+        code: outcome.code || 'PASSWORD_CHANGE_FAILED',
+        mustChangePassword: true,
+      });
+    }
+    // No password, hash or salt is ever included in the response.
+    res.json({ success: true, message: 'Password updated.', mustChangePassword: false, employee: outcome.employee });
+  } catch (error) { sendDbError(res, error); }
+});
+
+// Tells the signed-in employee whether a forced password change is outstanding,
+// so the app can gate the Dashboard before the user taps into a 403.
+app.get('/api/employee/password/status', authenticate, requireRole('EMPLOYEE'), requireDbConfig, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const required = await isPasswordChangeRequired(pool, req.user.paycode);
+    res.json({ success: true, mustChangePassword: required });
+  } catch (error) { sendDbError(res, error); }
+});
+
 app.get('/api/employee/pin/status', authenticate, requireRole('EMPLOYEE'), requireDbConfig, async (req, res) => {
   try {
     const pool = await getPool();
@@ -1076,7 +1385,7 @@ app.get('/api/employee/pin/status', authenticate, requireRole('EMPLOYEE'), requi
   } catch (error) { sendDbError(res, error); }
 });
 
-app.post('/api/employee/pin/setup', authenticate, requireRole('EMPLOYEE'), requireDbConfig, async (req, res) => {
+app.post('/api/employee/pin/setup', authenticate, requireRole('EMPLOYEE'), requirePasswordChanged, requireDbConfig, async (req, res) => {
   try {
     const pool = await getPool();
     const outcome = await createEmployeePin(pool, {
@@ -1092,7 +1401,7 @@ app.post('/api/employee/pin/setup', authenticate, requireRole('EMPLOYEE'), requi
   } catch (error) { sendDbError(res, error); }
 });
 
-app.post('/api/employee/pin/change', authenticate, requireRole('EMPLOYEE'), requireDbConfig, async (req, res) => {
+app.post('/api/employee/pin/change', authenticate, requireRole('EMPLOYEE'), requirePasswordChanged, requireDbConfig, async (req, res) => {
   try {
     const pool = await getPool();
     const outcome = await changeEmployeePin(pool, {
@@ -1110,7 +1419,7 @@ app.post('/api/employee/pin/change', authenticate, requireRole('EMPLOYEE'), requ
 
 // ---- Employee Forgot / Reset Password (Phase 3A.9) ----
 // The response is intentionally IDENTICAL whether or not the paycode exists,
-// active, provisioned or has an email — this prevents account enumeration.
+// active, provisioned or has an email â€” this prevents account enumeration.
 // Authorisation to reset depends only on the emailed single-use token.
 app.post('/api/auth/employee/forgot-password', requireConfiguredAuth, async (req, res) => {
   const generic = { success: true, message: 'If the account is eligible for password recovery, reset instructions have been sent.' };
@@ -1156,7 +1465,7 @@ app.post('/api/auth/employee/forgot-password', requireConfiguredAuth, async (req
       return res.status(200).json(generic);
     }
 
-    // Security guidance only — no employee data, no paycode details.
+    // Security guidance only â€” no employee data, no paycode details.
     const subject = 'Password Reset Request';
     const text = [
       'A password reset was requested for your Attendance Portal account.',
@@ -1166,7 +1475,7 @@ app.post('/api/auth/employee/forgot-password', requireConfiguredAuth, async (req
       issued.token,
       '',
       `This code expires in ${issued.expiresInMinutes} minutes and can be used only once.`,
-      'If you did not request this, you can safely ignore this email — your password stays unchanged.',
+      'If you did not request this, you can safely ignore this email â€” your password stays unchanged.',
       '',
       'Never share this code with anyone.',
     ].join('\n');
@@ -1198,13 +1507,13 @@ app.post('/api/auth/employee/reset-password', requireConfiguredAuth, async (req,
       return res.status(400).json({ success: false, message: 'Password and confirmation do not match.', code: 'PASSWORD_MISMATCH' });
     }
 
-    // Token is the ONLY authorisation — a paycode is never accepted here.
+    // Token is the ONLY authorisation â€” a paycode is never accepted here.
     const tokenCheck = await findValidResetToken(pool, token);
     if (!tokenCheck.ok) {
       return res.status(tokenCheck.status).json({ success: false, message: tokenCheck.message, code: tokenCheck.code });
     }
 
-    // Same policy as Phase 3A.7 — not weakened.
+    // Same policy as Phase 3A.7 â€” not weakened.
     const strengthError = validatePasswordStrength(newPassword);
     if (strengthError) return res.status(400).json({ success: false, message: strengthError, code: 'WEAK_PASSWORD' });
 
@@ -1232,7 +1541,10 @@ app.get('/api/hr/employee/credentials', authenticate, requireRole('HR'), require
       passwordSet: outcome.passwordSet,
       pinSet: outcome.pinSet,
       accountActive: outcome.accountActive,
+      loginEnabled: outcome.loginEnabled,
+      mustChangePassword: outcome.mustChangePassword,
       locked: outcome.locked,
+      pinLocked: outcome.pinLocked,
     });
   } catch (error) { sendDbError(res, error); }
 });
@@ -1240,16 +1552,61 @@ app.get('/api/hr/employee/credentials', authenticate, requireRole('HR'), require
 app.post('/api/hr/employee/credentials/password', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
   try {
     const pool = await getPool();
+    // mustChange:true stores the password as a TEMPORARY one and forces the
+    // employee to replace it at next sign-in (Phase I section 2). The password
+    // itself is never echoed back - HR supplies it and shares it out of band.
     const outcome = await hrResetEmployeePassword(pool, {
       paycode: req.body?.paycode,
       password: req.body?.password,
       confirmPassword: req.body?.confirmPassword,
       actor: req.user?.sub,
+      mustChange: req.body?.mustChange === true,
     });
     if (!outcome.ok) {
       return res.status(outcome.status).json({ success: false, message: outcome.message, code: outcome.code || 'RESET_FAILED' });
     }
-    res.json({ success: true, message: 'Employee password updated.', employee: outcome.employee });
+    res.json({
+      success: true,
+      message: outcome.mustChangePassword
+        ? 'Temporary password set. The employee must set a new password at next login.'
+        : 'Employee password updated.',
+      mustChangePassword: outcome.mustChangePassword,
+      employee: outcome.employee,
+    });
+  } catch (error) { sendDbError(res, error); }
+});
+
+// HR forces a password change WITHOUT replacing the password (Phase I section 7).
+app.post('/api/hr/employee/credentials/force-password-change', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const outcome = await hrForcePasswordChange(pool, { paycode: req.body?.paycode, actor: req.user?.sub });
+    if (!outcome.ok) {
+      return res.status(outcome.status).json({ success: false, message: outcome.message, code: outcome.code || 'FORCE_FAILED' });
+    }
+    res.json({ success: true, message: 'Employee must set a new password at next login.', mustChangePassword: true, employee: outcome.employee });
+  } catch (error) { sendDbError(res, error); }
+});
+
+// HR enables / disables an employee's login (Phase I section 7).
+// Flips dbo.HR_EmployeeAuth.isactive only - no Savior row is ever touched.
+app.post('/api/hr/employee/credentials/access', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const outcome = await hrSetEmployeeLoginEnabled(pool, {
+      paycode: req.body?.paycode,
+      enabled: req.body?.enabled,
+      actor: req.user?.sub,
+    });
+    if (!outcome.ok) {
+      return res.status(outcome.status).json({ success: false, message: outcome.message, code: outcome.code || 'ACCESS_FAILED' });
+    }
+    res.json({
+      success: true,
+      message: outcome.loginEnabled ? 'Employee login enabled.' : 'Employee login disabled.',
+      loginEnabled: outcome.loginEnabled,
+      employee: outcome.employee,
+    });
   } catch (error) { sendDbError(res, error); }
 });
 
@@ -1280,13 +1637,20 @@ app.post('/api/auth/hr/login', requireConfiguredAuth, async (req, res) => {
 
 app.get('/api/me', authenticate, async (req, res) => {
   if (req.user.role === 'HR') return res.json({ role: 'HR' });
-  if (req.user.role === 'EMPLOYEE' && req.user.devEmployee === true && devEmployeeAuthEnabled && req.user.paycode === devEmployeePaycode) return res.json({ role: 'EMPLOYEE', employee: { paycode: devEmployeePaycode, empname: 'Development Employee', presentcardno: null, companycode: null } });
+  if (req.user.role === 'EMPLOYEE' && req.user.devEmployee === true && devEmployeeAuthEnabled && req.user.paycode === devEmployeePaycode) return res.json({ role: 'EMPLOYEE', employee: { paycode: devEmployeePaycode, empname: 'Development Employee', presentcardno: null, companycode: null }, mustChangePassword: false });
   if (!process.env.DB_SERVER || !process.env.DB_DATABASE || !process.env.DB_USER || !process.env.DB_PASSWORD) return res.status(503).json({ success: false, message: 'Database connection unavailable.' });
   try {
     const pool = await getPool();
-    const result = await pool.request().input('paycode', sql.VarChar(50), req.user.paycode).query('SELECT TOP 1 paycode, empname, presentcardno, companycode FROM dbo.tblemployee WHERE paycode = @paycode');
+    // dbo.tblemployee.paycode / empname are fixed-width CHAR columns, so a raw
+    // SELECT returns them space-padded ("0328        "). They are trimmed here so
+    // the identity this endpoint reports matches the one the JWT carries and the
+    // one every other employee route returns.
+    const result = await pool.request().input('paycode', sql.VarChar(50), req.user.paycode).query('SELECT TOP 1 LTRIM(RTRIM(paycode)) AS paycode, LTRIM(RTRIM(empname)) AS empname, LTRIM(RTRIM(presentcardno)) AS presentcardno, LTRIM(RTRIM(companycode)) AS companycode FROM dbo.tblemployee WHERE paycode = @paycode');
     if (!result.recordset[0]) return res.status(404).json({ success: false, message: 'Employee not found.' });
-    res.json({ role: 'EMPLOYEE', employee: result.recordset[0] });
+    // mustChangePassword is additive and read LIVE, so a session restored after
+    // an HR forced change is still sent to the "set new password" screen.
+    const mustChangePassword = await isPasswordChangeRequired(pool, req.user.paycode);
+    res.json({ role: 'EMPLOYEE', employee: result.recordset[0], mustChangePassword });
   } catch (error) { sendDbError(res, error); }
 });
 
@@ -1305,11 +1669,11 @@ async function employeeAttendance(req, res, parser = parseDateRange) {
   } catch (error) { sendDbError(res, error); }
 }
 
-app.get('/api/employee/daily', authenticate, requireRole('EMPLOYEE'), requireDbConfig, (req, res) => employeeAttendance(req, res));
-app.get('/api/employee/weekly', authenticate, requireRole('EMPLOYEE'), requireDbConfig, (req, res) => employeeAttendance(req, res, parseWeekRange));
-app.get('/api/employee/monthly', authenticate, requireRole('EMPLOYEE'), requireDbConfig, (req, res) => employeeAttendance(req, res));
+app.get('/api/employee/daily', authenticate, requireRole('EMPLOYEE'), requirePasswordChanged, requireDbConfig, (req, res) => employeeAttendance(req, res));
+app.get('/api/employee/weekly', authenticate, requireRole('EMPLOYEE'), requirePasswordChanged, requireDbConfig, (req, res) => employeeAttendance(req, res, parseWeekRange));
+app.get('/api/employee/monthly', authenticate, requireRole('EMPLOYEE'), requirePasswordChanged, requireDbConfig, (req, res) => employeeAttendance(req, res));
 
-app.get('/api/employee/dashboard', authenticate, requireRole('EMPLOYEE'), requireDbConfig, async (req, res) => {
+app.get('/api/employee/dashboard', authenticate, requireRole('EMPLOYEE'), requirePasswordChanged, requireDbConfig, async (req, res) => {
   // Identity is ALWAYS req.user.paycode (from the verified JWT). A paycode in the
   // query is never read, so one employee can never load another employee's data.
   // With no explicit window the dashboard shows the CURRENT CALENDAR MONTH, which
@@ -1429,6 +1793,8 @@ app.get('/api/employee/dashboard', authenticate, requireRole('EMPLOYEE'), requir
       trendTo: trendRange.toDate,
       lateDetails,
       graceRemaining,
+      // Cumulative grace position as of each late date (see buildGraceTimeline).
+      graceTimeline: buildGraceTimeline(lateDetails, graceRemaining),
     });
   } catch (error) { sendDbError(res, error); }
 });
@@ -1785,14 +2151,14 @@ app.get('/api/hr/dashboard-charts', authenticate, requireRole('HR'), requireDbCo
       const ongoing = isOngoingShiftRow(row, shiftMap, indiaNowMinutes(), today);
       if (!ongoing) continue; // Shift already ended
       
-      const compCode = String(empInfo.companycode || '—').trim() || '—';
+      const compCode = String(empInfo.companycode || 'â€”').trim() || 'â€”';
       companyPresentMap.set(compCode, (companyPresentMap.get(compCode) || 0) + 1);
     }
     
     // Get company names
     const companyNames = new Map();
     for (const emp of empResult.recordset) {
-      const comp = String(emp.companycode || '—').trim() || '—';
+      const comp = String(emp.companycode || 'â€”').trim() || 'â€”';
       if (!companyNames.has(comp)) companyNames.set(comp, comp); // fallback to code
     }
     // Try to get company names from tblcompany
@@ -1864,7 +2230,7 @@ app.get('/api/hr/dashboard-charts', authenticate, requireRole('HR'), requireDbCo
     
     for (const emp of empResult.recordset) {
       const paycode = String(emp.paycode || '').trim();
-      const deptCode = String(emp.departmentcode || '').trim() || '—';
+      const deptCode = String(emp.departmentcode || '').trim() || 'â€”';
       const rows = regByPaycodeForDept.get(paycode) || [];
       
       if (!deptMap.has(deptCode)) deptMap.set(deptCode, { departmentcode: deptCode, present: 0, absent: 0 });
@@ -2036,8 +2402,21 @@ app.get('/api/hr/audit/:paycode', authenticate, requireRole('HR'), requireDbConf
     if (!employeeResult.recordset[0]) return res.status(404).json({ success: false, message: 'Employee not found.' });
     const employee = employeeResult.recordset[0];
     const rows = await queryAttendance(pool, req.params.paycode, range);
-    const empCat = employee.cat;
-    const empCompany = employee.companycode;
+    const empCat = String(employee.cat || '').trim();
+    const empCompany = String(employee.companycode || '').trim();
+
+    // PHASE G.2 â€” application-level holiday overlay (display classification only).
+    // Savior rows above are untouched; if this lookup fails we still return the
+    // real Savior attendance with holidays: [] (never hide attendance).
+    let holidays = [];
+    try {
+      const monthQ = String(req.query?.month || '').slice(0, 7);
+      if (/^\d{4}-\d{2}$/.test(monthQ)) {
+        holidays = await getApplicableHolidaysForEmployee(pool, empCompany, empCat, { month: monthQ });
+      } else {
+        holidays = await getApplicableHolidaysForEmployee(pool, empCompany, empCat, { fromDate: range.fromDate, toDate: range.toDate });
+      }
+    } catch { holidays = []; }
     
     // Determine the month/year for the audit (use the range or current month)
     const auditYear = new Date(range.toDate).getFullYear();
@@ -2067,6 +2446,10 @@ app.get('/api/hr/audit/:paycode', authenticate, requireRole('HR'), requireDbConf
       employee, 
       stats: { ...stats, attendancePercentage: total ? Number((stats.present / total * 100).toFixed(1)) : 0 }, 
       attendance: rows.map(r => normalizeAttendance(r, shiftMap, empCat, empCompany)),
+      // PHASE G.2 â€” ACTIVE holidays applicable to THIS employee (real company +
+      // real category) for the requested window. Display overlay only: the
+      // `attendance` Savior rows above are unchanged.
+      holidays,
       lateDetails: monthlyLate.lateDetails,
       graceRemaining: monthlyLate.graceRemaining
     });
@@ -2115,7 +2498,7 @@ app.get('/api/hr/category-analytics', authenticate, requireRole('HR'), requireDb
     let punchedTotal = 0, completeTotal = 0, missTotal = 0, absentTotal = 0, lateTotal = 0;
     for (const emp of empResult.recordset) {
       const rows = usableRegisterRows(regByPaycode.get(String(emp.paycode).trim()) || []);
-      const comp = String(emp.companycode || '—').trim() || '—';
+      const comp = String(emp.companycode || 'â€”').trim() || 'â€”';
       if (!byCompany.has(comp)) byCompany.set(comp, { companycode: comp, complete: 0, miss: 0, absent: 0, late: 0, punched: 0 });
       const bucket = byCompany.get(comp);
       const hasAnyPunch = rows.some(hasPunch);
@@ -2154,7 +2537,7 @@ app.get('/api/hr/category-analytics', authenticate, requireRole('HR'), requireDb
       // SAME mutually exclusive status buckets, split per department (real master codes).
       // For department graph: Present = employee showed up (has any punch), including ongoing shifts
       // This ensures current-date department graph shows employees currently at work as Present
-      const deptKey = String(emp.departmentcode || '').trim() || '—';
+      const deptKey = String(emp.departmentcode || '').trim() || 'â€”';
       if (!byDepartment.has(deptKey)) byDepartment.set(deptKey, { departmentcode: deptKey, complete: 0, miss: 0, absent: 0, late: 0, punched: 0 });
       const dbucket = byDepartment.get(deptKey);
       if (hasAnyPunch) dbucket.punched += 1;
@@ -2179,7 +2562,7 @@ app.get('/api/hr/category-analytics', authenticate, requireRole('HR'), requireDb
 // aggregateAttendance (/hr/summary) and /hr/category-analytics: the same
 // dbo.tblemployee set, the same week-off exclusion and the same Late logic.
 // Because the employee loop is identical, `late` here always equals the Late
-// metric those endpoints report for the same range — the dashboard count and the
+// metric those endpoints report for the same range â€” the dashboard count and the
 // detail list can never drift apart.
 app.get('/api/hr/late-employees', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
   const range = parseDateRange(req.query, 31);
@@ -2428,7 +2811,7 @@ function bucketCelebration(occurrence, todayIso, weekEndIso) {
   return { bucket: 'upcoming', days };
 }
 
-app.get('/api/employee/celebrations', authenticate, requireRole('EMPLOYEE'), requireDbConfig, async (req, res) => {
+app.get('/api/employee/celebrations', authenticate, requireRole('EMPLOYEE'), requirePasswordChanged, requireDbConfig, async (req, res) => {
   try {
     const pool = await getPool();
     const todayIso = indiaTodayISO();
@@ -2547,6 +2930,67 @@ app.get('/api/employee/celebrations', authenticate, requireRole('EMPLOYEE'), req
 });
 
 // ---------------------------------------------------------------------------
+// Employee Full & Final / Gratuity ESTIMATION (self-service)
+// Employee-scoped: identity is ALWAYS req.user.paycode from the verified JWT.
+//
+// SALARY: this application has NO approved salary source. dbo.tblemployee
+// carries no salary/basic/wage/CTC column and no salary API exists, so the
+// endpoint deliberately reports salary as unavailable instead of inventing a
+// figure. No settlement amount is produced here.
+//
+// RULES: the company's gratuity / bonus / leave-encashment / notice formulas are
+// NOT finalised, so no amount is calculated server-side. Only real inputs
+// (identity + joining date) are returned; the UI shows a pending state until the
+// approved rules are supplied.
+//
+// This endpoint never writes anything - the proposed leaving date stays in the
+// browser and is never stored in dbo.tblemployee.
+// ---------------------------------------------------------------------------
+app.get('/api/employee/fullfinal', authenticate, requireRole('EMPLOYEE'), requirePasswordChanged, requireDbConfig, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const result = await pool.request().input('paycode', sql.VarChar(50), req.user.paycode).query(`
+      SELECT LTRIM(RTRIM(e.paycode)) AS paycode,
+             LTRIM(RTRIM(e.empname)) AS empname,
+             LTRIM(RTRIM(e.designation)) AS designation,
+             LTRIM(RTRIM(e.departmentcode)) AS departmentcode,
+             LTRIM(RTRIM(d.departmentname)) AS departmentname,
+             LTRIM(RTRIM(e.companycode)) AS companycode,
+             e.dateofjoin, e.dateofbirth,
+             LTRIM(RTRIM(e.active)) AS active,
+             LTRIM(RTRIM(e.leavingdate)) AS leavingdate
+      FROM dbo.tblemployee e
+      LEFT JOIN dbo.tbldepartment d ON LTRIM(RTRIM(d.departmentcode)) = LTRIM(RTRIM(e.departmentcode))
+      WHERE e.paycode = @paycode`);
+    const e = (result.recordset || [])[0];
+    if (!e) return res.status(404).json({ success: false, message: 'Employee not found.' });
+
+    const dateOnly = (v) => (v instanceof Date ? v.toISOString().slice(0, 10) : (v ? String(v).slice(0, 10) : ''));
+    res.json({
+      success: true,
+      employee: {
+        paycode: e.paycode,
+        empname: e.empname,
+        designation: e.designation,
+        departmentcode: e.departmentcode,
+        departmentname: e.departmentname || e.departmentcode,
+        companycode: e.companycode,
+        dateofjoin: dateOnly(e.dateofjoin),
+        dateofbirth: dateOnly(e.dateofbirth),
+        active: e.active,
+        leavingdate: dateOnly(e.leavingdate),
+      },
+      // No approved salary source exists in this application - stated explicitly
+      // so the UI can show a truthful "not available" state instead of a number.
+      salary: { available: false, basic: null, reason: 'Salary information is not currently available for calculation.' },
+      // Company settlement formulas are not configured yet, so nothing is computed.
+      rulesConfigured: false,
+      rulesPendingMessage: 'Calculation rules pending company configuration.',
+    });
+  } catch (error) { sendDbError(res, error); }
+});
+
+// ---------------------------------------------------------------------------
 // Marriage anniversary application table (NOT a Savior table).
 // dbo.HR_MarriageAnniversary holds HR-imported anniversary dates; its reference
 // DDL lives in server/schema.sql + server/email-schema.sql. It is created on first
@@ -2601,7 +3045,7 @@ app.get('/api/marriage-anniversary', requireDbConfig, authenticate, requireRole(
 });
 
 // Remove ONE marriage-anniversary application record by employee paycode.
-// Additive endpoint (mobile Phase 6) — the website performed this removal only in
+// Additive endpoint (mobile Phase 6) â€” the website performed this removal only in
 // the browser, so it never persisted. Only dbo.HR_MarriageAnniversary is touched;
 // no Savior table (tblemployee / tbltimeregister / machinerawpunch) is modified and
 // the employee record itself is never deleted.
@@ -2615,6 +3059,1020 @@ app.delete('/api/marriage-anniversary/:paycode', authenticate, requireRole('HR')
       .input('paycode', sql.VarChar(50), paycode)
       .query(`DELETE FROM ${marriageTable} WHERE paycode = @paycode`);
     res.json({ success: true, deleted: Number(result.rowsAffected?.[0] || 0) });
+  } catch (error) { sendDbError(res, error); }
+});
+
+// ---------------------------------------------------------------------------
+// Holiday Management application tables (NOT Savior tables).
+//
+// dbo.HR_Holidays          - the holiday records themselves
+// dbo.HR_HolidayCategories - the category list, so HR can add more groups later
+// dbo.HR_HolidayCategoryMap- which REAL Savior category code belongs to which
+//                            holiday group (no code -> name mapping is invented)
+//
+// Auto-ensured with the project's existing "HR_ table" pattern (same approach as
+// HR_EmployeeAuth / HR_EmailConfig / HR_MarriageAnniversary). Reference DDL lives
+// in server/schema.sql. dbo.tblemployee, dbo.tbltimeregister, dbo.machinerawpunch,
+// dbo.tblcategory and every other Savior table are NEVER created or altered here.
+// ---------------------------------------------------------------------------
+const holidayTable = process.env.HR_HOLIDAY_TABLE || 'dbo.HR_Holidays';
+const holidayCategoryTable = process.env.HR_HOLIDAY_CATEGORY_TABLE || 'dbo.HR_HolidayCategories';
+const holidayCategoryMapTable = process.env.HR_HOLIDAY_CATEGORY_MAP_TABLE || 'dbo.HR_HolidayCategoryMap';
+// The category that applies to EVERY employee group. Seeded once; a holiday in
+// this group is always shown to every employee.
+const HOLIDAY_ALL_GROUP = 'All Employees';
+let holidayTableState = null; // null = unknown, true = ready, string = error message
+let holidayMigrateState = null; // null = not migrated yet (or retryable failure), true = done
+
+async function ensureHolidayTable(pool) {
+  if (holidayTableState === true) return;
+  if (typeof holidayTableState === 'string') throw new Error(holidayTableState);
+  try {
+    await pool.request().batch(`
+IF OBJECT_ID('${holidayTable}','U') IS NULL
+CREATE TABLE ${holidayTable} (
+  id INT IDENTITY(1,1) PRIMARY KEY,
+  holidaydate DATE NOT NULL,
+  holidayname NVARCHAR(200) NOT NULL,
+  category NVARCHAR(50) NOT NULL,
+  description NVARCHAR(500) NULL,
+  companycode VARCHAR(50) NULL,
+  active BIT NOT NULL CONSTRAINT DF_HRHoliday_Active DEFAULT(1),
+  createddate DATETIME2 NOT NULL CONSTRAINT DF_HRHoliday_Created DEFAULT SYSUTCDATETIME(),
+  updateddate DATETIME2 NOT NULL CONSTRAINT DF_HRHoliday_Updated DEFAULT SYSUTCDATETIME(),
+  createdby VARCHAR(50) NULL,
+  -- Duplicate rule: the SAME date may repeat, but only for a DIFFERENT category.
+  CONSTRAINT UQ_HRHoliday_DateCategory UNIQUE (holidaydate, category)
+);
+IF OBJECT_ID('${holidayCategoryTable}','U') IS NULL
+CREATE TABLE ${holidayCategoryTable} (
+  id INT IDENTITY(1,1) PRIMARY KEY,
+  categoryname NVARCHAR(50) NOT NULL,
+  sortorder INT NOT NULL CONSTRAINT DF_HRHolidayCat_Sort DEFAULT(0),
+  active BIT NOT NULL CONSTRAINT DF_HRHolidayCat_Active DEFAULT(1),
+  createddate DATETIME2 NOT NULL CONSTRAINT DF_HRHolidayCat_Created DEFAULT SYSUTCDATETIME(),
+  CONSTRAINT UQ_HRHolidayCat_Name UNIQUE (categoryname)
+);
+IF OBJECT_ID('${holidayCategoryMapTable}','U') IS NULL
+CREATE TABLE ${holidayCategoryMapTable} (
+  id INT IDENTITY(1,1) PRIMARY KEY,
+  categorycode VARCHAR(50) NOT NULL,
+  holidaycategory NVARCHAR(50) NOT NULL,
+  active BIT NOT NULL CONSTRAINT DF_HRHolidayCatMap_Active DEFAULT(1),
+  updateddate DATETIME2 NOT NULL CONSTRAINT DF_HRHolidayCatMap_Updated DEFAULT SYSUTCDATETIME(),
+  CONSTRAINT UQ_HRHolidayCatMap_Code UNIQUE (categorycode)
+);
+-- The three groups the Phase G scope requires. Additional groups are added by HR
+-- through the same table later, so no code change is needed to extend this.
+IF NOT EXISTS (SELECT 1 FROM ${holidayCategoryTable})
+INSERT INTO ${holidayCategoryTable} (categoryname, sortorder, active) VALUES
+  ('${HOLIDAY_ALL_GROUP}', 1, 1),
+  ('Factory Staff', 2, 1),
+  ('Office Staff', 3, 1);`);
+    holidayTableState = true;
+  } catch (error) {
+    const msg = String(error?.message || error || '');
+    if (msg.includes('UQ_HRHoliday_DateCategory') && msg.toUpperCase().includes('EXISTS')) {
+      holidayTableState = true; // table already present with the unique constraint
+      return;
+    }
+    holidayTableState = `Holiday table unavailable: ${msg}`;
+    throw new Error(holidayTableState);
+  }
+}
+
+/**
+ * Seed the category-code -> holiday-group mapping from REAL Savior data.
+ *
+ * dbo.tblemployee stores a category CODE (this dataset uses "001".."004") and the
+ * human name lives in dbo.tblcategory. Only the ONE mapping this project can
+ * already prove is seeded: a category that resolves to STAFF through the existing
+ * isStaffCategory() rule (the same rule that drives monthly grace) is a FACTORY
+ * group. Every other real category is deliberately LEFT UNMAPPED rather than
+ * guessed - an unmapped employee simply receives no group-specific holiday (only
+ * the "All Employees" group). This table exists purely to keep LEGACY holiday
+ * rows resolvable; new holidays store REAL company+category pairs directly and
+ * the manual "Group Mapping" management screen/endpoints were removed in the
+ * Phase G final revision.
+ *
+ * Only MISSING rows are added, so an HR override is never overwritten.
+ */
+async function ensureHolidayCategoryMap(pool) {
+  await ensureHolidayTable(pool);
+  const seeds = await pool.request().query(
+    `SELECT TOP 1 categoryname FROM ${holidayCategoryTable} WHERE LTRIM(RTRIM(categoryname)) = 'Factory Staff'`);
+  if (!seeds.recordset[0]) return; // an HR-managed category list replaced the seeds
+  const empCats = await pool.request().query(
+    `SELECT DISTINCT LTRIM(RTRIM(cat)) AS cat FROM dbo.tblemployee WHERE LTRIM(RTRIM(cat)) <> ''`);
+  const categoryMap = await loadCategoryNames(pool);
+  for (const row of empCats.recordset || []) {
+    const code = String(row.cat || '').trim();
+    // Only STAFF-resolving categories are pre-assigned; nothing is invented.
+    if (!code || !isStaffCategory(code, categoryMap)) continue;
+    await pool.request()
+      .input('code', sql.VarChar(50), code)
+      .input('group', sql.NVarChar(50), 'Factory Staff')
+      .query(`INSERT INTO ${holidayCategoryMapTable} (categorycode, holidaycategory, active)
+              SELECT @code, @group, 1
+              WHERE NOT EXISTS (SELECT 1 FROM ${holidayCategoryMapTable} WHERE LTRIM(RTRIM(categorycode)) = LTRIM(RTRIM(@code)));`);
+  }
+}
+
+const holidayCompaniesTable = process.env.HR_HOLIDAY_COMPANIES_TABLE || 'dbo.HR_HolidayCompanies';
+const holidayCategoryEntriesTable = process.env.HR_HOLIDAY_CATEGORY_ENTRIES_TABLE || 'dbo.HR_HolidayCategoryEntries';
+const holidayCompanyCategoryTable = process.env.HR_HOLIDAY_COMPANY_CATEGORY_TABLE || 'dbo.HR_HolidayCompanyCategory';
+
+async function ensureHolidayCompaniesTable(pool) {
+  await pool.request().batch(`
+IF OBJECT_ID('${holidayCompaniesTable}','U') IS NULL
+CREATE TABLE ${holidayCompaniesTable} (
+  id INT IDENTITY(1,1) PRIMARY KEY,
+  holiday_id INT NOT NULL,
+  companycode VARCHAR(50) NOT NULL
+);`);
+}
+
+async function ensureHolidayCategoryEntriesTable(pool) {
+  await pool.request().batch(`
+IF OBJECT_ID('${holidayCategoryEntriesTable}','U') IS NULL
+CREATE TABLE ${holidayCategoryEntriesTable} (
+  id INT IDENTITY(1,1) PRIMARY KEY,
+  holiday_id INT NOT NULL,
+  categorycode VARCHAR(50) NOT NULL
+);`);
+}
+
+async function ensureHolidayCompanyCategoryTable(pool) {
+  await pool.request().batch(`
+IF OBJECT_ID('${holidayCompanyCategoryTable}','U') IS NULL
+CREATE TABLE ${holidayCompanyCategoryTable} (
+  id INT IDENTITY(1,1) PRIMARY KEY,
+  holiday_id INT NOT NULL,
+  companycode VARCHAR(50) NOT NULL,
+  categorycode VARCHAR(50) NOT NULL
+);`);
+}
+
+/**
+ * One-time structural migration + legacy backfill for the Holiday tables.
+ *
+ * ROOT-CAUSE FIX (Phase G final): the old backfill iterated `pairRows.pairs`
+ * while getCompanyCategoryPairsForCompanies() returns a plain ARRAY, so every
+ * call threw `TypeError: pairRows.pairs is not iterable`. Because POST/PUT/
+ * DELETE /api/hr/holidays, /api/hr/holiday-categories and /api/employee/holidays
+ * all call this function, that one bug emptied the Category list, broke Delete,
+ * broke Edit and made the employee calendar neutral (sendDbError turned the
+ * TypeError into a generic 503).
+ *
+ * Backfill is now PER HOLIDAY and idempotent: a holiday is only backfilled while
+ * it still has ZERO applicability rows in any of the three child tables, so
+ * existing records (Independence Day, VishKarma Puja, ...) are preserved exactly
+ * once and never duplicated. Application schema only - Savior tables are only
+ * ever read here, never altered.
+ */
+async function migrateHolidayStructure(pool) {
+  if (holidayMigrateState === true) return;
+  try {
+    await ensureHolidayTable(pool);
+    await ensureHolidayCompaniesTable(pool);
+    await ensureHolidayCategoryEntriesTable(pool);
+    await ensureHolidayCompanyCategoryTable(pool);
+
+    const cols = await pool.request().query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_NAME = 'HR_Holidays' AND TABLE_SCHEMA = 'dbo'
+        AND COLUMN_NAME IN ('isHalfDay','halfdaypart')`);
+
+    const existing = new Set((cols.recordset || []).map(r => r.COLUMN_NAME));
+    if (!existing.has('isHalfDay')) {
+      await pool.request().query(`ALTER TABLE ${holidayTable} ADD isHalfDay BIT NOT NULL CONSTRAINT DF_HRHoliday_Half DEFAULT(0)`);
+    }
+    if (!existing.has('halfdaypart')) {
+      await pool.request().query(`ALTER TABLE ${holidayTable} ADD halfdaypart NVARCHAR(10) NULL`);
+    }
+
+    // The legacy group -> real category-code mapping must exist before backfill,
+    // otherwise a "Factory Staff" holiday could never resolve its employees.
+    await ensureHolidayCategoryMap(pool);
+
+    const holidays = await pool.request().query(`SELECT id, companycode, category FROM ${holidayTable}`);
+    for (const h of holidays.recordset || []) {
+      const hid = h.id;
+      // Already has applicability rows (written by POST/PUT or a previous
+      // backfill) -> never touch it again.
+      const seen = await pool.request().input('hid', sql.Int, hid).query(
+        `SELECT CASE WHEN EXISTS (SELECT 1 FROM ${holidayCompaniesTable} WHERE holiday_id = @hid)
+                    OR EXISTS (SELECT 1 FROM ${holidayCategoryEntriesTable} WHERE holiday_id = @hid)
+                    OR EXISTS (SELECT 1 FROM ${holidayCompanyCategoryTable} WHERE holiday_id = @hid)
+               THEN 1 ELSE 0 END AS hasRows`);
+      if (Number(seen.recordset?.[0]?.hasRows || 0) === 1) continue;
+
+      const cc = String(h.companycode || '').trim();
+      const cat = String(h.category || '').trim();
+
+      if (cc) {
+        await pool.request().input('hid', sql.Int, hid).input('code', sql.VarChar(50), cc)
+          .query(`INSERT INTO ${holidayCompaniesTable} (holiday_id, companycode) VALUES (@hid, @code)`);
+      }
+
+      // Real employee category codes this legacy group label applies to.
+      const entryCodes = [];
+      if (cat === HOLIDAY_ALL_GROUP) {
+        const allCats = await pool.request().query(
+          `SELECT DISTINCT LTRIM(RTRIM(cat)) AS cat FROM dbo.tblemployee WHERE LTRIM(RTRIM(cat)) <> ''`);
+        for (const r of allCats.recordset || []) entryCodes.push(String(r.cat || '').trim());
+      } else if (cat) {
+        const mapped = await pool.request().input('group', sql.NVarChar(50), cat).query(
+          `SELECT DISTINCT LTRIM(RTRIM(categorycode)) AS categorycode FROM ${holidayCategoryMapTable}
+            WHERE LTRIM(RTRIM(holidaycategory)) = @group AND active = 1`);
+        for (const r of mapped.recordset || []) entryCodes.push(String(r.categorycode || '').trim());
+      }
+      const seenCode = new Set();
+      for (const code of entryCodes) {
+        if (!code || seenCode.has(code)) continue;
+        seenCode.add(code);
+        await pool.request().input('hid', sql.Int, hid).input('code', sql.VarChar(50), code)
+          .query(`INSERT INTO ${holidayCategoryEntriesTable} (holiday_id, categorycode) VALUES (@hid, @code)`);
+      }
+
+      // Pairs: ONLY real (company, category) combinations from dbo.tblemployee
+      // that the legacy group label allows. Nothing is invented.
+      if (cc && seenCode.size > 0) {
+        const realPairs = await getCompanyCategoryPairsForCompanies(pool, [cc]);
+        for (const p of realPairs) {
+          if (!seenCode.has(p.categorycode)) continue;
+          await pool.request()
+            .input('hid', sql.Int, hid)
+            .input('code', sql.VarChar(50), p.companycode)
+            .input('cat', sql.VarChar(50), p.categorycode)
+            .query(`INSERT INTO ${holidayCompanyCategoryTable} (holiday_id, companycode, categorycode) VALUES (@hid, @code, @cat)`);
+        }
+      }
+    }
+    holidayMigrateState = true;
+  } catch (error) {
+    holidayMigrateState = null; // transient failure -> allow a clean retry next call
+    throw error;
+  }
+}
+
+/**
+ * Real category master for display: code -> category name.
+ * The name is resolved with the SAME cached helper the attendance code already
+ * uses (loadCategoryNames), so no dbo.tblcategory column name is ever assumed.
+ */
+async function readCategoryMaster(pool) {
+  const categoryMap = await loadCategoryNames(pool);
+  return categoryMap || new Map();
+}
+
+// ---- Holiday Company + Category helpers ----
+
+async function readHolidayCompanies(pool, holidayId) {
+  const r = await pool.request().input('hid', sql.Int, holidayId).query(
+    `SELECT LTRIM(RTRIM(companycode)) AS companycode FROM ${holidayCompaniesTable} WHERE holiday_id = @hid ORDER BY id`);
+  return (r.recordset || []).map(x => String(x.companycode || '').trim()).filter(Boolean);
+}
+
+async function readHolidayCategoryEntries(pool, holidayId) {
+  const r = await pool.request().input('hid', sql.Int, holidayId).query(
+    `SELECT LTRIM(RTRIM(categorycode)) AS categorycode FROM ${holidayCategoryEntriesTable} WHERE holiday_id = @hid ORDER BY id`);
+  return (r.recordset || []).map(x => String(x.categorycode || '').trim()).filter(Boolean);
+}
+
+async function readHolidayCompanyCategoryPairs(pool, holidayId) {
+  const r = await pool.request().input('hid', sql.Int, holidayId).query(
+    `SELECT LTRIM(RTRIM(companycode)) AS companycode, LTRIM(RTRIM(categorycode)) AS categorycode
+     FROM ${holidayCompanyCategoryTable} WHERE holiday_id = @hid ORDER BY companycode, categorycode`);
+  return (r.recordset || []).map(x => ({
+    companycode: String(x.companycode || '').trim(),
+    categorycode: String(x.categorycode || '').trim(),
+  })).filter(x => x.companycode && x.categorycode);
+}
+
+/**
+ * PHASE G.2 shared predicate â€” THE single holiday-applicability rule.
+ *
+ * Identity is ALWAYS real company + real category (never category alone):
+ *   pairs (real company+category rows)  -> exact pair match
+ *   legacy "All Employees" group        -> every employee
+ *   companies x categories              -> both sides must match
+ *   companies only / categories only    -> that side must match
+ *   legacy group label only             -> resolve via HR_HolidayCategoryMap
+ *
+ * Pure (no DB): callers load companies/catEntries/pairs with the readers above,
+ * then call this. Used by /api/employee/holidays AND /api/hr/audit/:paycode so
+ * both screens can never disagree about who a holiday applies to.
+ */
+function doesHolidayApplyToEmployee(h, companies, catEntries, pairs, empCompany, empCat) {
+  const list = Array.isArray(companies) ? companies : [];
+  const cats = Array.isArray(catEntries) ? catEntries : [];
+  const prs = Array.isArray(pairs) ? pairs : [];
+  if (prs.length > 0) {
+    return prs.some(p => p.companycode === empCompany && p.categorycode === empCat);
+  }
+  if (String(h?.category || '').trim() === HOLIDAY_ALL_GROUP) return true;
+  if (list.length > 0 && cats.length > 0) {
+    return list.some(c => c === empCompany) && cats.some(c => c === empCat);
+  }
+  if (list.length > 0) return list.some(c => c === empCompany);
+  if (cats.length > 0) return cats.some(c => c === empCat);
+  return false; // legacy group-only rows resolve via map in the caller
+}
+
+/**
+ * PHASE G.2 shared loader â€” ACTIVE holidays applicable to ONE employee in a
+ * window. Savior tables are only READ (tblemployee for identity); the holiday
+ * application tables are only READ. Never writes, never alters Savior data.
+ * A failure here must never hide Savior attendance â€” callers catch and fall
+ * back to holidays: [].
+ */
+async function getApplicableHolidaysForEmployee(pool, empCompany, empCat, { month = null, fromDate = null, toDate = null } = {}) {
+  const company = String(empCompany || '').trim();
+  const cat = String(empCat || '').trim();
+  const conditions = ['h.active = 1'];
+  const inputs = [];
+  if (month && /^\d{4}-\d{2}$/.test(month)) {
+    const [y, m] = month.split('-').map(Number);
+    conditions.push('h.holidaydate >= @monthStart AND h.holidaydate <= @monthEnd');
+    inputs.push(['monthStart', sql.Date, `${month}-01`]);
+    inputs.push(['monthEnd', sql.Date, isoDate(new Date(Date.UTC(y, m, 0)))]);
+  } else if (fromDate && toDate) {
+    conditions.push('h.holidaydate >= @fromDate AND h.holidaydate <= @toDate');
+    inputs.push(['fromDate', sql.Date, fromDate]);
+    inputs.push(['toDate', sql.Date, toDate]);
+  }
+  await migrateHolidayStructure(pool);
+  const request = pool.request();
+  inputs.forEach(([name, type, value]) => request.input(name, type, value));
+  const raw = await request.query(`
+      SELECT h.id, h.holidaydate, h.holidayname, h.category, h.description, h.companycode, h.active, h.isHalfDay, h.halfdaypart
+      FROM ${holidayTable} h
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY h.holidaydate, h.category`);
+  const holidays = [];
+  for (const h of raw.recordset || []) {
+    const hid = h.id;
+    const companies = await readHolidayCompanies(pool, hid);
+    const catEntries = await readHolidayCategoryEntries(pool, hid);
+    const pairs = await readHolidayCompanyCategoryPairs(pool, hid);
+    let match = doesHolidayApplyToEmployee(h, companies, catEntries, pairs, company, cat);
+    if (!match && companies.length === 0 && catEntries.length === 0 && pairs.length === 0) {
+      await ensureHolidayCategoryMap(pool);
+      const mapped = await pool.request().input('code', sql.VarChar(50), cat).query(
+        `SELECT TOP 1 holidaycategory FROM ${holidayCategoryMapTable} WHERE LTRIM(RTRIM(categorycode)) = @code AND active = 1`);
+      match = String(mapped.recordset?.[0]?.holidaycategory || '').trim() === String(h.category || '').trim();
+    }
+    if (!match) continue;
+    holidays.push({
+      ...h,
+      // Plain 'YYYY-MM-DD' â€” calendar keys are exact date strings, never drift.
+      holidaydate: rowDateIso(h.holidaydate),
+      active: Boolean(h.active),
+      isHalfDay: Boolean(h.isHalfDay),
+      companies,
+      categories: catEntries,
+      companyCategoryPairs: pairs,
+    });
+  }
+  return holidays;
+}
+
+async function writeHolidayCompanies(pool, holidayId, companies) {
+  const list = (Array.isArray(companies) ? companies : []).map(c => String(c || '').trim()).filter(Boolean);
+  await pool.request().input('hid', sql.Int, holidayId).query(`DELETE FROM ${holidayCompaniesTable} WHERE holiday_id = @hid`);
+  for (const code of list) {
+    await pool.request()
+      .input('hid', sql.Int, holidayId)
+      .input('code', sql.VarChar(50), code)
+      .query(`INSERT INTO ${holidayCompaniesTable} (holiday_id, companycode) VALUES (@hid, @code)`);
+  }
+}
+
+async function writeHolidayCategoryEntries(pool, holidayId, categories) {
+  const list = (Array.isArray(categories) ? categories : []).map(c => String(c || '').trim()).filter(Boolean);
+  await pool.request().input('hid', sql.Int, holidayId).query(`DELETE FROM ${holidayCategoryEntriesTable} WHERE holiday_id = @hid`);
+  for (const code of list) {
+    await pool.request()
+      .input('hid', sql.Int, holidayId)
+      .input('code', sql.VarChar(50), code)
+      .query(`INSERT INTO ${holidayCategoryEntriesTable} (holiday_id, categorycode) VALUES (@hid, @code)`);
+  }
+}
+
+async function writeHolidayCompanyCategoryPairs(pool, holidayId, pairs) {
+  const list = (Array.isArray(pairs) ? pairs : [])
+    .map(p => ({ companycode: String(p?.companycode || '').trim(), categorycode: String(p?.categorycode || '').trim() }))
+    .filter(p => p.companycode && p.categorycode);
+  await pool.request().input('hid', sql.Int, holidayId).query(`DELETE FROM ${holidayCompanyCategoryTable} WHERE holiday_id = @hid`);
+  for (const p of list) {
+    await pool.request()
+      .input('hid', sql.Int, holidayId)
+      .input('code', sql.VarChar(50), p.companycode)
+      .input('cat', sql.VarChar(50), p.categorycode)
+      .query(`INSERT INTO ${holidayCompanyCategoryTable} (holiday_id, companycode, categorycode) VALUES (@hid, @code, @cat)`);
+  }
+}
+
+async function getCompanyCategoryPairsForCompanies(pool, companyCodes) {
+  const list = (Array.isArray(companyCodes) ? companyCodes : []).map(c => String(c || '').trim()).filter(Boolean);
+  if (!list.length) return [];
+  const params = list.map((_, i) => `@c${i}`).join(', ');
+  const inputs = list.map((c, i) => [`c${i}`, sql.VarChar(50), c]);
+  const request = pool.request();
+  inputs.forEach(([name, type, value]) => request.input(name, type, value));
+  const r = await request.query(
+    `SELECT DISTINCT LTRIM(RTRIM(companycode)) AS companycode, LTRIM(RTRIM(cat)) AS categorycode
+     FROM dbo.tblemployee
+     WHERE LTRIM(RTRIM(cat)) <> '' AND LTRIM(RTRIM(companycode)) IN (${params})
+     ORDER BY companycode, categorycode`);
+  return (r.recordset || []).map(x => ({
+    companycode: String(x.companycode || '').trim(),
+    categorycode: String(x.categorycode || '').trim(),
+  })).filter(x => x.companycode && x.categorycode);
+}
+
+/**
+ * REAL category union + REAL company/category pairs for the selected companies.
+ * One DISTINCT query over dbo.tblemployee; the category list is simply the
+ * union of the pair's category codes (no duplicates, no hard-coded values).
+ * This is what powers the dynamic Category multi-select after company selection.
+ */
+async function getCategoriesForCompaniesWithPairs(pool, companyCodes) {
+  const list = (Array.isArray(companyCodes) ? companyCodes : []).map(c => String(c || '').trim()).filter(Boolean);
+  if (!list.length) return { categories: [], pairs: [] };
+  const params = list.map((_, i) => `@c${i}`).join(', ');
+  const request = pool.request();
+  list.forEach((c, i) => request.input(`c${i}`, sql.VarChar(50), c));
+  const rp = await request.query(
+    `SELECT DISTINCT LTRIM(RTRIM(companycode)) AS companycode, LTRIM(RTRIM(cat)) AS categorycode
+     FROM dbo.tblemployee
+     WHERE LTRIM(RTRIM(cat)) <> '' AND LTRIM(RTRIM(companycode)) IN (${params})
+     ORDER BY companycode, categorycode`);
+  const pairs = (rp.recordset || []).map(x => ({
+    companycode: String(x.companycode || '').trim(),
+    categorycode: String(x.categorycode || '').trim(),
+  })).filter(x => x.companycode && x.categorycode);
+  const categories = [...new Set(pairs.map(p => p.categorycode))].sort();
+  return { categories, pairs };
+}
+
+// ---- Holiday API Endpoints ----
+
+/** Shared read: every holiday row, optionally filtered. Never writes. */
+async function readHolidays(pool, { where = '1=1', inputs = [] } = {}) {
+  const request = pool.request();
+  inputs.forEach(([name, type, value]) => request.input(name, type, value));
+  const result = await request.query(`
+    SELECT id, holidaydate, holidayname, category, description, companycode, active,
+           isHalfDay, halfdaypart,
+           createddate, updateddate, createdby
+    FROM ${holidayTable}
+    WHERE ${where}
+    ORDER BY holidaydate, category`);
+  const rows = (result.recordset || []).map((row) => ({
+    ...row,
+    // Always hand the client a plain 'YYYY-MM-DD' so calendar date matching can
+    // never drift by timezone (17-Sep-2026 stays 17-Sep-2026 everywhere).
+    holidaydate: rowDateIso(row.holidaydate),
+    active: Boolean(row.active),
+    isHalfDay: Boolean(row.isHalfDay),
+  }));
+  for (const row of rows) {
+    row.companies = await readHolidayCompanies(pool, row.id);
+    row.categories = await readHolidayCategoryEntries(pool, row.id);
+    row.companyCategoryPairs = await readHolidayCompanyCategoryPairs(pool, row.id);
+  }
+  return rows;
+}
+
+/**
+ * Resolve the holiday group(s) that apply to ONE employee.
+ *
+ * Identity is ALWAYS req.user.paycode from the verified JWT. The employee's real
+ * category code comes from dbo.tblemployee and is translated through
+ * dbo.HR_HolidayCategoryMap (seeded from real dbo.tblcategory data), so an employee
+ * only ever receives holidays for their own group plus the "All Employees" group.
+ */
+async function employeeHolidayCategories(pool, paycode) {
+  const emp = await pool.request().input('paycode', sql.VarChar(50), paycode).query(
+    `SELECT TOP 1 LTRIM(RTRIM(cat)) AS cat FROM dbo.tblemployee WHERE LTRIM(RTRIM(paycode)) = @paycode`);
+  const catCode = String(emp.recordset?.[0]?.cat || '').trim();
+  if (!catCode) return { catCode: '', groups: [] };
+  await ensureHolidayCategoryMap(pool);
+  const mapped = await pool.request().input('code', sql.VarChar(50), catCode).query(
+    `SELECT TOP 1 holidaycategory FROM ${holidayCategoryMapTable}
+      WHERE LTRIM(RTRIM(categorycode)) = @code AND active = 1`);
+  const group = String(mapped.recordset?.[0]?.holidaycategory || '').trim();
+  return { catCode, groups: [group, HOLIDAY_ALL_GROUP].filter(Boolean) };
+}
+
+// GET /api/hr/holiday-categories - distinct employee categories (and the REAL
+// company+category pairs) for the selected companies, straight from
+// dbo.tblemployee. Read-only; it never touches the holiday tables, so the
+// category list can never be taken down by holiday-schema migration.
+// Response shape: { success, categories:[{code,name}], pairs:[{companycode,categorycode}] }
+app.get('/api/hr/holiday-categories', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const companies = String(req.query.companies || '').split(',').map(c => c.trim()).filter(Boolean);
+    const { categories, pairs } = await getCategoriesForCompaniesWithPairs(pool, companies);
+    const master = await readCategoryMaster(pool);
+    const rows = categories.map(code => ({
+      code,
+      name: master.get(code.toUpperCase()) || code,
+    }));
+    res.json({ success: true, categories: rows, pairs });
+  } catch (error) { sendDbError(res, error); }
+});
+
+// GET /api/hr/holidays - HR Admin list. Supports search + category + month/year
+// + active filters so HR can find and manage holidays. HR role required.
+app.get('/api/hr/holidays', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const pool = await getPool();
+    // Guarantee the application schema (incl. isHalfDay/halfdaypart + child
+    // tables) before reading, so a fresh install never fails on missing columns.
+    await migrateHolidayStructure(pool);
+    const q = req.query || {};
+    const conditions = ['1=1'];
+    const inputs = [];
+    const search = String(q.search || '').trim();
+    const category = String(q.category || '').trim();
+    const activeParam = String(q.active ?? '').trim().toUpperCase();
+    if (search) {
+      conditions.push('(holidayname LIKE @search OR description LIKE @search OR category LIKE @search OR companycode LIKE @search)');
+      inputs.push(['search', sql.NVarChar(100), `%${search}%`]);
+    }
+    if (category) { conditions.push('category = @category'); inputs.push(['category', sql.NVarChar(50), category]); }
+    if (activeParam === 'Y') conditions.push('active = 1');
+    else if (activeParam === 'N') conditions.push('active = 0');
+    // Month / year navigation is data-driven: no holiday date is ever hardcoded.
+    if (q.month) {
+      if (!/^\d{4}-\d{2}$/.test(q.month)) return res.status(400).json({ success: false, message: 'Invalid month. Use YYYY-MM.' });
+      const [y, m] = q.month.split('-').map(Number);
+      conditions.push('holidaydate >= @monthStart AND holidaydate <= @monthEnd');
+      inputs.push(['monthStart', sql.Date, `${q.month}-01`]);
+      inputs.push(['monthEnd', sql.Date, isoDate(new Date(Date.UTC(y, m, 0)))]);
+    } else if (q.year) {
+      if (!/^\d{4}$/.test(q.year)) return res.status(400).json({ success: false, message: 'Invalid year. Use YYYY.' });
+      conditions.push('YEAR(holidaydate) = @year');
+      inputs.push(['year', sql.Int, Number(q.year)]);
+    }
+    res.json({ success: true, holidays: await readHolidays(pool, { where: conditions.join(' AND '), inputs }) });
+  } catch (error) { sendDbError(res, error); }
+});
+
+// Phase G final: the manual "Holiday Categories" management endpoints
+// (GET/POST /api/hr/holidays/categories) were REMOVED - HR no longer creates
+// holiday categories by hand. Categories now come DYNAMICALLY from real
+// dbo.tblemployee data via GET /api/hr/holiday-categories. The
+// dbo.HR_HolidayCategories table itself is kept untouched so legacy holiday
+// rows (Independence Day, VishKarma Puja, ...) still validate and display.
+
+// Phase G final: the manual "Group Mapping" management endpoints
+// (GET/PUT /api/hr/holidays/category-map) were REMOVED - HR no longer maps
+// category codes to holiday groups by hand. The REAL company+category
+// relationship comes straight from dbo.tblemployee. The internal
+// dbo.HR_HolidayCategoryMap table is kept (and still seeded internally) so
+// legacy holiday rows keep resolving their employees exactly as before.
+
+// GET /api/employee/holidays - EMPLOYEE VIEW ONLY (read).
+//
+// The employee is ALWAYS req.user.paycode from the verified JWT; a paycode in the
+// query is never read. Only ACTIVE holidays of the employee's own group plus the
+// "All Employees" group are returned, so one employee can never see another
+// group's holiday. An employee token can never write holiday data.
+app.get('/api/employee/holidays', authenticate, requireRole('EMPLOYEE'), requirePasswordChanged, requireDbConfig, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const emp = await pool.request().input('paycode', sql.VarChar(50), req.user.paycode).query(
+      `SELECT TOP 1 LTRIM(RTRIM(companycode)) AS companycode, LTRIM(RTRIM(cat)) AS cat FROM dbo.tblemployee WHERE LTRIM(RTRIM(paycode)) = @paycode`);
+    const empCompany = String(emp.recordset?.[0]?.companycode || '').trim();
+    const empCat = String(emp.recordset?.[0]?.cat || '').trim();
+    const q = req.query || {};
+    const conditions = ['h.active = 1'];
+    const inputs = [];
+    // Month navigation is data-driven (YYYY-MM); no holiday date is hardcoded.
+    if (q.month) {
+      if (!/^\d{4}-\d{2}$/.test(q.month)) return res.status(400).json({ success: false, message: 'Invalid month. Use YYYY-MM.' });
+      const [y, m] = q.month.split('-').map(Number);
+      conditions.push('h.holidaydate >= @monthStart AND h.holidaydate <= @monthEnd');
+      inputs.push(['monthStart', sql.Date, `${q.month}-01`]);
+      inputs.push(['monthEnd', sql.Date, isoDate(new Date(Date.UTC(y, m, 0)))]);
+    } else if (q.fromDate || q.toDate) {
+      if (!isValidIsoDate(q.fromDate) || !isValidIsoDate(q.toDate) || q.fromDate > q.toDate) {
+        return res.status(400).json({ success: false, message: 'fromDate and toDate must be valid and ordered.' });
+      }
+      conditions.push('h.holidaydate >= @fromDate AND h.holidaydate <= @toDate');
+      inputs.push(['fromDate', sql.Date, q.fromDate]);
+      inputs.push(['toDate', sql.Date, q.toDate]);
+    }
+    await migrateHolidayStructure(pool);
+    const request = pool.request();
+    inputs.forEach(([name, type, value]) => request.input(name, type, value));
+    const raw = await request.query(`
+      SELECT h.id, h.holidaydate, h.holidayname, h.category, h.description, h.companycode, h.active, h.isHalfDay, h.halfdaypart
+      FROM ${holidayTable} h
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY h.holidaydate, h.category`);
+    const holidays = [];
+    for (const h of raw.recordset || []) {
+      const hid = h.id;
+      const companies = await readHolidayCompanies(pool, hid);
+      const catEntries = await readHolidayCategoryEntries(pool, hid);
+      const pairs = await readHolidayCompanyCategoryPairs(pool, hid);
+      // PHASE G.2 â€” shared predicate: real company + real category (never
+      // category alone), so this can never disagree with the audit overlay.
+      let match = doesHolidayApplyToEmployee(h, companies, catEntries, pairs, empCompany, empCat);
+      if (!match && companies.length === 0 && catEntries.length === 0 && pairs.length === 0) {
+        await ensureHolidayCategoryMap(pool);
+        const mapped = await pool.request().input('code', sql.VarChar(50), empCat).query(
+          `SELECT TOP 1 holidaycategory FROM ${holidayCategoryMapTable} WHERE LTRIM(RTRIM(categorycode)) = @code AND active = 1`);
+        match = String(mapped.recordset?.[0]?.holidaycategory || '').trim() === String(h.category || '').trim();
+      }
+      if (!match) continue;
+      holidays.push({
+        ...h,
+        // Plain 'YYYY-MM-DD' - the employee calendar keys are exact date strings.
+        holidaydate: rowDateIso(h.holidaydate),
+        active: Boolean(h.active),
+        companies,
+        categories: catEntries,
+        companyCategoryPairs: pairs,
+      });
+    }
+    res.json({ success: true, categoryCode: empCat, categories: [], holidays });
+  } catch (error) { sendDbError(res, error); }
+});
+
+/**
+ * Confirm a holiday category really exists in dbo.HR_HolidayCategories.
+ * Categories are DATA (HR can add more later), so nothing is validated against a
+ * hardcoded list - a bad category is rejected against the real table instead.
+ */
+async function holidayCategoryExists(pool, category) {
+  const row = await pool.request().input('category', sql.NVarChar(50), String(category || '').trim())
+    .query(`SELECT TOP 1 categoryname FROM ${holidayCategoryTable}
+             WHERE LTRIM(RTRIM(categoryname)) = @category AND active = 1`);
+  return Boolean(row.recordset[0]);
+}
+
+/**
+ * Duplicate rule (Phase G section 4): a holiday is a duplicate ONLY when the same
+ * date already exists for the same category. The same date for a DIFFERENT
+ * category is valid, so 26-Jan + Factory Staff and 26-Jan + Office Staff coexist.
+ * `excludeId` lets an edit keep its own row without tripping the check.
+ */
+async function findHolidayDuplicate(pool, holidaydate, category, excludeId = null) {
+  const row = await pool.request()
+    .input('holidaydate', sql.Date, holidaydate)
+    .input('category', sql.NVarChar(50), String(category || '').trim())
+    .input('excludeId', sql.Int, excludeId)
+    .query(`SELECT TOP 1 id, holidayname, category FROM ${holidayTable}
+             WHERE holidaydate = @holidaydate AND LTRIM(RTRIM(category)) = @category
+               AND (@excludeId IS NULL OR id <> @excludeId)`);
+  return row.recordset[0] || null;
+}
+
+/** Unique, trimmed string array from a request payload. */
+function cleanCodeList(value) {
+  return [...new Set((Array.isArray(value) ? value : []).map(c => String(c || '').trim()).filter(Boolean))];
+}
+
+/**
+ * THE core applicability rule of Phase G final:
+ *
+ *   saved pairs = REAL employee pairs (dbo.tblemployee)
+ *                 INTERSECT (selected companies x selected categories)
+ *
+ * This is what prevents an impossible combination (e.g. OFFICE + WORKER when no
+ * OFFICE employee is a WORKER) from ever being stored, while still allowing the
+ * valid union (B-36 + STAFF, B-36 + WORKER, ...) for a multi-company selection.
+ * Returns { ok, pairs } or { ok:false, message, code } for a 400 response.
+ */
+async function validateHolidayApplicability(pool, { companies, categories }) {
+  if (!companies.length) {
+    return { ok: false, message: 'At least one company is required.', code: 'COMPANY_REQUIRED' };
+  }
+  if (!categories.length) {
+    return { ok: false, message: 'At least one employee category is required.', code: 'CATEGORY_REQUIRED' };
+  }
+  const realPairs = await getCompanyCategoryPairsForCompanies(pool, companies);
+  const cset = new Set(companies);
+  const kset = new Set(categories);
+  const pairs = realPairs.filter(p => cset.has(p.companycode) && kset.has(p.categorycode));
+  if (!pairs.length) {
+    return {
+      ok: false,
+      message: 'Selected company/category combinations do not exist in employee data.',
+      code: 'NO_VALID_PAIRS',
+    };
+  }
+  const emptyCompany = companies.find(c => !pairs.some(p => p.companycode === c));
+  if (emptyCompany) {
+    return {
+      ok: false,
+      message: `Selected categories do not exist in company "${emptyCompany}". Pick at least one category that company actually has.`,
+      code: 'NO_VALID_PAIRS',
+    };
+  }
+  const emptyCategory = categories.find(c => !pairs.some(p => p.categorycode === c));
+  if (emptyCategory) {
+    return {
+      ok: false,
+      message: `Selected category "${emptyCategory}" does not exist in any selected company.`,
+      code: 'NO_VALID_PAIRS',
+    };
+  }
+  return { ok: true, pairs };
+}
+
+/**
+ * Legacy `category` column label for a new-style holiday, derived from the REAL
+ * dbo.tblcategory names of the selected category codes (sorted, max 50 chars -
+ * the column width). Keeps the (holidaydate, category) duplicate rule working.
+ */
+async function deriveHolidayCategoryLabel(pool, categories) {
+  const master = await readCategoryMaster(pool);
+  const names = categories.map(code => master.get(String(code).toUpperCase()) || String(code));
+  names.sort();
+  return names.join(', ').slice(0, 50);
+}
+
+// POST /api/hr/holidays - Add new holiday (HR Admin only)
+//
+// Two payload shapes are accepted, so older clients keep working unchanged:
+//   NEW (mobile Add Holiday form):
+//     { holidaydate, holidayname, companies[], categories[], isHalfDay,
+//       halfdaypart, description, active }
+//   LEGACY: an explicit `category` group label from the old management UI.
+//
+// For the NEW shape the stored applicability is ALWAYS
+//   REAL employee pairs (dbo.tblemployee) INTERSECT (companies x categories),
+// so an impossible pair (e.g. OFFICE + WORKER) can never be saved.
+app.post('/api/hr/holidays', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const { holidaydate, holidayname, category, description, companycode, companies, categories, isHalfDay, halfdaypart } = req.body || {};
+    const cleanName = String(holidayname || '').trim();
+    const legacyCategory = String(category || '').trim();
+    const companiesList = cleanCodeList(companies);
+    const categoriesList = cleanCodeList(categories);
+
+    if (!isValidIsoDate(holidaydate)) {
+      return res.status(400).json({ success: false, message: 'Valid holiday date (YYYY-MM-DD) is required.', code: 'INVALID_DATE' });
+    }
+    if (!cleanName) {
+      return res.status(400).json({ success: false, message: 'Holiday name is required.', code: 'NAME_REQUIRED' });
+    }
+    if (cleanName.length > 200) {
+      return res.status(400).json({ success: false, message: 'Holiday name must be 200 characters or fewer.', code: 'NAME_TOO_LONG' });
+    }
+
+    const pool = await getPool();
+    await migrateHolidayStructure(pool);
+
+    let finalCategory = legacyCategory;
+    let selectedPairs = [];
+    if (legacyCategory) {
+      // Legacy client: the explicit group must really exist (old manual list).
+      if (!(await holidayCategoryExists(pool, legacyCategory))) {
+        return res.status(400).json({ success: false, message: 'Select a valid holiday category.', code: 'INVALID_CATEGORY' });
+      }
+      if (companiesList.length && categoriesList.length) {
+        const v = await validateHolidayApplicability(pool, { companies: companiesList, categories: categoriesList });
+        if (!v.ok) return res.status(400).json({ success: false, message: v.message, code: v.code });
+        selectedPairs = v.pairs;
+      }
+    } else {
+      // New flow: category is the EMPLOYEE category of the selected companies.
+      const v = await validateHolidayApplicability(pool, { companies: companiesList, categories: categoriesList });
+      if (!v.ok) return res.status(400).json({ success: false, message: v.message, code: v.code });
+      selectedPairs = v.pairs;
+      finalCategory = await deriveHolidayCategoryLabel(pool, categoriesList);
+    }
+
+    // Clear duplicate message BEFORE insert, so a genuine race still 409s.
+    const duplicate = await findHolidayDuplicate(pool, holidaydate, finalCategory);
+    if (duplicate) {
+      return res.status(409).json({
+        success: false,
+        code: 'DUPLICATE_HOLIDAY',
+        message: `A holiday for ${holidaydate} already exists in "${finalCategory}". The same date can be used for a different category.`,
+      });
+    }
+
+    const storedCompany = String(companycode || '').trim() || companiesList[0] || null;
+    const storedHalfPart = isHalfDay ? (String(halfdaypart || '').trim() || 'FN') : null;
+    const result = await pool.request()
+      .input('holidaydate', sql.Date, holidaydate)
+      .input('holidayname', sql.NVarChar(200), cleanName)
+      .input('category', sql.NVarChar(50), finalCategory)
+      .input('description', sql.NVarChar(500), String(description || '').trim() || null)
+      .input('companycode', sql.VarChar(50), storedCompany)
+      .input('isHalfDay', sql.Bit, isHalfDay ? 1 : 0)
+      .input('halfdaypart', sql.NVarChar(10), storedHalfPart)
+      .input('createdby', sql.VarChar(50), String(req.user?.sub || 'HR').slice(0, 50))
+      .query(`
+        INSERT INTO ${holidayTable} (holidaydate, holidayname, category, description, companycode, active, isHalfDay, halfdaypart, createdby)
+        OUTPUT INSERTED.id, INSERTED.holidaydate, INSERTED.holidayname, INSERTED.category, INSERTED.description,
+               INSERTED.companycode, INSERTED.active, INSERTED.isHalfDay, INSERTED.halfdaypart, INSERTED.createddate, INSERTED.updateddate, INSERTED.createdby
+        VALUES (@holidaydate, @holidayname, @category, @description, @companycode, 1, @isHalfDay, @halfdaypart, @createdby)`);
+
+    const newId = result.recordset[0].id;
+    await writeHolidayCompanies(pool, newId, companiesList);
+    await writeHolidayCategoryEntries(pool, newId, categoriesList);
+    await writeHolidayCompanyCategoryPairs(pool, newId, selectedPairs);
+
+    const saved = {
+      ...result.recordset[0],
+      active: Boolean(result.recordset[0].active),
+      isHalfDay: Boolean(result.recordset[0].isHalfDay),
+      companies: companiesList,
+      categories: categoriesList,
+      companyCategoryPairs: selectedPairs,
+    };
+    res.status(201).json({ success: true, holiday: saved });
+  } catch (error) {
+    const msg = String(error?.message || error || '');
+    if (msg.includes('UQ_HRHoliday_DateCategory') && msg.toUpperCase().includes('EXISTS')) {
+      return res.status(409).json({ success: false, code: 'DUPLICATE_HOLIDAY', message: 'A holiday already exists for this date and category.' });
+    }
+    sendDbError(res, error);
+  }
+});
+
+// PUT /api/hr/holidays/:id - Update / activate / deactivate holiday (HR Admin only)
+app.put('/api/hr/holidays/:id', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({ success: false, message: 'Valid holiday ID is required.', code: 'INVALID_ID' });
+    }
+    const body = req.body || {};
+    const { holidaydate, holidayname, category, description, companycode, active, companies, categories, isHalfDay, halfdaypart } = body;
+    const pool = await getPool();
+    await migrateHolidayStructure(pool);
+
+    const current = await pool.request().input('id', sql.Int, id).query(
+      `SELECT TOP 1 id, holidaydate, holidayname, category, description, companycode, active, isHalfDay, halfdaypart FROM ${holidayTable} WHERE id = @id`);
+    if (!current.recordset[0]) {
+      return res.status(404).json({ success: false, message: 'Holiday not found.', code: 'NOT_FOUND' });
+    }
+    const before = current.recordset[0];
+
+    // Applicability is recomputed EXACTLY like POST:
+    //   REAL employee pairs INTERSECT (companies x categories).
+    // Only runs when the body carries companies/categories, so a pure
+    // activate/deactivate toggle never touches applicability.
+    const hasApplicability = companies !== undefined || categories !== undefined;
+    const strictApplicability = companies !== undefined && categories !== undefined;
+    let effCompanies = [];
+    let effCategories = [];
+    let effPairs = [];
+    if (hasApplicability) {
+      effCompanies = companies !== undefined ? cleanCodeList(companies) : await readHolidayCompanies(pool, id);
+      effCategories = categories !== undefined ? cleanCodeList(categories) : await readHolidayCategoryEntries(pool, id);
+      if (strictApplicability) {
+        const v = await validateHolidayApplicability(pool, { companies: effCompanies, categories: effCategories });
+        if (!v.ok) return res.status(400).json({ success: false, message: v.message, code: v.code });
+        effPairs = v.pairs;
+      } else if (effCompanies.length && effCategories.length) {
+        // Partial (legacy) update: intersect leniently, never widen applicability.
+        const real = await getCompanyCategoryPairsForCompanies(pool, effCompanies);
+        const cset = new Set(effCompanies);
+        const kset = new Set(effCategories);
+        effPairs = real.filter(p => cset.has(p.companycode) && kset.has(p.categorycode));
+      } else if (effCompanies.length) {
+        effPairs = await getCompanyCategoryPairsForCompanies(pool, effCompanies);
+      }
+    }
+
+    // Only the fields actually present in the body are changed; an omitted field
+    // keeps its stored value, so a partial update can never blank a column.
+    const updates = [];
+    const request = pool.request().input('id', sql.Int, id);
+
+    const nextDate = holidaydate === undefined ? before.holidaydate : holidaydate;
+    const nextCategory = category === undefined ? before.category : String(category || '').trim();
+    const nextName = holidayname === undefined ? before.holidayname : String(holidayname || '').trim();
+
+    if (holidaydate !== undefined) {
+      if (!isValidIsoDate(holidaydate)) {
+        return res.status(400).json({ success: false, message: 'Valid holiday date (YYYY-MM-DD) is required.', code: 'INVALID_DATE' });
+      }
+      updates.push('holidaydate = @holidaydate');
+      request.input('holidaydate', sql.Date, holidaydate);
+    }
+    if (holidayname !== undefined) {
+      if (!nextName) {
+        return res.status(400).json({ success: false, message: 'Holiday name cannot be empty.', code: 'NAME_REQUIRED' });
+      }
+      if (nextName.length > 200) {
+        return res.status(400).json({ success: false, message: 'Holiday name must be 200 characters or fewer.', code: 'NAME_TOO_LONG' });
+      }
+      updates.push('holidayname = @holidayname');
+      request.input('holidayname', sql.NVarChar(200), nextName);
+    }
+    if (category !== undefined) {
+      if (!nextCategory) {
+        return res.status(400).json({ success: false, message: 'Holiday category is required.', code: 'CATEGORY_REQUIRED' });
+      }
+      if (!(await holidayCategoryExists(pool, nextCategory))) {
+        return res.status(400).json({ success: false, message: 'Select a valid holiday category.', code: 'INVALID_CATEGORY' });
+      }
+      updates.push('category = @category');
+      request.input('category', sql.NVarChar(50), nextCategory);
+    }
+    if (description !== undefined) {
+      updates.push('description = @description');
+      request.input('description', sql.NVarChar(500), String(description || '').trim() || null);
+    }
+    if (companycode !== undefined) {
+      updates.push('companycode = @companycode');
+      request.input('companycode', sql.VarChar(50), String(companycode || '').trim() || null);
+    }
+    if (active !== undefined) {
+      updates.push('active = @active');
+      request.input('active', sql.Bit, active ? 1 : 0);
+    }
+    if (isHalfDay !== undefined) {
+      updates.push('isHalfDay = @isHalfDay');
+      request.input('isHalfDay', sql.Bit, isHalfDay ? 1 : 0);
+    }
+    if (halfdaypart !== undefined) {
+      updates.push('halfdaypart = @halfdaypart');
+      // Effective duration: an explicit body value wins, otherwise keep stored.
+      const effectiveHalfDay = isHalfDay === undefined ? Boolean(before.isHalfDay) : Boolean(isHalfDay);
+      request.input('halfdaypart', sql.NVarChar(10), effectiveHalfDay ? String(halfdaypart || '').trim() || 'FN' : null);
+    }
+    if (!updates.length && !hasApplicability) {
+      return res.status(400).json({ success: false, message: 'No fields to update.', code: 'NO_CHANGES' });
+    }
+
+    // Re-check the duplicate rule against the row's EFFECTIVE date + category.
+    const effectiveDate = typeof nextDate === 'string' ? nextDate : rowDateIso(nextDate);
+    const duplicate = await findHolidayDuplicate(pool, effectiveDate, nextCategory, id);
+    if (duplicate) {
+      return res.status(409).json({
+        success: false,
+        code: 'DUPLICATE_HOLIDAY',
+        message: `Another holiday for ${effectiveDate} already exists in "${nextCategory}". The same date can be used for a different category.`,
+      });
+    }
+
+    updates.push('updateddate = SYSUTCDATETIME()');
+    await request.query(`UPDATE ${holidayTable} SET ${updates.join(', ')} WHERE id = @id;`);
+    const updated = await pool.request().input('id', sql.Int, id).query(
+      `SELECT TOP 1 id, holidaydate, holidayname, category, description, companycode, active, isHalfDay, halfdaypart, createddate, updateddate, createdby
+       FROM ${holidayTable} WHERE id = @id`);
+    const updatedRow = {
+      ...updated.recordset[0],
+      active: Boolean(updated.recordset[0].active),
+      isHalfDay: Boolean(updated.recordset[0].isHalfDay),
+    };
+    if (hasApplicability) {
+      await writeHolidayCompanies(pool, id, effCompanies);
+      await writeHolidayCategoryEntries(pool, id, effCategories);
+      await writeHolidayCompanyCategoryPairs(pool, id, effPairs);
+    }
+    updatedRow.companies = await readHolidayCompanies(pool, id);
+    updatedRow.categories = await readHolidayCategoryEntries(pool, id);
+    updatedRow.companyCategoryPairs = await readHolidayCompanyCategoryPairs(pool, id);
+    res.json({ success: true, holiday: updatedRow });
+  } catch (error) {
+    const msg = String(error?.message || error || '');
+    if (msg.includes('UQ_HRHoliday_DateCategory') && msg.toUpperCase().includes('EXISTS')) {
+      return res.status(409).json({ success: false, code: 'DUPLICATE_HOLIDAY', message: 'A holiday already exists for this date and category.' });
+    }
+    sendDbError(res, error);
+  }
+});
+
+// DELETE /api/hr/holidays/:id - Delete holiday (HR Admin only)
+app.delete('/api/hr/holidays/:id', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({ success: false, message: 'Valid holiday ID is required.' });
+    }
+    
+    const pool = await getPool();
+    await migrateHolidayStructure(pool);
+    
+    await pool.request().input('id', sql.Int, id).query(`DELETE FROM ${holidayCompaniesTable} WHERE holiday_id = @id`);
+    await pool.request().input('id', sql.Int, id).query(`DELETE FROM ${holidayCategoryEntriesTable} WHERE holiday_id = @id`);
+    await pool.request().input('id', sql.Int, id).query(`DELETE FROM ${holidayCompanyCategoryTable} WHERE holiday_id = @id`);
+    
+    const result = await pool.request()
+      .input('id', sql.Int, id)
+      .query(`DELETE FROM ${holidayTable} WHERE id = @id`);
+    
+    if (result.rowsAffected[0] === 0) {
+      return res.status(404).json({ success: false, message: 'Holiday not found.' });
+    }
+    
+    res.json({ success: true, deleted: 1 });
   } catch (error) { sendDbError(res, error); }
 });
 
@@ -2671,7 +4129,7 @@ app.use((error, _req, res, _next) => {
 });
 
 /* =========================================================================
-   EMAIL GREETINGS — HR-controlled Birthday / Work / Marriage Anniversary
+   EMAIL GREETINGS â€” HR-controlled Birthday / Work / Marriage Anniversary
    - Provider + credentials: server/email-provider.js (isolated module).
      Key/credentials DB me encrypted save hoti hain (HR ? Email Configuration ?
      Provider Config). Server .env (BREVO_API_KEY / SMTP_*) sirf fallback hai.
@@ -2694,7 +4152,7 @@ const EMAIL_DEFAULTS = {
   customsubject: 'Message from HR Department',
   custombody: 'Dear {{EmployeeName}},\n\n\n\nRegards,\nHR Department'
 };
-// Subject/body pairs one per event type — used to backfill blank templates.
+// Subject/body pairs one per event type â€” used to backfill blank templates.
 const EMAIL_TEMPLATE_PAIRS = [
   ['birthdaysubject', 'birthdaybody'],
   ['workanniversarysubject', 'workanniversarybody'],
@@ -2711,7 +4169,7 @@ function localToday() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 // Case-insensitive placeholders: {{EmployeeName}} / {{name}}, {{Paycode}}, {{Department}},
-// {{CompanyCode}}, {{Designation}} — unknown placeholders are left untouched.
+// {{CompanyCode}}, {{Designation}} â€” unknown placeholders are left untouched.
 function renderEmailTemplate(tpl, vars) {
   const map = {};
   Object.entries(vars || {}).forEach(([k, v]) => { map[String(k).toLowerCase()] = (v === undefined || v === null) ? '' : String(v); });
@@ -2769,7 +4227,7 @@ CREATE TABLE ${emailLogTable} (
   status VARCHAR(20) NOT NULL, providermessageid VARCHAR(150) NULL, errormessage NVARCHAR(500) NULL
 );`);
     // Provider/credential columns (emailprovider, brevoapikey, smtp*) are owned by
-    // the isolated email-provider module — this file never writes them directly.
+    // the isolated email-provider module â€” this file never writes them directly.
     await ensureProviderColumns(pool, sql);
     emailTablesState = true;
   } catch (error) {
@@ -2821,7 +4279,7 @@ async function loadEmailRecipients(pool) {
     const key = String(m.paycode || '').trim();
     if (!key || !String(m.email || '').trim()) continue;
     const cur = byPaycode.get(key);
-    if (cur && cur.email) continue; // valid SQL email already resolved — mapping stays as documented fallback
+    if (cur && cur.email) continue; // valid SQL email already resolved â€” mapping stays as documented fallback
     const r = resolveEmail(null, m);
     byPaycode.set(key, { paycode: key, empname: (cur && cur.empname) || m.employeename || '', companycode: (cur && cur.companycode) || m.companycode || '', departmentcode: (cur && cur.departmentcode) || m.departmentcode || '', email: r.email, emailSource: r.source });
   }
@@ -2884,13 +4342,13 @@ function matchesEventDate(employee, eventType, eventDate) {
   else if (eventType === 'Marriage Anniversary') field = employee.anniversarydate;
   if (!field) return false;
   // Date objects are formatted with LOCAL components (toISOString would shift the
-  // calendar day in timezones ahead of UTC — e.g. IST midnight ? previous day).
+  // calendar day in timezones ahead of UTC â€” e.g. IST midnight ? previous day).
   const text = field instanceof Date
     ? `${field.getFullYear()}-${String(field.getMonth() + 1).padStart(2, '0')}-${String(field.getDate()).padStart(2, '0')}`
     : String(field).trim();
   const m = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (!m) return false;
-  return m[2] === mm && m[3] === dd; // DAY + MONTH only — year match nahi hota
+  return m[2] === mm && m[3] === dd; // DAY + MONTH only â€” year match nahi hota
 }
 function emailBodyFor(cfg, eventType, emp, overrides) {
   const vars = {
@@ -2916,7 +4374,7 @@ function emailBodyFor(cfg, eventType, emp, overrides) {
 }
 /* ---- Target loading: REAL Savior SQL data only. No hardcoded employees/departments. ---- */
 async function loadEmailTargets(pool, eventType, eventDate) {
-  // LTRIM/RTRIM: master columns are CHAR-padded (e.g. "EXECUTIVE   ") — same treatment
+  // LTRIM/RTRIM: master columns are CHAR-padded (e.g. "EXECUTIVE   ") â€” same treatment
   // as listEmployees() so names/codes render and filter cleanly.
   // Default to active employees for birthday/work anniversary emails
   let empQuery = `SELECT TOP 2000 LTRIM(RTRIM(paycode)) AS paycode, LTRIM(RTRIM(empname)) AS empname, LTRIM(RTRIM(companycode)) AS companycode, LTRIM(RTRIM(departmentcode)) AS departmentcode, LTRIM(RTRIM(designation)) AS designation, e_mail1, dateofbirth, dateofjoin FROM dbo.tblemployee`;
@@ -2953,7 +4411,7 @@ async function runEmailEvent(pool, eventType, filters, options) {
   }
   const provider = await emailProviderSettings(pool);
   if (!provider.configured) return { ...out, skippedReason: provider.hint || 'Email provider is not configured.' };
-  if (!String(cfg.senderemail || '').trim()) return { ...out, skippedReason: 'Sender email is not configured — HR ? Email Configuration ? Provider Config tab me save karo.' };
+  if (!String(cfg.senderemail || '').trim()) return { ...out, skippedReason: 'Sender email is not configured â€” HR ? Email Configuration ? Provider Config tab me save karo.' };
   const { employees, targets } = await loadEmailTargets(pool, eventType, eventDate);
   const filtered = applyEmailFilters(targets, filters || {});
   const mapResult = await pool.request().query(`SELECT TOP 2000 paycode, email FROM ${emailMapTable}`);
@@ -3067,7 +4525,7 @@ app.post('/api/email/config', requireDbConfig, authenticate, requireRole('HR'), 
     return res.json({ success: true });
   } catch (error) { return emailErrorResponse(res, error); }
 });
-/* ---- Provider credentials (DB-backed, encrypted) — HR-only ----
+/* ---- Provider credentials (DB-backed, encrypted) â€” HR-only ----
    These endpoints are the ONLY way the UI reads/writes credentials.
    Secrets go in, never out: responses carry masked hints only. */
 app.get('/api/email/provider', requireDbConfig, authenticate, requireRole('HR'), async (req, res) => {
@@ -3083,7 +4541,7 @@ app.post('/api/email/provider', requireDbConfig, authenticate, requireRole('HR')
     await getEmailConfig(pool); // guarantees the config row (+ provider columns) exists
     const body = req.body || {};
     const apiKey = String(body.brevoApiKey || '').trim();
-    if (apiKey && apiKey.length < 10) return res.status(400).json({ success: false, message: 'Brevo API key looks too short — paste the full xkeysib-... key.' });
+    if (apiKey && apiKey.length < 10) return res.status(400).json({ success: false, message: 'Brevo API key looks too short â€” paste the full xkeysib-... key.' });
     if (body.smtpPort !== undefined && body.smtpPort !== '' && body.smtpPort !== null && !Number.isFinite(Number(body.smtpPort))) return res.status(400).json({ success: false, message: 'SMTP port must be a number (e.g. 587 or 465).' });
     const senderEmail = String(body.senderemail || '').trim();
     if (senderEmail && !EMAIL_RE.test(senderEmail)) return res.status(400).json({ success: false, message: 'Invalid sender email.' });
@@ -3115,8 +4573,8 @@ app.get('/api/email/health', requireDbConfig, authenticate, requireRole('HR'), a
     const checks = [
       { key: 'provider', label: 'Email Provider', ok: provider.configured, value: provider.configured ? `${provider.providerLabel} ?` : 'Not configured', needs: provider.hint || '' },
       { key: 'database', label: 'SQL Database', ok: !!process.env.DB_SERVER, value: process.env.DB_SERVER ? 'Connected ?' : 'Not configured', needs: process.env.DB_SERVER ? '' : 'Server .env me DB_SERVER set karo.' },
-      { key: 'sender', label: 'Sender Email', ok: !!senderEmail, value: senderEmail || 'Not set', needs: senderEmail ? '' : 'Company ka HR sender email save karo (Provider Config tab) — Brevo me verified sender hona chahiye.' },
-      { key: 'recipients', label: 'Employee Emails', ok: noEmailCount === 0 && recipients.length > 0, value: `${masterEmailCount} SQL e_mail1 • ${mappingCount} HR mapping • ${noEmailCount} missing`, needs: noEmailCount > 0 ? `${noEmailCount} employees ka koi email nahi mila — "Export Missing Emails" se CSV nikaal ke Email Source tab se import karo.` : '' }
+      { key: 'sender', label: 'Sender Email', ok: !!senderEmail, value: senderEmail || 'Not set', needs: senderEmail ? '' : 'Company ka HR sender email save karo (Provider Config tab) â€” Brevo me verified sender hona chahiye.' },
+      { key: 'recipients', label: 'Employee Emails', ok: noEmailCount === 0 && recipients.length > 0, value: `${masterEmailCount} SQL e_mail1 â€¢ ${mappingCount} HR mapping â€¢ ${noEmailCount} missing`, needs: noEmailCount > 0 ? `${noEmailCount} employees ka koi email nahi mila â€” "Export Missing Emails" se CSV nikaal ke Email Source tab se import karo.` : '' }
     ];
     return res.json({ success: true, ready: provider.configured && !!senderEmail && !!process.env.DB_SERVER, provider, checks, masterEmailCount, mappingCount, noEmailCount, recipientCount: recipients.length, senderEmail, senderName: String(cfg.sendername || '').trim() });
   } catch (error) { return emailErrorResponse(res, error); }
@@ -3141,8 +4599,8 @@ app.post('/api/email/test', requireDbConfig, authenticate, requireRole('HR'), as
     const cfg = await getEmailConfig(pool);
     const provider = await getProviderSettings(pool);
     if (!provider.configured) return res.status(400).json({ success: false, message: provider.hint || 'Email provider is not configured. Open the Provider Config tab.' });
-    if (!String(cfg.senderemail || '').trim()) return res.status(400).json({ success: false, message: 'Sender email not set — save Sender Email in the Provider Config tab first.' });
-    const messageId = await sendEmailNow(provider, cfg, 'Test Email — Attendance HR Portal', 'This is a test email from the Attendance HR Portal email configuration. Employee greeting data is NOT included.', to, 'HR Admin');
+    if (!String(cfg.senderemail || '').trim()) return res.status(400).json({ success: false, message: 'Sender email not set â€” save Sender Email in the Provider Config tab first.' });
+    const messageId = await sendEmailNow(provider, cfg, 'Test Email â€” Attendance HR Portal', 'This is a test email from the Attendance HR Portal email configuration. Employee greeting data is NOT included.', to, 'HR Admin');
     await logEmail(pool, { eventtype: 'Test', eventdate: localToday(), recipientemail: to, status: 'Sent', providermessageid: messageId });
     return res.json({ success: true, messageId });
   } catch (error) {
@@ -3162,7 +4620,7 @@ app.get('/api/email/resolve', requireDbConfig, authenticate, requireRole('HR'), 
     if (!emp) return res.status(404).json({ success: false, message: `Paycode ${paycode} not found in Savior SQL employee master.` });
     const mapRow = (await pool.request().input('pc', sql.VarChar(50), paycode).query(`SELECT TOP 1 email FROM ${emailMapTable} WHERE paycode = @pc`)).recordset[0];
     const { email, source } = resolveEmail(emp, mapRow);
-    return res.json({ success: true, employee: emp, email, emailSource: email ? source : 'No email found — import mapping required', hasEmail: !!email });
+    return res.json({ success: true, employee: emp, email, emailSource: email ? source : 'No email found â€” import mapping required', hasEmail: !!email });
   } catch (error) { return emailErrorResponse(res, error); }
 });
 /* ---- Single Email send (backend-authorized; browser never sends arbitrary emails) ---- */
@@ -3182,8 +4640,8 @@ app.post('/api/email/send-single', requireDbConfig, authenticate, requireRole('H
     if (!emp) return res.status(404).json({ success: false, message: `Paycode ${paycode} not found in Savior SQL employee master.` });
     const mapRow = (await pool.request().input('pc', sql.VarChar(50), paycode).query(`SELECT TOP 1 email FROM ${emailMapTable} WHERE paycode = @pc`)).recordset[0];
     resolved = resolveEmail(emp, mapRow);
-    if (!resolved.email) return res.status(400).json({ success: false, message: `No valid email for ${paycode} — SQL e_mail1 is empty and no HR mapping exists. Import the email first.` });
-    if (!String(cfg.senderemail || '').trim()) return res.status(400).json({ success: false, message: 'Sender email not set — save Sender Email in the Provider Config tab first.' });
+    if (!resolved.email) return res.status(400).json({ success: false, message: `No valid email for ${paycode} â€” SQL e_mail1 is empty and no HR mapping exists. Import the email first.` });
+    if (!String(cfg.senderemail || '').trim()) return res.status(400).json({ success: false, message: 'Sender email not set â€” save Sender Email in the Provider Config tab first.' });
     eventDate = /^\d{4}-\d{2}-\d{2}$/.test(String(b.date || '')) ? String(b.date) : localToday();
     if (!b.resend && await alreadySentToday(pool, paycode, eventType, eventDate)) {
       return res.status(409).json({ success: false, alreadySent: true, message: `A ${eventType} email was already sent to ${paycode} for ${eventDate}. Tick 'Resend (ignore duplicate protection)' to send again.` });

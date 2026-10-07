@@ -28,6 +28,8 @@ export const useAuth = () => {
     userData: authState.userData,
     isLoading: authState.isLoading,
     error: authState.error,
+    // Phase I: employee ka forced password setup pending hai.
+    mustChangePassword: authState.mustChangePassword === true,
     isHR: authState.isAuthenticated && authState.userRole === 'HR',
     isEmployee: authState.isAuthenticated && authState.userRole === 'EMPLOYEE',
     loginHR: authStore.loginHR,
@@ -36,6 +38,7 @@ export const useAuth = () => {
     restoreSession: authStore.restoreSession,
     initialize: authStore.initializeAuth,
     setError: authStore.setError,
+    clearMustChangePassword: authStore.clearMustChangePassword,
     clearError: () => authStore.setError(null),
   };
 };

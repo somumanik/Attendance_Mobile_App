@@ -45,6 +45,11 @@ export const API_ENDPOINTS = {
   EMPLOYEE_PIN_SETUP: '/employee/pin/setup',
   EMPLOYEE_PIN_CHANGE: '/employee/pin/change',
 
+  // Employee profile (self only, session identity — no paycode is ever sent)
+  EMPLOYEE_PROFILE: '/employee/profile',
+  // Organisation celebrations (self excluded server-side)
+  EMPLOYEE_CELEBRATIONS: '/employee/celebrations',
+
   // Employee Forgot / Reset Password (self-service, token based)
   EMPLOYEE_FORGOT_PASSWORD: '/auth/employee/forgot-password',
   EMPLOYEE_RESET_PASSWORD: '/auth/employee/reset-password',

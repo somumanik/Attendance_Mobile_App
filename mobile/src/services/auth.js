@@ -60,18 +60,29 @@ export const loginHR = async (username, password) => {
 };
 
 /**
- * Existing employee login API call karta hai.
- * Backend contract: POST /api/auth/employee/login { paycode, password }
+ * Employee login. Password is the primary credential; a 4-digit PIN may be used
+ * instead (Phase I section 5) and password login stays available as a fallback.
+ *
+ * Backend contract: POST /api/auth/employee/login
+ *   { paycode, password }              -> password sign-in
+ *   { paycode, pin, credential:'pin' } -> PIN sign-in
+ *
  * @param {string} paycode Employee paycode
- * @param {string} password Employee password
- * @returns {Promise<object>} Backend response containing token, role and employee
+ * @param {string} password Employee password (ignored when using a PIN)
+ * @param {string} [pin] Optional 4-digit PIN
+ * @param {boolean} [usePin] Send the PIN instead of the password
+ * @returns {Promise<object>} Backend response (token, role, employee, mustChangePassword)
  */
-export const loginEmployee = async (paycode, password) => {
+export const loginEmployee = async (paycode, password, pin, usePin = false) => {
   try {
-    const response = await api.post(API_ENDPOINTS.EMPLOYEE_LOGIN, {
-      paycode: String(paycode || '').trim(),
-      password: String(password || ''),
-    });
+    const body = { paycode: String(paycode || '').trim() };
+    if (usePin) {
+      body.credential = 'pin';
+      body.pin = String(pin || '');
+    } else {
+      body.password = String(password || '');
+    }
+    const response = await api.post(API_ENDPOINTS.EMPLOYEE_LOGIN, body);
 
     if (!response?.success || !response?.token) {
       throw new Error('Employee login response did not include a valid session.');
@@ -83,8 +94,40 @@ export const loginEmployee = async (paycode, password) => {
     // user ko first-time password setup flow mein bhej sake.
     const wrapped = new Error(safeErrorMessage(error, 'Employee login failed. Please try again.'));
     wrapped.firstTimeSetupRequired = error?.response?.data?.firstTimeSetupRequired === true;
+    wrapped.mustChangePassword = error?.response?.data?.mustChangePassword === true;
+    wrapped.code = error?.response?.data?.code;
     throw wrapped;
   }
+};
+
+/* --------------- employee sets / changes OWN password (Phase I) -------------
+   Backend har call par authenticated session se identity leta hai, isliye mobile
+   se paycode kabhi nahi bheja jaata - koi doosre employee ka password change
+   hi nahi kar sakta. */
+
+/**
+ * Signed-in employee apna password badalta hai.
+ * Ye wahi endpoint hai jo forced password setup (mustChangePassword) clear karta hai.
+ * Backend: POST /api/employee/password/change { currentPassword, newPassword, confirmPassword }
+ * @param {Object} payload Password values
+ * @returns {Promise<object>} Server confirmation (no password, no hash)
+ */
+export const changeMyPassword = async ({ currentPassword, newPassword, confirmPassword }) => {
+  const response = await api.post(API_ENDPOINTS.EMPLOYEE_PASSWORD_CHANGE, {
+    currentPassword: String(currentPassword || ''),
+    newPassword: String(newPassword || ''),
+    confirmPassword: String(confirmPassword || ''),
+  });
+  return response;
+};
+
+/**
+ * Batata hai ki employee par forced password change pending hai ya nahi.
+ * @returns {Promise<{ mustChangePassword: boolean }>}
+ */
+export const getMyPasswordStatus = async () => {
+  const response = await api.get(API_ENDPOINTS.EMPLOYEE_PASSWORD_STATUS);
+  return { mustChangePassword: response?.mustChangePassword === true };
 };
 
 /**
@@ -209,14 +252,20 @@ export const getHrEmployeeCredentials = async (paycode) => {
 
 /**
  * HR employee ka password reset karta hai (PIN change NAHI hota).
- * @param {Object} payload Paycode + new password
+ *
+ * Phase I section 2: mustChange=true ko temporary password ki tarah store karta
+ * hai, jisse employee ko next login par naya password set karna hi padega.
+ * Password API response mein kabhi return nahi hota.
+ *
+ * @param {Object} payload Paycode + new password (+ mustChange flag)
  * @returns {Promise<object>} Server confirmation
  */
-export const hrResetEmployeePassword = async ({ paycode, password, confirmPassword }) => {
+export const hrResetEmployeePassword = async ({ paycode, password, confirmPassword, mustChange = false }) => {
   const response = await api.post(API_ENDPOINTS.HR_EMPLOYEE_CREDENTIALS_PASSWORD, {
     paycode: String(paycode || '').trim(),
     password: String(password || ''),
     confirmPassword: String(confirmPassword || ''),
+    mustChange: mustChange === true,
   });
   return response;
 };
@@ -231,6 +280,34 @@ export const hrResetEmployeePin = async ({ paycode, pin, confirmPin }) => {
     paycode: String(paycode || '').trim(),
     pin: String(pin || ''),
     confirmPin: String(confirmPin || ''),
+  });
+  return response;
+};
+
+/**
+ * HR employee ko force karta hai ki next login par naya password set kare
+ * (current password badalta NAHI).
+ * @param {string} paycode Employee paycode
+ * @returns {Promise<object>} Server confirmation
+ */
+export const hrForcePasswordChange = async (paycode) => {
+  const response = await api.post(API_ENDPOINTS.HR_EMPLOYEE_FORCE_PASSWORD_CHANGE, {
+    paycode: String(paycode || '').trim(),
+  });
+  return response;
+};
+
+/**
+ * HR employee ka login enable / disable karta hai.
+ * Ye sirf application credential flag badalta hai - Savior data kabhi nahi badalta.
+ * @param {string} paycode Employee paycode
+ * @param {boolean} enabled true = allow login, false = block login
+ * @returns {Promise<object>} Server confirmation
+ */
+export const hrSetEmployeeLoginEnabled = async (paycode, enabled) => {
+  const response = await api.post(API_ENDPOINTS.HR_EMPLOYEE_LOGIN_ACCESS, {
+    paycode: String(paycode || '').trim(),
+    enabled: enabled === true,
   });
   return response;
 };

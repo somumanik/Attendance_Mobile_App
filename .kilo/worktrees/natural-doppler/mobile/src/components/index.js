@@ -24,3 +24,4 @@ export { ScreenContainer } from './ScreenContainer';
 export { StatCard } from './StatCard';
 export { PlaceholderCard } from './PlaceholderCard';
 export { LogoutButton } from './LogoutButton';
+export { MonthNavigator, currentMonthKey, previousMonthKey, formatMonthKey } from './MonthNavigator';

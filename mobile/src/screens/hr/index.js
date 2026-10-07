@@ -12,3 +12,4 @@ export { HRCelebrationsScreen } from './HRCelebrationsScreen';
 export { HRMarriageScreen } from './HRMarriageScreen';
 export { HRLeaveManagementScreen } from './HRLeaveManagementScreen';
 export { HREmployeeCredentialsScreen } from './HREmployeeCredentialsScreen';
+export { HRHolidayManagementScreen } from './HRHolidayManagementScreen';

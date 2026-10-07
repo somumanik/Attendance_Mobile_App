@@ -21,18 +21,41 @@
  * exactly as the existing backend already returns them (no frontend calculations).
  */
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { View, Text, ScrollView, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { COLORS, TYPOGRAPHY, SPACING, SHADOWS } from '../../utils/colors';
 import { ScreenContainer } from '../../components/ScreenContainer';
 import { api } from '../../services/api';
+import { MonthNavigator, currentMonthKey } from '../../components/MonthNavigator';
+import { getStatusColor } from '../../utils/format';
 
 const clean = (v) => String(v == null ? '' : v).trim();
 
-const currentMonth = () => {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+// A missing punch keeps the neutral placeholder colour.
+const hasPunchTime = (v) => {
+  const s = clean(v);
+  return s.length > 0 && s !== '—' && s !== '--' && s !== '-';
 };
+
+// DISPLAY ORDER ONLY. The audit endpoint returns the selected month newest-first
+// (newest first is what the desktop audit view expects, so the backend and the
+// website are deliberately left untouched). This screen shows the same month
+// oldest -> newest. Rows themselves are not modified: no status, In/Out time,
+// hours, grace or future/incomplete-day handling is touched here, and the
+// original index keeps same-day rows in the order SQL returned them.
+const ascendingByDate = (list) => (Array.isArray(list) ? list : [])
+  .map((row, index) => ({
+    row,
+    index,
+    key: clean(row && (row.date || row.dateoffice)).slice(0, 10),
+  }))
+  .sort((a, b) => {
+    if (a.key === b.key) return a.index - b.index;
+    if (!a.key) return 1;
+    if (!b.key) return -1;
+    return a.key < b.key ? -1 : 1;
+  })
+  .map((entry) => entry.row);
 
 const dayName = (iso) => {
   const s = clean(iso);
@@ -70,16 +93,24 @@ export const HRAuditScreen = ({ route }) => {
   const [loadingAudit, setLoadingAudit] = useState(false);
   const [error, setError] = useState(null);
   const timer = useRef(null);
+  // Month-wise historical attendance. Defaults to the current month and only
+  // moves backwards, so a future month can never be selected. It deliberately
+  // survives an employee change (see loadAudit below).
+  const [month, setMonth] = useState(currentMonthKey());
+  // Mirrors the selected month so loadAudit/loadDefaultEmployee keep a stable
+  // identity. Without this, changing the month would recreate the callbacks and
+  // re-run the "load first employee" effect, resetting the employee selection.
+  const monthRef = useRef(month);
   // First active employee in A -> Z order (loaded from the real employee API).
   const defaultEmployee = useRef(null);
 
-  // Load the existing audit endpoint for the selected employee.
+  // Load the existing audit endpoint for the selected employee + selected month.
   const loadAudit = useCallback(async (employee) => {
     setSelected(employee);
     setLoadingAudit(true);
     setError(null);
     try {
-      const data = await api.get(`/hr/audit/${encodeURIComponent(clean(employee.paycode))}`, { month: currentMonth() });
+      const data = await api.get(`/hr/audit/${encodeURIComponent(clean(employee.paycode))}`, { month: monthRef.current });
       setAudit(data);
     } catch (err) {
       setAudit(null);
@@ -88,6 +119,13 @@ export const HRAuditScreen = ({ route }) => {
       setLoadingAudit(false);
     }
   }, []);
+
+  // Month change: keep the same employee, reload that month's real records.
+  const changeMonth = useCallback((nextMonth) => {
+    monthRef.current = nextMonth;
+    setMonth(nextMonth);
+    if (selected) loadAudit(selected);
+  }, [selected, loadAudit]);
 
   // Load every active employee through the existing /api/employees endpoint
   // (same paging pattern as the All Employees screen) and keep the first one
@@ -154,7 +192,7 @@ export const HRAuditScreen = ({ route }) => {
   }, [presetPaycode, selected, loadAudit]);
 
   const stats = audit?.stats || {};
-  const attendance = Array.isArray(audit?.attendance) ? audit.attendance : [];
+  const attendance = useMemo(() => ascendingByDate(audit?.attendance), [audit]);
   const lateDetails = Array.isArray(audit?.lateDetails) ? audit.lateDetails : [];
   const grace = audit?.graceRemaining || {};
   const emp = audit?.employee || selected || {};
@@ -210,6 +248,9 @@ export const HRAuditScreen = ({ route }) => {
 
         {!loadingAudit && audit?.employee ? (
           <View>
+            {/* Month-wise historical attendance for this employee */}
+            <MonthNavigator month={month} onChange={changeMonth} />
+
             {/* Employee summary */}
             <View style={styles.card}>
               <Text style={styles.name}>{clean(audit.employee.empname)}</Text>
@@ -294,7 +335,11 @@ export const HRAuditScreen = ({ route }) => {
               ) : null}
               {attendance.map((r, i) => {
                 const status = r.statusLabel || r.computedStatus || r.status || '';
-                const isBad = /absent|miss/i.test(status);
+                // Existing app colour language (Present green / Absent red /
+                // Miss Punch amber / Week Off slate) — no new colour rules.
+                const color = getStatusColor(r.statusCode || status);
+                const inVal = clean(r.inTime || r.in1);
+                const outVal = clean(r.outTime || r.out1);
                 return (
                   <View key={`att-${i}`} style={styles.attRow}>
                     <View style={styles.attLeft}>
@@ -302,12 +347,12 @@ export const HRAuditScreen = ({ route }) => {
                       <Text style={styles.attDay}>{dayName(r.date || r.dateoffice)}</Text>
                     </View>
                     <View style={styles.attMid}>
-                      <Text style={styles.attIn}>{r.inTime || r.in1 || '—'}</Text>
-                      <Text style={styles.attOut}>{r.outTime || r.out1 || '—'}</Text>
+                      <Text style={[styles.attIn, hasPunchTime(inVal) ? styles.attInReal : styles.attTimeNone]}>{inVal || '—'}</Text>
+                      <Text style={[styles.attOut, hasPunchTime(outVal) ? styles.attOutReal : styles.attTimeNone]}>{outVal || '—'}</Text>
                     </View>
                     <Text style={styles.attHrs}>{Number(r.hoursworked || 0)}h</Text>
-                    <View style={[styles.attStatus, isBad ? styles.attStatusBad : styles.attStatusOk]}>
-                      <Text style={[styles.attStatusText, { color: isBad ? COLORS.error : COLORS.success }]} numberOfLines={1}>
+                    <View style={[styles.attStatus, { backgroundColor: `${color}18`, borderColor: color }]}>
+                      <Text style={[styles.attStatusText, { color }]} numberOfLines={1}>
                         {status}
                       </Text>
                     </View>
@@ -420,6 +465,10 @@ const styles = StyleSheet.create({
   attMid: { flex: 1, flexDirection: 'row', gap: SPACING.sm },
   attIn: { fontSize: 11, color: COLORS.success },
   attOut: { fontSize: 11, color: COLORS.error },
+  // Real punches use the dark IN/OUT colours; a missing punch stays neutral.
+  attInReal: { color: '#166534', fontWeight: '700' },
+  attOutReal: { color: '#991B1B', fontWeight: '700' },
+  attTimeNone: { color: COLORS.textTertiary, fontWeight: '400' },
   attHrs: { fontSize: 11, color: COLORS.textPrimary, fontWeight: '600', width: 40, textAlign: 'right' },
   attStatus: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10, maxWidth: 84 },
   attStatusOk: { backgroundColor: `${COLORS.success}18` },

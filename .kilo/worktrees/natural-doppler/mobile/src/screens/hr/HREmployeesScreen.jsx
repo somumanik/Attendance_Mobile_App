@@ -23,10 +23,15 @@
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { View, Text, ScrollView, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator, Modal } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { COLORS, TYPOGRAPHY, SPACING, SHADOWS } from '../../utils/colors';
 import { ScreenContainer } from '../../components/ScreenContainer';
 import { Button } from '../../components/Button';
 import { api } from '../../services/api';
+
+// L (Late) has no existing token in the shared palette; violet matches the
+// Audit tab accent. Values themselves are never changed - colour only.
+const COLOR_LATE = '#7C3AED';
 
 const PAGE_SIZES = [50, 100, 150];
 const SERVER_PAGE_SIZE = 100;
@@ -38,7 +43,9 @@ export const HREmployeesScreen = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
   const [search, setSearch] = useState('');
-  const [filters, setFilters] = useState({ department: '', company: '', gender: '', category: '', designation: '', marital: '', status: '' });
+  // Active is the existing intended default: the list opens showing real active
+  // employees without the user having to pick the filter first.
+  const [filters, setFilters] = useState({ department: '', company: '', gender: '', category: '', designation: '', marital: '', status: 'Y' });
   const [exported, setExported] = useState(null);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
@@ -53,7 +60,11 @@ export const HREmployeesScreen = () => {
     try {
       const rows = [];
       for (let p = 1; p <= 50; p += 1) {
-        const data = await api.get('/employees', { page: p, pageSize: SERVER_PAGE_SIZE, active: 'Y' });
+        // The whole real employee master (active + inactive) is loaded once so the
+        // Active / Inactive / All control filters REAL rows. The existing server-side
+        // 'active' filter is still used — just with ALL instead of a hardcoded 'Y',
+        // which previously made inactive employees unreachable (zero results).
+        const data = await api.get('/employees', { page: p, pageSize: SERVER_PAGE_SIZE, active: 'ALL' });
         const batch = Array.isArray(data?.rows) ? data.rows : [];
         rows.push(...batch);
         if (batch.length < SERVER_PAGE_SIZE) break;
@@ -124,7 +135,8 @@ export const HREmployeesScreen = () => {
   const changePageSize = (size) => { setPageSize(size); setPage(1); };
 
   const clearFilters = () => {
-    setFilters({ department: '', company: '', gender: '', category: '', designation: '', marital: '', status: '' });
+    // Active stays the intended default (same as the initial screen state).
+    setFilters({ department: '', company: '', gender: '', category: '', designation: '', marital: '', status: 'Y' });
     setSearch('');
     setPage(1);
   };
@@ -157,9 +169,19 @@ export const HREmployeesScreen = () => {
   };
 
   // Real filter options loaded from /hr/filters (same source as the desktop roster).
+  // /hr/filters returns some lists as plain strings and some as {code, name}
+  // objects (departments, companies, categories). Both shapes must resolve to the
+  // real master CODE as the stored value and the real master NAME as the label,
+  // otherwise an object list would stringify to "[object Object]" and the option
+  // could never match a real employee value.
+  const optionCode = (v) => clean(v && typeof v === 'object' ? v.code : v);
+  const optionName = (v) => clean(v && typeof v === 'object' ? v.name : v);
   const coded = (list) => ({
-    options: ['', ...list.map(clean)],
-    render: (v) => v,
+    options: ['', ...(list || []).map(optionCode).filter(Boolean)],
+    render: (v) => {
+      const m = (list || []).find((x) => optionCode(x) === v);
+      return (m !== undefined ? optionName(m) : '') || v;
+    },
   });
   const filterDefs = [
     {
@@ -187,13 +209,43 @@ export const HREmployeesScreen = () => {
     { key: 'status', label: 'Active', ...coded(filterOptions.statuses) },
   ];
 
-  const cycleFilter = (key, options) => {
-    const current = filters[key];
-    const idx = options.indexOf(current);
-    const next = options[(idx + 1) % options.length];
-    setFilters((p) => ({ ...p, [key]: next }));
-    setPage(1);
+  // Single-select filter sheet: tapping a filter opens the real option list and
+  // one tap on an option applies it. Replaces the old cycle-on-tap behaviour
+  // that needed repeated taps to reach the wanted value.
+  const [filterSheet, setFilterSheet] = useState(null);
+  const [sheetSearch, setSheetSearch] = useState('');
+
+  const openFilterSheet = (def) => {
+    setSheetSearch('');
+    setFilterSheet({ key: def.key, label: def.label, options: def.options, render: def.render });
   };
+
+  const closeFilterSheet = () => {
+    setFilterSheet(null);
+    setSheetSearch('');
+  };
+
+  // Only this one filter key changes; every other filter stays exactly as it was.
+  const selectFilterOption = (key, value) => {
+    setFilters((p) => ({ ...p, [key]: value }));
+    setPage(1);
+    closeFilterSheet();
+  };
+
+  // Options shown in the sheet. Stored values stay the real master CODES so the
+  // existing filtering logic is untouched; only the displayed label is the name.
+  const sheetOptions = useMemo(() => {
+    if (!filterSheet) return [];
+    const term = clean(sheetSearch).toLowerCase();
+    const all = [{ value: '', label: 'All' }].concat(
+      (filterSheet.options || []).filter((o) => clean(o) !== '').map((o) => ({
+        value: o,
+        label: (filterSheet.render ? filterSheet.render(o) : o) || o,
+      })),
+    );
+    if (!term) return all;
+    return all.filter((o) => String(o.label).toLowerCase().indexOf(term) >= 0 || String(o.value).toLowerCase().indexOf(term) >= 0);
+  }, [filterSheet, sheetSearch]);
 
   return (
     <ScreenContainer title="All Employees" showHeader={true}>
@@ -251,14 +303,29 @@ export const HREmployeesScreen = () => {
             ) : null}
 
             <View style={styles.filterChips}>
-              {filterDefs.map((f) => (
-                <TouchableOpacity key={f.key} style={styles.filterChip} onPress={() => cycleFilter(f.key, f.options)}>
-                  <Text style={[styles.filterChipLabel, TYPOGRAPHY.caption]}>{f.label}</Text>
-                  <Text style={styles.filterChipValue} numberOfLines={1}>
-                    {filters[f.key] ? (f.render ? f.render(filters[f.key]) : filters[f.key]) : 'All'}
-                  </Text>
-                </TouchableOpacity>
-              ))}
+              {filterDefs.map((f) => {
+                const isActive = Boolean(filters[f.key]);
+                return (
+                  <TouchableOpacity
+                    key={f.key}
+                    style={[styles.filterChip, isActive && styles.filterChipActive]}
+                    onPress={() => openFilterSheet(f)}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={[styles.filterChipLabel, TYPOGRAPHY.caption, isActive && styles.filterChipLabelActive]}>
+                      {f.label}
+                    </Text>
+                    <Text style={[styles.filterChipValue, isActive && styles.filterChipValueActive]} numberOfLines={1}>
+                      {isActive ? (f.render ? f.render(filters[f.key]) : filters[f.key]) : 'All'}
+                    </Text>
+                    <Ionicons
+                      name={filterSheet && filterSheet.key === f.key ? 'chevron-up' : 'chevron-down'}
+                      size={11}
+                      color={isActive ? COLORS.primary : COLORS.textTertiary}
+                    />
+                  </TouchableOpacity>
+                );
+              })}
             </View>
           </View>
 
@@ -288,9 +355,15 @@ export const HREmployeesScreen = () => {
                 <Text style={styles.tableCell}>{clean(emp.paycode)}</Text>
                 <Text style={styles.tableCellName} numberOfLines={1}>{clean(emp.empname)}</Text>
                 <Text style={styles.tableCellDept} numberOfLines={1}>{clean(emp.departmentname) || '—'}</Text>
-                <Text style={styles.tableCellStat}>
-                  {Number(emp.presentCount || 0)}/{Number(emp.absentCount || 0)}/{Number(emp.missCount || 0)}/{Number(emp.lateCount || 0)}
-                </Text>
+                <View style={styles.pamlRow}>
+                  <Text style={[styles.pamlStat, { color: COLORS.present }]}>{Number(emp.presentCount || 0)}</Text>
+                  <Text style={styles.pamlSep}>/</Text>
+                  <Text style={[styles.pamlStat, { color: COLORS.absent }]}>{Number(emp.absentCount || 0)}</Text>
+                  <Text style={styles.pamlSep}>/</Text>
+                  <Text style={[styles.pamlStat, { color: COLORS.missPunch }]}>{Number(emp.missCount || 0)}</Text>
+                  <Text style={styles.pamlSep}>/</Text>
+                  <Text style={[styles.pamlStat, { color: COLOR_LATE }]}>{Number(emp.lateCount || 0)}</Text>
+                </View>
                 <TouchableOpacity style={styles.auditButton} onPress={() => openDetail(emp)}>
                   <Text style={styles.auditButtonText}>View</Text>
                 </TouchableOpacity>
@@ -375,6 +448,58 @@ export const HREmployeesScreen = () => {
           </View>
         </View>
       </Modal>
+
+      {/* Filter single-select bottom sheet — real options from /hr/filters */}
+      <Modal
+        visible={!!filterSheet}
+        transparent
+        animationType="slide"
+        onRequestClose={closeFilterSheet}
+      >
+        <View style={styles.sheetBackdrop}>
+          <TouchableOpacity style={styles.sheetDismiss} activeOpacity={1} onPress={closeFilterSheet} />
+          <View style={styles.sheetCard}>
+            <View style={styles.sheetHeader}>
+              <Text style={styles.sheetTitle}>{filterSheet ? filterSheet.label : ''}</Text>
+              <TouchableOpacity onPress={closeFilterSheet} hitSlop={{ top: 12, left: 12, bottom: 12, right: 12 }}>
+                <Text style={styles.modalClose}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            {sheetOptions.length > 8 ? (
+              <TextInput
+                style={styles.sheetSearch}
+                placeholder="Search options..."
+                placeholderTextColor={COLORS.textTertiary}
+                value={sheetSearch}
+                onChangeText={setSheetSearch}
+              />
+            ) : null}
+
+            <ScrollView style={styles.sheetList}>
+              {sheetOptions.map((opt) => {
+                const isSelected = filterSheet && filters[filterSheet.key] === opt.value;
+                return (
+                  <TouchableOpacity
+                    key={`${opt.value}`}
+                    style={[styles.sheetOption, isSelected && styles.sheetOptionSelected]}
+                    onPress={() => selectFilterOption(filterSheet.key, opt.value)}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={[styles.sheetOptionText, isSelected && styles.sheetOptionTextSelected]} numberOfLines={1}>
+                      {opt.label}
+                    </Text>
+                    {isSelected ? <Ionicons name="checkmark" size={16} color={COLORS.primary} /> : null}
+                  </TouchableOpacity>
+                );
+              })}
+              {sheetOptions.length === 0 ? (
+                <Text style={styles.sheetEmpty}>No matching option.</Text>
+              ) : null}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </ScreenContainer>
   );
 };
@@ -450,6 +575,60 @@ const styles = StyleSheet.create({
   },
   filterChipLabel: { color: COLORS.textSecondary, fontWeight: '600' },
   filterChipValue: { color: COLORS.textPrimary, fontSize: 11, fontWeight: '700' },
+  filterChipActive: {
+    backgroundColor: `${COLORS.primary}12`,
+    borderColor: COLORS.primary,
+  },
+  filterChipLabelActive: { color: COLORS.primary },
+  filterChipValueActive: { color: COLORS.primary },
+  // P / A / M / L — colour only, values are rendered exactly as the API returns them.
+  pamlRow: { flex: 1, flexDirection: 'row', alignItems: 'center' },
+  pamlStat: { fontSize: 11, fontWeight: '800' },
+  pamlSep: { fontSize: 10, color: COLORS.textTertiary, marginHorizontal: 1 },
+  // Filter bottom sheet
+  sheetBackdrop: { flex: 1, backgroundColor: COLORS.overlay, justifyContent: 'flex-end' },
+  sheetDismiss: { flex: 1 },
+  sheetCard: {
+    backgroundColor: COLORS.surface,
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+    maxHeight: '75%',
+    overflow: 'hidden',
+  },
+  sheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: SPACING.md,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+  },
+  sheetTitle: { fontSize: 15, fontWeight: '700', color: COLORS.textPrimary },
+  sheetSearch: {
+    margin: SPACING.md,
+    marginBottom: 0,
+    backgroundColor: COLORS.surfaceVariant,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 10,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    color: COLORS.textPrimary,
+    fontSize: 13,
+  },
+  sheetList: { maxHeight: 380, paddingHorizontal: SPACING.sm, paddingBottom: SPACING.md },
+  sheetOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 11,
+    paddingHorizontal: SPACING.md,
+    borderRadius: 10,
+  },
+  sheetOptionSelected: { backgroundColor: `${COLORS.primary}12` },
+  sheetOptionText: { flex: 1, fontSize: 13, color: COLORS.textPrimary },
+  sheetOptionTextSelected: { color: COLORS.primary, fontWeight: '700' },
+  sheetEmpty: { padding: SPACING.md, textAlign: 'center', color: COLORS.textTertiary, fontSize: 12 },
   listContainer: {
     backgroundColor: COLORS.surface,
     borderRadius: 12,

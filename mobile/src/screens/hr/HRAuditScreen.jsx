@@ -105,12 +105,16 @@ export const HRAuditScreen = ({ route }) => {
   const defaultEmployee = useRef(null);
 
   // Load the existing audit endpoint for the selected employee + selected month.
-  const loadAudit = useCallback(async (employee) => {
+  // PHASE G.2: always queries the month that is actually displayed (explicit
+  // month argument, defaulting to monthRef) so the API can never run on a
+  // stale month after Prev/Next navigation.
+  const loadAudit = useCallback(async (employee, forMonth) => {
     setSelected(employee);
     setLoadingAudit(true);
     setError(null);
     try {
-      const data = await api.get(`/hr/audit/${encodeURIComponent(clean(employee.paycode))}`, { month: monthRef.current });
+      const useMonth = clean(forMonth) || monthRef.current;
+      const data = await api.get(`/hr/audit/${encodeURIComponent(clean(employee.paycode))}`, { month: useMonth });
       setAudit(data);
     } catch (err) {
       setAudit(null);
@@ -121,10 +125,12 @@ export const HRAuditScreen = ({ route }) => {
   }, []);
 
   // Month change: keep the same employee, reload that month's real records.
+  // PHASE G.2 root-cause fix: pass the NEW month explicitly so the request
+  // uses it even though setMonth is async (no stale-month query).
   const changeMonth = useCallback((nextMonth) => {
     monthRef.current = nextMonth;
     setMonth(nextMonth);
-    if (selected) loadAudit(selected);
+    if (selected) loadAudit(selected, nextMonth);
   }, [selected, loadAudit]);
 
   // Load every active employee through the existing /api/employees endpoint
@@ -190,6 +196,39 @@ export const HRAuditScreen = ({ route }) => {
     if (!presetPaycode || selected) return;
     loadAudit({ paycode: presetPaycode, empname: '' });
   }, [presetPaycode, selected, loadAudit]);
+
+  // PHASE G.2 — application-level HOLIDAY overlay (display classification only).
+  // Backend returns ACTIVE holidays applicable to THIS employee (real company +
+  // real category) in `audit.holidays`. A full-day holiday wins over the Savior
+  // label for display; a half-day holiday keeps the existing Half Day language.
+  // Savior rows are never modified — remove the holiday and the Savior label
+  // shows again.
+  const HOLIDAY_PURPLE = '#7C3AED';
+  const holidayByDate = useMemo(() => {
+    const map = new Map();
+    for (const h of (Array.isArray(audit?.holidays) ? audit.holidays : [])) {
+      const key = clean(h?.holidaydate).slice(0, 10);
+      if (!key) continue;
+      const list = map.get(key) || [];
+      list.push(h);
+      map.set(key, list);
+    }
+    return map;
+  }, [audit]);
+  const holidayLabelFor = useCallback((iso) => {
+    const list = holidayByDate.get(clean(iso).slice(0, 10)) || [];
+    const active = list.filter((h) => h && h.active !== false);
+    if (!active.length) return null;
+    // Half-day holiday: preserve the project's Half Day status language.
+    if (active.every((h) => h.isHalfDay === true)) return 'Half Day (Holiday)';
+    return 'Holiday';
+  }, [holidayByDate]);
+  const holidayNamesFor = useCallback((iso) => (
+    (holidayByDate.get(clean(iso).slice(0, 10)) || [])
+      .filter((h) => h && h.active !== false)
+      .map((h) => clean(h.holidayname))
+      .filter(Boolean)
+  ), [holidayByDate]);
 
   const stats = audit?.stats || {};
   const attendance = useMemo(() => ascendingByDate(audit?.attendance), [audit]);
@@ -334,10 +373,15 @@ export const HRAuditScreen = ({ route }) => {
                 <Text style={styles.hint}>No attendance records for this month.</Text>
               ) : null}
               {attendance.map((r, i) => {
-                const status = r.statusLabel || r.computedStatus || r.status || '';
-                // Existing app colour language (Present green / Absent red /
-                // Miss Punch amber / Week Off slate) — no new colour rules.
-                const color = getStatusColor(r.statusCode || status);
+                const dateKey = clean(r.date || r.dateoffice).slice(0, 10);
+                // PHASE G.2 overlay: applicable ACTIVE holiday wins for the
+                // DISPLAYED label (Savior row untouched — shown below as-is).
+                const holLabel = holidayLabelFor(dateKey);
+                const status = holLabel || r.statusLabel || r.computedStatus || r.status || '';
+                // Holiday purple; existing app colours otherwise (Present green /
+                // Absent red / Miss Punch amber / Week Off slate).
+                const color = holLabel ? HOLIDAY_PURPLE : getStatusColor(r.statusCode || status);
+                const holNames = holLabel ? holidayNamesFor(dateKey) : [];
                 const inVal = clean(r.inTime || r.in1);
                 const outVal = clean(r.outTime || r.out1);
                 return (
@@ -359,6 +403,45 @@ export const HRAuditScreen = ({ route }) => {
                   </View>
                 );
               })}
+              {/* Holiday dates with NO Savior row still show as Holiday (overlay
+                  adds the day; it never invents attendance data). */}
+              {[...holidayByDate.entries()]
+                .filter(([key]) => !attendance.some((r) => clean(r.date || r.dateoffice).slice(0, 10) === key))
+                .sort(([a], [b]) => (a < b ? -1 : 1))
+                .map(([key, list]) => {
+                  const label = holidayLabelFor(key) || 'Holiday';
+                  const names = (list || []).filter((h) => h && h.active !== false).map((h) => clean(h.holidayname)).filter(Boolean);
+                  return (
+                    <View key={`hol-${key}`} style={styles.attRow}>
+                      <View style={styles.attLeft}>
+                        <Text style={styles.attDate}>{shortDate(key)}</Text>
+                        <Text style={styles.attDay}>{dayName(key)}</Text>
+                      </View>
+                      <View style={styles.attMid}>
+                        <Text style={[styles.attIn, styles.attTimeNone]}>—</Text>
+                        <Text style={[styles.attOut, styles.attTimeNone]}>—</Text>
+                      </View>
+                      <Text style={styles.attHrs}>0h</Text>
+                      <View style={[styles.attStatus, { backgroundColor: `${HOLIDAY_PURPLE}18`, borderColor: HOLIDAY_PURPLE }]}>
+                        <Text style={[styles.attStatusText, { color: HOLIDAY_PURPLE }]} numberOfLines={1}>
+                          {label}
+                        </Text>
+                      </View>
+                    </View>
+                  );
+                })}
+              {holidayByDate.size > 0 ? (
+                <Text style={styles.holidayFoot}>
+                  {[...holidayByDate.entries()]
+                    .filter(([, list]) => (list || []).some((h) => h && h.active !== false))
+                    .sort(([a], [b]) => (a < b ? -1 : 1))
+                    .map(([key, list]) => {
+                      const names = (list || []).filter((h) => h && h.active !== false).map((h) => clean(h.holidayname)).filter(Boolean).join(', ');
+                      return `${shortDate(key)} — ${names || 'Holiday'}`;
+                    })
+                    .join('  •  ')}
+                </Text>
+              ) : null}
             </View>
           </View>
         ) : null}
@@ -436,6 +519,7 @@ const styles = StyleSheet.create({
   statValue: { fontSize: 18, fontWeight: '700' },
   statLabel: { fontSize: 10, color: COLORS.textSecondary, textTransform: 'uppercase' },
   sectionTitle: { color: COLORS.textPrimary, marginBottom: SPACING.xs },
+  holidayFoot: { fontSize: 10.5, color: COLORS.textSecondary, marginTop: SPACING.xs },
   lateList: { gap: 4 },
   lateRow: { flexDirection: 'row', alignItems: 'center', gap: SPACING.sm, padding: 6, borderRadius: 8, borderWidth: 1 },
   lateRowFinal: { backgroundColor: `${COLORS.error}12`, borderColor: `${COLORS.error}33` },

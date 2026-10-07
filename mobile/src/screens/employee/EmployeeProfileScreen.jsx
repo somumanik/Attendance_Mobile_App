@@ -131,6 +131,12 @@ export const EmployeeProfileScreen = () => {
     navigation.navigate(pinConfigured ? 'PinChange' : 'PinSetup');
   };
 
+  // Voluntary password change (Phase I). mustChangePassword ke liye ye screen
+  // EmployeeNavigator par gate hai, yahan sirf user-initiated change ke liye.
+  const handlePasswordPress = () => {
+    navigation.navigate('ChangePassword');
+  };
+
   const startEdit = () => {
     setForm({
       mobile: clean(profile?.mobile),
@@ -370,9 +376,29 @@ export const EmployeeProfileScreen = () => {
           )}
         </View>
 
-        {/* Security — 4-Digit PIN (existing functionality, unchanged) */}
+        {/* Security — Change Password + 4-Digit PIN */}
         <View style={styles.section}>
           <Text style={[styles.sectionTitle, TYPOGRAPHY.h3]}>Security</Text>
+
+          {/* Phase I: voluntary password change. The FORCED case never reaches
+              this screen - EmployeeNavigator gates it behind ChangePasswordScreen
+              until a new password is set. */}
+          <TouchableOpacity
+            style={[styles.securityRow, { backgroundColor: COLORS.surface, borderColor: COLORS.border }]}
+            onPress={handlePasswordPress}
+            activeOpacity={0.9}
+          >
+            <View style={styles.securityLeft}>
+              <Text style={styles.securityIcon}>🔑</Text>
+              <View>
+                <Text style={styles.securityTitle}>Change Password</Text>
+                <Text style={[styles.securitySubtitle, TYPOGRAPHY.caption]}>
+                  Apna login password badlein
+                </Text>
+              </View>
+            </View>
+          </TouchableOpacity>
+
           <TouchableOpacity
             style={[styles.securityRow, { backgroundColor: COLORS.surface, borderColor: COLORS.border }]}
             onPress={handlePinPress}

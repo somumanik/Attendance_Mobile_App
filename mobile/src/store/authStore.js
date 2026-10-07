@@ -37,6 +37,10 @@ let state = {
   isLoading: true,
   isBootstrapped: false,
   error: null,
+  // Phase I: true jab employee ka password abhi set karna baaki hai (HR ne
+  // temporary password diya ya force change lagaya hai). Is flag ke dauran app
+  // Dashboard/Attendance/etc. kholne nahi deti, sirf "Set New Password".
+  mustChangePassword: false,
 };
 
 const subscribers = new Set();
@@ -63,7 +67,7 @@ const messageFrom = (error, fallback) =>
  * Auth state aur storage dono update karta hai.
  * Role verification ke baad hi is function ko call kiya jaata hai.
  */
-export const setAuth = async (token, role, userData) => {
+export const setAuth = async (token, role, userData, options = {}) => {
   await setItem(STORAGE_KEYS.AUTH_TOKEN, token);
   await setItem(STORAGE_KEYS.USER_ROLE, role);
   await setItem(STORAGE_KEYS.USER_DATA, JSON.stringify(userData || null));
@@ -75,8 +79,16 @@ export const setAuth = async (token, role, userData) => {
     userData: userData || null,
     isLoading: false,
     error: null,
+    // HR accounts never carry this flag.
+    mustChangePassword: role === USER_ROLES.EMPLOYEE && options.mustChangePassword === true,
   });
 };
+
+/**
+ * Phase I: forced password setup complete hone par flag clear karta hai.
+ * Iske baad hi employee Dashboard/Attendance tak pahunch sakta hai.
+ */
+export const clearMustChangePassword = () => setState({ mustChangePassword: false });
 
 /**
  * Logout: token, role and user state clear karta hai.
@@ -91,6 +103,7 @@ export const clearAuth = async () => {
     userData: null,
     isLoading: false,
     error: null,
+    mustChangePassword: false,
   });
 };
 
@@ -101,6 +114,10 @@ export const setError = (error) => setState({ error: error || null });
 /**
  * Login API response ke baad /api/me se role verify karta hai.
  * Expected role backend response se match nahi hua to session reject hota hai.
+ *
+ * Phase I: /api/me se bhi mustChangePassword aata hai, isliye HR ke force-change
+ * karne ke baad bhi koi purana session turant "Set New Password" par redirect ho
+ * jata hai - token par bharosa nahi kiya jaata.
  */
 const completeLogin = async (loginRequest, expectedRole) => {
   setState({ isLoading: true, error: null });
@@ -117,7 +134,9 @@ const completeLogin = async (loginRequest, expectedRole) => {
       throw new Error('Authenticated role does not match the selected portal.');
     }
 
-    await setAuth(loginResponse.token, me.role, userFromMe(me));
+    // Live server state wins over whatever the login response claimed.
+    const mustChangePassword = me.mustChangePassword === true || loginResponse.mustChangePassword === true;
+    await setAuth(loginResponse.token, me.role, userFromMe(me), { mustChangePassword });
     return getState();
   } catch (error) {
     await clearAuthData();
@@ -129,6 +148,7 @@ const completeLogin = async (loginRequest, expectedRole) => {
       userData: null,
       isLoading: false,
       error: message,
+      mustChangePassword: false,
     });
     // First-time setup flag ko bachein, taaki login screen routing kar sake.
     const wrapped = new Error(message);
@@ -147,9 +167,15 @@ export const loginHR = (username, password) =>
 /**
  * Employee Login Screen se call hota hai.
  * POST /api/auth/employee/login → token → GET /api/me → EMPLOYEE state.
+ *
+ * `pin` optional hai: diya jaye to PIN se sign-in hota hai, warna password se.
+ * Password login hamesha available rehta hai (Phase I section 5).
  */
-export const loginEmployee = (paycode, password) =>
-  completeLogin(() => loginEmployeeApi(paycode, password), USER_ROLES.EMPLOYEE);
+export const loginEmployee = (paycode, password, pin) =>
+  completeLogin(
+    () => loginEmployeeApi(paycode, password, pin, typeof pin === 'string' && pin.length > 0),
+    USER_ROLES.EMPLOYEE,
+  );
 
 /**
  * App start par stored session restore karta hai.
@@ -179,7 +205,11 @@ export const restoreSession = async () => {
       throw new Error('Session role is not supported.');
     }
 
-    await setAuth(token, me.role, userFromMe(me));
+    // A restored session re-reads the LIVE flag, so an HR forced password change
+    // is honoured even for a token stored before it happened.
+    await setAuth(token, me.role, userFromMe(me), {
+      mustChangePassword: me.mustChangePassword === true,
+    });
   } catch (error) {
     if (error?.response?.status === 401 || error?.status === 401) {
       await clearAuthData();
@@ -190,6 +220,7 @@ export const restoreSession = async () => {
         userData: null,
         isLoading: false,
         error: null,
+        mustChangePassword: false,
       });
       return;
     }
@@ -201,6 +232,7 @@ export const restoreSession = async () => {
       userData: null,
       isLoading: false,
       error: messageFrom(error, 'Unable to verify the saved session.'),
+      mustChangePassword: false,
     });
   } finally {
     // Login ke dauran bhi AuthNavigator mounted rahe; sirf app startup loading
@@ -226,6 +258,7 @@ export const authStore = {
   subscribe,
   setAuth,
   clearAuth,
+  clearMustChangePassword,
   setLoading,
   setError,
   initializeAuth,
@@ -241,6 +274,7 @@ export const authStore = {
   get userData() { return state.userData; },
   get isLoading() { return state.isLoading; },
   get error() { return state.error; },
+  get mustChangePassword() { return state.mustChangePassword; },
 };
 
 export default authStore;

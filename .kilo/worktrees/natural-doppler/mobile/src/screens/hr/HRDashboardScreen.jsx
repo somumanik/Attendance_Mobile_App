@@ -30,6 +30,8 @@ import { StatCard } from '../../components/StatCard';
 import { PlaceholderCard } from '../../components/PlaceholderCard';
 import { LogoutButton } from '../../components/LogoutButton';
 import { Button } from '../../components/Button';
+import { MonthNavigator, currentMonthKey } from '../../components/MonthNavigator';
+import { getStatusColor } from '../../utils/format';
 import { useNavigation } from '@react-navigation/native';
 import { api } from '../../services/api';
 
@@ -40,6 +42,33 @@ export const HRDashboardScreen = () => {
   const navigation = useNavigation();
 
   const clean = (v) => String(v == null ? '' : v).trim();
+
+// DISPLAY ORDER ONLY. /hr/audit returns the selected month newest-first (the
+// order the desktop audit view expects, so the backend and website stay
+// untouched). The Executive Overview audit modal shows the same month
+// oldest -> newest. Rows themselves are untouched: status classification,
+// In/Out times, hours, grace and current/future-day handling all stay exactly
+// as the backend returned them, and same-day rows keep the SQL order.
+const ascendingByDate = (list) => (Array.isArray(list) ? list : [])
+  .map((row, index) => ({
+    row,
+    index,
+    key: clean(row && (row.date || row.dateoffice)).slice(0, 10),
+  }))
+  .sort((a, b) => {
+    if (a.key === b.key) return a.index - b.index;
+    if (!a.key) return 1;
+    if (!b.key) return -1;
+    return a.key < b.key ? -1 : 1;
+  })
+  .map((entry) => entry.row);
+
+  // Live Biometric IN/OUT colouring is presentation only: a missing punch keeps
+  // the neutral placeholder instead of being painted as a real time.
+  const hasPunchTime = (v) => {
+    const s = clean(v);
+    return s.length > 0 && s !== '—' && s !== '--' && s !== '-';
+  };
 
   // Audit rows show the day name alongside the date.
   const dayName = (iso) => {
@@ -112,18 +141,17 @@ export const HRDashboardScreen = () => {
   const [biDetail, setBiDetail] = useState(null);
   const [biDetailLoading, setBiDetailLoading] = useState(false);
   const [biDetailError, setBiDetailError] = useState(null);
+  // Month-wise view of the same existing audit endpoint. Starts at the current
+  // month and can only move backwards, so a future month is never selectable.
+  const [biMonth, setBiMonth] = useState(currentMonthKey());
 
-  const openBiometricDetail = useCallback(async (employee) => {
-    const paycode = clean(employee?.paycode);
-    if (!paycode) return;
+  // Reuse the existing employee attendance audit endpoint used by the desktop
+  // website: GET /api/hr/audit/:paycode?month=YYYY-MM
+  const loadBiAudit = useCallback(async (paycode, month) => {
     setBiDetailLoading(true);
     setBiDetailError(null);
     setBiDetail({ paycode });
     try {
-      // Reuse the existing employee attendance audit endpoint used by the desktop
-      // website: GET /api/hr/audit/:paycode?month=YYYY-MM
-      const now = new Date();
-      const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
       const data = await api.get(`/hr/audit/${encodeURIComponent(paycode)}`, { month });
       setBiDetail({ ...data, requestedPaycode: paycode });
     } catch (err) {
@@ -133,6 +161,19 @@ export const HRDashboardScreen = () => {
       setBiDetailLoading(false);
     }
   }, []);
+
+  const openBiometricDetail = useCallback((employee) => {
+    const paycode = clean(employee?.paycode);
+    if (!paycode) return;
+    loadBiAudit(paycode, biMonth);
+  }, [loadBiAudit, biMonth]);
+
+  // Month change keeps the same employee and reloads that month's real records.
+  const changeBiMonth = useCallback((nextMonth) => {
+    setBiMonth(nextMonth);
+    const paycode = clean(biDetail?.requestedPaycode || biDetail?.paycode);
+    if (paycode) loadBiAudit(paycode, nextMonth);
+  }, [biDetail, loadBiAudit]);
 
   const [charts, setCharts] = useState(null);
   const [lastSync, setLastSync] = useState(null);
@@ -239,23 +280,37 @@ export const HRDashboardScreen = () => {
       // Aaj ka live attendance (desktop 'Live biometric' view ka same source).
       // /attendance sirf paycode deta hai, isliye name/dept roster (/employees) se join hota hai.
       // Poora real dataset rakha jaata hai; paging screen par karti hai.
+      // Live Biometric rows are EMPLOYEE rows. tbltimeregister.paycode is resolved
+      // against dbo.tblemployee.paycode — the same identity join the All Employees
+      // roster uses. A punch record is kept only when it maps to a real ACTIVE
+      // employee master record with a real name, so unresolved / inactive punches
+      // can never surface as a "row" whose paycode stands in for a missing name.
+      const empByPaycode = new Map(employees.map((e) => [clean(e.paycode), e]));
       const rows = Array.isArray(attendance) ? attendance : [];
       setTodayAttendance(
-        rows.map((r) => {
-          const paycode = clean(r.paycode);
-          const emp = employees.find((e) => clean(e.paycode) === paycode);
-          return {
-            paycode,
-            // date is required to select today's real biometric record.
-            date: r.date || r.dateoffice || '',
-            name: clean(emp?.empname) || paycode,
-            dept: clean(emp?.departmentcode),
-            inTime: r.inTime || '—',
-            outTime: r.outTime || '—',
-            status: r.statusLabel || r.computedStatus || r.status || '',
-            isLate: Boolean(r.isLate),
-          };
-        })
+        rows
+          .filter((r) => {
+            const emp = empByPaycode.get(clean(r.paycode));
+            return Boolean(emp)
+              && clean(emp.active).toUpperCase() === 'Y'
+              && clean(emp.empname) !== '';
+          })
+          .map((r) => {
+            const paycode = clean(r.paycode);
+            const emp = empByPaycode.get(paycode);
+            return {
+              paycode,
+              // date is required to select today's real biometric record.
+              date: r.date || r.dateoffice || '',
+              // Name always comes from the real Savior employee master.
+              name: clean(emp.empname),
+              dept: clean(emp.departmentcode),
+              inTime: r.inTime || '—',
+              outTime: r.outTime || '—',
+              status: r.statusLabel || r.computedStatus || r.status || '',
+              isLate: Boolean(r.isLate),
+            };
+          })
       );
 
       setCharts(chartData || null);
@@ -547,8 +602,8 @@ export const HRDashboardScreen = () => {
                 </View>
                 <View style={styles.bioBottomLine}>
                   <Text style={[styles.bioMetaCell, styles.bioColDept]} numberOfLines={1}>{emp.dept || '—'}</Text>
-                  <Text style={[styles.bioMetaCell, styles.bioColTime]}>In: {emp.inTime}</Text>
-                  <Text style={[styles.bioMetaCell, styles.bioColTime]}>Out: {emp.outTime}</Text>
+                  <Text style={[styles.bioMetaCell, styles.bioColTime, hasPunchTime(emp.inTime) ? styles.bioInText : styles.bioTimePlaceholder]}>In: {emp.inTime}</Text>
+                  <Text style={[styles.bioMetaCell, styles.bioColTime, hasPunchTime(emp.outTime) ? styles.bioOutText : styles.bioTimePlaceholder]}>Out: {emp.outTime}</Text>
                 </View>
               </View>
             ))}
@@ -620,7 +675,8 @@ export const HRDashboardScreen = () => {
                   </View>
                   <View style={styles.lateLine2}>
                     <Text style={styles.lateMeta}>{clean(emp.departmentname || emp.departmentcode) || '—'}</Text>
-                    <Text style={styles.lateMeta}>In: {emp.inTime || '—'}</Text>
+                    <Text style={[styles.lateMeta, hasPunchTime(emp.inTime) ? styles.lateInTime : styles.lateTimePlaceholder]}>In: {emp.inTime || '—'}</Text>
+                    <Text style={[styles.lateMeta, hasPunchTime(emp.outTime) ? styles.lateOutTime : styles.lateTimePlaceholder]}>Out: {emp.outTime || '—'}</Text>
                     <Text style={styles.lateBadge}>
                       {Number(emp.latearrival || 0) > 0 ? `Late ${emp.latearrival} min` : (emp.statusLabel || 'Late')}
                     </Text>
@@ -642,6 +698,10 @@ export const HRDashboardScreen = () => {
                 <Text style={styles.modalClose}>✕</Text>
               </TouchableOpacity>
             </View>
+            {/* Month-wise historical attendance for the same employee. */}
+            <View style={styles.modalMonthBar}>
+              <MonthNavigator month={biMonth} onChange={changeBiMonth} />
+            </View>
             <ScrollView style={styles.modalBody}>
               {biDetailLoading ? (
                 <View style={styles.modalState}>
@@ -657,6 +717,11 @@ export const HRDashboardScreen = () => {
 
               {!biDetailLoading && biDetail?.employee ? (
                 <View>
+                  {/* Oldest -> newest within the selected month (display order only). */}
+                  {(() => {
+                    const biAuditAsc = ascendingByDate(biDetail.attendance);
+                    return (
+                      <>
                   <Text style={styles.auditName}>{clean(biDetail.employee.empname)}</Text>
                   <Text style={styles.auditMeta}>
                     Paycode: {clean(biDetail.employee.paycode)} • Card: {clean(biDetail.employee.presentcardno)}
@@ -697,20 +762,26 @@ export const HRDashboardScreen = () => {
                   )) : null}
 
                   <Text style={styles.auditSectionTitle}>Attendance Details ({Array.isArray(biDetail.attendance) ? biDetail.attendance.length : 0} records)</Text>
-                  {Array.isArray(biDetail.attendance) ? biDetail.attendance.map((a, i) => (
-                    <View key={`att-${i}`} style={styles.auditAttRow}>
-                      <Text style={styles.auditAttDate}>{String(a.date || '').slice(0, 10)} {dayName(a.date)}</Text>
-                      <Text style={styles.auditAttCell}>In: {a.inTime || '—'}</Text>
-                      <Text style={styles.auditAttCell}>Out: {a.outTime || '—'}</Text>
-                      <Text style={styles.auditAttCell}>Hrs: {Number(a.hoursworked || 0)}</Text>
-                      <Text style={[styles.auditAttStatus, { color: a.statusLabel === 'Absent' ? COLORS.error : COLORS.success }]}>
-                        {a.statusLabel || a.computedStatus || '—'}
-                      </Text>
-                    </View>
-                  )) : null}
+                  {Array.isArray(biAuditAsc) ? biAuditAsc.map((a, i) => {
+                    const label = a.statusLabel || a.computedStatus || '';
+                    return (
+                      <View key={`att-${i}`} style={styles.auditAttRow}>
+                        <Text style={styles.auditAttDate}>{String(a.date || '').slice(0, 10)} {dayName(a.date)}</Text>
+                        <Text style={[styles.auditAttCell, hasPunchTime(a.inTime) ? styles.auditAttIn : styles.auditAttTimeNone]}>In: {a.inTime || '—'}</Text>
+                        <Text style={[styles.auditAttCell, hasPunchTime(a.outTime) ? styles.auditAttOut : styles.auditAttTimeNone]}>Out: {a.outTime || '—'}</Text>
+                        <Text style={styles.auditAttCell}>Hrs: {Number(a.hoursworked || 0)}</Text>
+                        <Text style={[styles.auditAttStatus, { color: getStatusColor(a.statusCode || label) }]}>
+                          {label || '—'}
+                        </Text>
+                      </View>
+                    );
+                  }) : null}
                   {Array.isArray(biDetail.attendance) && biDetail.attendance.length === 0 ? (
                     <Text style={styles.auditRow}>No attendance records for this period.</Text>
                   ) : null}
+                      </>
+                    );
+                  })()}
                 </View>
               ) : null}
             </ScrollView>
@@ -779,6 +850,11 @@ const styles = StyleSheet.create({
   auditAttRow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 3, borderBottomWidth: 1, borderBottomColor: COLORS.divider },
   auditAttDate: { width: 74, fontSize: 10, color: COLORS.textSecondary },
   auditAttCell: { fontSize: 10, color: COLORS.textPrimary },
+  // IN dark green, OUT dark red; a missing punch stays neutral.
+  auditAttIn: { color: '#166534', fontWeight: '700' },
+  auditAttOut: { color: '#991B1B', fontWeight: '700' },
+  auditAttTimeNone: { color: COLORS.textTertiary },
+  modalMonthBar: { paddingHorizontal: SPACING.md, paddingTop: SPACING.sm },
   auditAttStatus: { fontSize: 10, fontWeight: '700', marginLeft: 'auto' },
 
   // Late Today modal
@@ -818,6 +894,10 @@ const styles = StyleSheet.create({
   lateName: { flex: 1, fontSize: 13, fontWeight: '600', color: COLORS.textPrimary },
   lateLine2: { flexDirection: 'row', alignItems: 'center', gap: SPACING.sm, paddingLeft: 72 },
   lateMeta: { fontSize: 11, color: COLORS.textSecondary },
+  // Late Today drill-down: IN dark green, OUT dark red (a missing punch stays neutral).
+  lateInTime: { color: '#166534', fontWeight: '700' },
+  lateOutTime: { color: '#991B1B', fontWeight: '700' },
+  lateTimePlaceholder: { color: COLORS.textTertiary },
   lateBadge: { marginLeft: 'auto', fontSize: 10, fontWeight: '700', color: COLORS.error },
 
   // Live biometric table (two-line rows for narrow screens)
@@ -848,6 +928,10 @@ const styles = StyleSheet.create({
   bioBottomLine: { flexDirection: 'row', alignItems: 'center', gap: SPACING.sm, paddingLeft: 62 },
   bioCell: { fontSize: 12, color: COLORS.textPrimary },
   bioMetaCell: { fontSize: 11, color: COLORS.textSecondary },
+  // IN = dark green, OUT = dark red; a missing punch stays neutral.
+  bioInText: { color: '#166534', fontWeight: '700' },
+  bioOutText: { color: '#991B1B', fontWeight: '700' },
+  bioTimePlaceholder: { color: COLORS.textTertiary, fontWeight: '400' },
   bioStatusChip: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10, maxWidth: 86 },
   bioStatusText: { fontSize: 10, fontWeight: '700' },
   bioViewButton: {

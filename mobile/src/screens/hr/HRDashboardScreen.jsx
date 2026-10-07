@@ -142,7 +142,9 @@ const ascendingByDate = (list) => (Array.isArray(list) ? list : [])
   const [biDetailLoading, setBiDetailLoading] = useState(false);
   const [biDetailError, setBiDetailError] = useState(null);
   // Month-wise view of the same existing audit endpoint. Starts at the current
-  // month and can only move backwards, so a future month is never selectable.
+  // month; PHASE G.2 Prev/Next both work (Next capped at the current month so
+  // a future month is never selectable) and the query always uses the
+  // displayed month.
   const [biMonth, setBiMonth] = useState(currentMonthKey());
 
   // Reuse the existing employee attendance audit endpoint used by the desktop
@@ -169,11 +171,37 @@ const ascendingByDate = (list) => (Array.isArray(list) ? list : [])
   }, [loadBiAudit, biMonth]);
 
   // Month change keeps the same employee and reloads that month's real records.
+  // PHASE G.2 root-cause fix: pass the NEW month explicitly so the request
+  // uses it even though setBiMonth is async (no stale-month query).
   const changeBiMonth = useCallback((nextMonth) => {
     setBiMonth(nextMonth);
     const paycode = clean(biDetail?.requestedPaycode || biDetail?.paycode);
     if (paycode) loadBiAudit(paycode, nextMonth);
   }, [biDetail, loadBiAudit]);
+
+  // PHASE G.2 — same application-level HOLIDAY overlay as Single Employee
+  // Audit (display only): applicable ACTIVE holidays from `biDetail.holidays`
+  // win over the Savior label; holiday purple (#7C3AED); half-day keeps the
+  // Half Day language. Savior rows untouched.
+  const HOLIDAY_PURPLE = '#7C3AED';
+  const biHolidayByDate = useMemo(() => {
+    const map = new Map();
+    for (const h of (Array.isArray(biDetail?.holidays) ? biDetail.holidays : [])) {
+      const key = clean(h?.holidaydate).slice(0, 10);
+      if (!key) continue;
+      const list = map.get(key) || [];
+      list.push(h);
+      map.set(key, list);
+    }
+    return map;
+  }, [biDetail]);
+  const biHolidayLabelFor = (iso) => {
+    const list = biHolidayByDate.get(clean(iso).slice(0, 10)) || [];
+    const active = list.filter((h) => h && h.active !== false);
+    if (!active.length) return null;
+    if (active.every((h) => h.isHalfDay === true)) return 'Half Day (Holiday)';
+    return 'Holiday';
+  };
 
   const [charts, setCharts] = useState(null);
   const [lastSync, setLastSync] = useState(null);
@@ -763,19 +791,37 @@ const ascendingByDate = (list) => (Array.isArray(list) ? list : [])
 
                   <Text style={styles.auditSectionTitle}>Attendance Details ({Array.isArray(biDetail.attendance) ? biDetail.attendance.length : 0} records)</Text>
                   {Array.isArray(biAuditAsc) ? biAuditAsc.map((a, i) => {
-                    const label = a.statusLabel || a.computedStatus || '';
+                    // PHASE G.2 overlay: applicable ACTIVE holiday wins for display.
+                    const holLabel = biHolidayLabelFor(a.date);
+                    const label = holLabel || a.statusLabel || a.computedStatus || '';
+                    const holColor = holLabel ? HOLIDAY_PURPLE : null;
                     return (
                       <View key={`att-${i}`} style={styles.auditAttRow}>
                         <Text style={styles.auditAttDate}>{String(a.date || '').slice(0, 10)} {dayName(a.date)}</Text>
                         <Text style={[styles.auditAttCell, hasPunchTime(a.inTime) ? styles.auditAttIn : styles.auditAttTimeNone]}>In: {a.inTime || '—'}</Text>
                         <Text style={[styles.auditAttCell, hasPunchTime(a.outTime) ? styles.auditAttOut : styles.auditAttTimeNone]}>Out: {a.outTime || '—'}</Text>
                         <Text style={styles.auditAttCell}>Hrs: {Number(a.hoursworked || 0)}</Text>
-                        <Text style={[styles.auditAttStatus, { color: getStatusColor(a.statusCode || label) }]}>
+                        <Text style={[styles.auditAttStatus, { color: holColor || getStatusColor(a.statusCode || label) }]}>
                           {label || '—'}
                         </Text>
                       </View>
                     );
                   }) : null}
+                  {/* PHASE G.2: holiday dates with no Savior row still show Holiday. */}
+                  {[...biHolidayByDate.entries()]
+                    .filter(([key]) => !(Array.isArray(biAuditAsc) ? biAuditAsc : []).some((a) => clean(a.date || '').slice(0, 10) === key))
+                    .sort(([a], [b]) => (a < b ? -1 : 1))
+                    .map(([key]) => (
+                      <View key={`hol-${key}`} style={styles.auditAttRow}>
+                        <Text style={styles.auditAttDate}>{key} {dayName(key)}</Text>
+                        <Text style={[styles.auditAttCell, styles.auditAttTimeNone]}>In: —</Text>
+                        <Text style={[styles.auditAttCell, styles.auditAttTimeNone]}>Out: —</Text>
+                        <Text style={styles.auditAttCell}>Hrs: 0</Text>
+                        <Text style={[styles.auditAttStatus, { color: HOLIDAY_PURPLE }]}>
+                          {biHolidayLabelFor(key) || 'Holiday'}
+                        </Text>
+                      </View>
+                    ))}
                   {Array.isArray(biDetail.attendance) && biDetail.attendance.length === 0 ? (
                     <Text style={styles.auditRow}>No attendance records for this period.</Text>
                   ) : null}
