@@ -47,6 +47,14 @@ import {
 // ready for a future Navision integration - no Navision code exists here).
 // Attendance, holiday and HR login paths do not import it.
 import { ensureLeaveTables, getLeaveProvider } from './leave-service.js';
+// Phase K: salary configuration/import + Full & Final estimation engine.
+// Same discipline as leave-service: application-owned HR_Salary* tables only.
+import {
+  ensureSalaryTables, getSalaryConfig, setSalaryConfig,
+  importSalaryMaster, importSalaryElements,
+  listSalaryMaster, listSalaryElements, listSalaryDues,
+  createSalaryDue, decideSalaryDue, computeFullFinal,
+} from './salary-service.js';
 
 const app = express();
 const port = Number(process.env.API_PORT || 4000);
@@ -2980,63 +2988,150 @@ app.get('/api/employee/celebrations', authenticate, requireRole('EMPLOYEE'), req
 });
 
 // ---------------------------------------------------------------------------
-// Employee Full & Final / Gratuity ESTIMATION (self-service)
+// Employee Full & Final / Gratuity ESTIMATION (self-service) - Phase K
 // Employee-scoped: identity is ALWAYS req.user.paycode from the verified JWT.
 //
-// SALARY: this application has NO approved salary source. dbo.tblemployee
-// carries no salary/basic/wage/CTC column and no salary API exists, so the
-// endpoint deliberately reports salary as unavailable instead of inventing a
-// figure. No settlement amount is produced here.
+// SALARY: Phase K adds an APPROVED, application-owned salary source
+// (dbo.HR_SalaryMaster / dbo.HR_SalaryElement, imported and validated by HR).
+// Employees without imported salary still get the truthful "not available"
+// state - no figure is ever invented.
 //
-// RULES: the company's gratuity / bonus / leave-encashment / notice formulas are
-// NOT finalised, so no amount is calculated server-side. Only real inputs
-// (identity + joining date) are returned; the UI shows a pending state until the
-// approved rules are supplied.
+// RULES: every settlement rule (gratuity / bonus / leave encashment / notice /
+// PF / ESI) is configurable in dbo.HR_SalaryConfig and is returned as readable
+// basis text next to each amount. The response is ALWAYS an estimate - never a
+// final, legally approved settlement.
 //
-// This endpoint never writes anything - the proposed leaving date stays in the
-// browser and is never stored in dbo.tblemployee.
+// This endpoint never writes anything - the proposed leaving date and notice
+// inputs stay in the browser and are never stored on the employee record.
 // ---------------------------------------------------------------------------
 app.get('/api/employee/fullfinal', authenticate, requireRole('EMPLOYEE'), requirePasswordChanged, requireDbConfig, async (req, res) => {
   try {
     const pool = await getPool();
-    const result = await pool.request().input('paycode', sql.VarChar(50), req.user.paycode).query(`
-      SELECT LTRIM(RTRIM(e.paycode)) AS paycode,
-             LTRIM(RTRIM(e.empname)) AS empname,
-             LTRIM(RTRIM(e.designation)) AS designation,
-             LTRIM(RTRIM(e.departmentcode)) AS departmentcode,
-             LTRIM(RTRIM(d.departmentname)) AS departmentname,
-             LTRIM(RTRIM(e.companycode)) AS companycode,
-             e.dateofjoin, e.dateofbirth,
-             LTRIM(RTRIM(e.active)) AS active,
-             LTRIM(RTRIM(e.leavingdate)) AS leavingdate
-      FROM dbo.tblemployee e
-      LEFT JOIN dbo.tbldepartment d ON LTRIM(RTRIM(d.departmentcode)) = LTRIM(RTRIM(e.departmentcode))
-      WHERE e.paycode = @paycode`);
-    const e = (result.recordset || [])[0];
-    if (!e) return res.status(404).json({ success: false, message: 'Employee not found.' });
-
-    const dateOnly = (v) => (v instanceof Date ? v.toISOString().slice(0, 10) : (v ? String(v).slice(0, 10) : ''));
+    // Paycode is ALWAYS the session identity; req.query.paycode is never read.
+    const outcome = await computeFullFinal(pool, {
+      paycode: req.user.paycode,
+      leavingdate: req.query?.leavingdate,
+      noticeServedDays: req.query?.noticeServedDays,
+      noticeWaived: ['true', 'Y', '1'].includes(String(req.query?.noticeWaived || '')),
+    });
+    if (!outcome.ok) {
+      return res.status(outcome.status).json({ success: false, message: outcome.message, code: outcome.code });
+    }
     res.json({
       success: true,
-      employee: {
-        paycode: e.paycode,
-        empname: e.empname,
-        designation: e.designation,
-        departmentcode: e.departmentcode,
-        departmentname: e.departmentname || e.departmentcode,
-        companycode: e.companycode,
-        dateofjoin: dateOnly(e.dateofjoin),
-        dateofbirth: dateOnly(e.dateofbirth),
-        active: e.active,
-        leavingdate: dateOnly(e.leavingdate),
-      },
-      // No approved salary source exists in this application - stated explicitly
-      // so the UI can show a truthful "not available" state instead of a number.
-      salary: { available: false, basic: null, reason: 'Salary information is not currently available for calculation.' },
-      // Company settlement formulas are not configured yet, so nothing is computed.
-      rulesConfigured: false,
-      rulesPendingMessage: 'Calculation rules pending company configuration.',
+      employee: outcome.employee,
+      salary: outcome.salary,
+      rules: outcome.rules,
+      rulesConfigured: true,
+      estimate: outcome.estimate,
+      disclaimer: outcome.disclaimer,
     });
+  } catch (error) { sendDbError(res, error); }
+});
+
+// ---------------------------------------------------------------------------
+// HR salary configuration / import / dues + admin Full & Final preview (Phase K)
+// All routes require the HR role. Imports report Imported / Updated / Skipped /
+// Failed with per-row error details - invalid rows are never silently ignored.
+// ---------------------------------------------------------------------------
+app.get('/api/hr/salary/master', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const rows = await listSalaryMaster(pool, { search: req.query?.search, limit: req.query?.limit });
+    res.json({ success: true, rows });
+  } catch (error) { sendDbError(res, error); }
+});
+
+app.post('/api/hr/salary/master/import', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+    if (!rows.length) return res.status(400).json({ success: false, message: 'No rows to import.', code: 'NO_ROWS' });
+    if (rows.length > 5000) return res.status(400).json({ success: false, message: 'Please import at most 5000 rows at a time.', code: 'TOO_MANY_ROWS' });
+    const summary = await importSalaryMaster(pool, { rows, actor: req.user?.sub });
+    res.json({ success: true, summary });
+  } catch (error) { sendDbError(res, error); }
+});
+
+app.get('/api/hr/salary/elements', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const rows = await listSalaryElements(pool, { paycode: req.query?.paycode, search: req.query?.search, limit: req.query?.limit });
+    res.json({ success: true, rows });
+  } catch (error) { sendDbError(res, error); }
+});
+
+app.post('/api/hr/salary/elements/import', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+    if (!rows.length) return res.status(400).json({ success: false, message: 'No rows to import.', code: 'NO_ROWS' });
+    if (rows.length > 5000) return res.status(400).json({ success: false, message: 'Please import at most 5000 rows at a time.', code: 'TOO_MANY_ROWS' });
+    const summary = await importSalaryElements(pool, { rows, actor: req.user?.sub });
+    res.json({ success: true, summary });
+  } catch (error) { sendDbError(res, error); }
+});
+
+app.get('/api/hr/salary/config', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const cfg = await getSalaryConfig(pool);
+    res.json({ success: true, config: cfg.raw });
+  } catch (error) { sendDbError(res, error); }
+});
+
+app.put('/api/hr/salary/config', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const outcome = await setSalaryConfig(pool, req.body || {}, req.user?.sub);
+    if (!outcome.ok) return res.status(outcome.status).json({ success: false, message: outcome.message, code: outcome.code });
+    const cfg = await getSalaryConfig(pool);
+    res.json({ success: true, applied: outcome.applied, config: cfg.raw });
+  } catch (error) { sendDbError(res, error); }
+});
+
+app.get('/api/hr/salary/dues', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const rows = await listSalaryDues(pool, {
+      paycode: req.query?.paycode, status: req.query?.status,
+      search: req.query?.search, limit: req.query?.limit,
+    });
+    res.json({ success: true, rows });
+  } catch (error) { sendDbError(res, error); }
+});
+
+app.post('/api/hr/salary/dues', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const outcome = await createSalaryDue(pool, { ...req.body, actor: req.user?.sub });
+    if (!outcome.ok) return res.status(outcome.status).json({ success: false, message: outcome.message, code: outcome.code });
+    res.status(201).json({ success: true, due: outcome.due });
+  } catch (error) { sendDbError(res, error); }
+});
+
+app.post('/api/hr/salary/dues/:id/decision', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const outcome = await decideSalaryDue(pool, { id: req.params?.id, decision: req.body?.decision, note: req.body?.note, actor: req.user?.sub });
+    if (!outcome.ok) return res.status(outcome.status).json({ success: false, message: outcome.message, code: outcome.code });
+    res.json({ success: true, due: outcome.due });
+  } catch (error) { sendDbError(res, error); }
+});
+
+// HR admin Full & Final preview for ANY employee - same engine as the employee
+// self-service route, guarded by the HR role so no other role can reach it.
+app.get('/api/hr/salary/fullfinal/:paycode', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const outcome = await computeFullFinal(pool, {
+      paycode: req.params?.paycode,
+      leavingdate: req.query?.leavingdate,
+      noticeServedDays: req.query?.noticeServedDays,
+      noticeWaived: ['true', 'Y', '1'].includes(String(req.query?.noticeWaived || '')),
+    });
+    if (!outcome.ok) return res.status(outcome.status).json({ success: false, message: outcome.message, code: outcome.code });
+    res.json({ success: true, employee: outcome.employee, salary: outcome.salary, rules: outcome.rules, rulesConfigured: true, estimate: outcome.estimate, disclaimer: outcome.disclaimer });
   } catch (error) { sendDbError(res, error); }
 });
 

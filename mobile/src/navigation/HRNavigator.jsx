@@ -37,6 +37,7 @@ import { HRDailyMasterScreen } from '../screens/hr/HRDailyMasterScreen';
 import { HRCelebrationsScreen } from '../screens/hr/HRCelebrationsScreen';
 import { HRMarriageScreen } from '../screens/hr/HRMarriageScreen';
 import { HRLeaveManagementScreen } from '../screens/hr/HRLeaveManagementScreen';
+import { HRSalaryManagementScreen } from '../screens/hr/HRSalaryManagementScreen';
 import { HRHolidayManagementScreen } from '../screens/hr/HRHolidayManagementScreen';
 import { HREmployeeCredentialsScreen } from '../screens/hr/HREmployeeCredentialsScreen';
 import { COLORS } from '../utils/colors';
@@ -55,6 +56,7 @@ const TAB_ICON_COLORS = {
   Celebrations: '#CA8A04',
   Marriage: '#DC2626',
   LeaveMgmt: '#059669',
+  Salary: '#B45309',
   Holidays: '#4F46E5',
 };
 
@@ -150,6 +152,15 @@ const HRTabs = () => (
         options={{
           tabBarLabel: 'Leave Mgmt',
           tabBarIcon: ({ focused, size }) => tabIcon('LeaveMgmt', focused, 'calendar', 'calendar-outline', size),
+        }}
+      />
+      {/* Salary / Settlement management (Phase K): app-owned HR_Salary* data. */}
+      <Tab.Screen
+        name="Salary"
+        component={HRSalaryManagementScreen}
+        options={{
+          tabBarLabel: 'Salary',
+          tabBarIcon: ({ focused, size }) => tabIcon('Salary', focused, 'cash', 'cash-outline', size),
         }}
       />
       {/* Holiday Management (Phase G): the only NEW HR tab in this phase. */}

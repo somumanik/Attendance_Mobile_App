@@ -65,6 +65,12 @@ export const API_ENDPOINTS = {
   HR_LEAVE_CONFIG: '/hr/leave/config',
   HR_LEAVE_BALANCES: '/hr/leave/balances',
   HR_LEAVE_REQUESTS: '/hr/leave/requests',
+  // Salary / Full & Final (Phase K): self estimate + HR configuration/import
+  HR_SALARY_MASTER: '/hr/salary/master',
+  HR_SALARY_ELEMENTS: '/hr/salary/elements',
+  HR_SALARY_CONFIG: '/hr/salary/config',
+  HR_SALARY_DUES: '/hr/salary/dues',
+  HR_SALARY_FULLFINAL: '/hr/salary/fullfinal',
 
   // Employee Forgot / Reset Password (self-service, token based)
   EMPLOYEE_FORGOT_PASSWORD: '/auth/employee/forgot-password',

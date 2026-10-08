@@ -11,4 +11,6 @@ export { HRDailyMasterScreen } from './HRDailyMasterScreen';
 export { HRCelebrationsScreen } from './HRCelebrationsScreen';
 export { HRMarriageScreen } from './HRMarriageScreen';
 export { HRLeaveManagementScreen } from './HRLeaveManagementScreen';
+export { HRSalaryManagementScreen } from './HRSalaryManagementScreen';
 export { HREmployeeCredentialsScreen } from './HREmployeeCredentialsScreen';
+export { HRHolidayManagementScreen } from './HRHolidayManagementScreen';

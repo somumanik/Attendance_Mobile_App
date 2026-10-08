@@ -133,5 +133,73 @@ CREATE TABLE dbo.HR_LeaveConfig (
   CONSTRAINT UQ_LeaveCfg_Key UNIQUE (configkey)
 );
 
+-- ============================================================================
+-- Salary Import + Full & Final Estimation (Phase K) - APPLICATION tables.
+-- dbo.tblemployee / dbo.tblcategory are only READ (identity, DOJ, category).
+-- The running server auto-ensures these on first use (server/salary-service.js
+-- ensureSalaryTables); this block is the documented mirror of that DDL.
+-- ============================================================================
+
+-- Dataset A: salary master, one row per employee + EffectiveFrom.
+CREATE TABLE dbo.HR_SalaryMaster (
+  id INT IDENTITY(1,1) PRIMARY KEY,
+  paycode NVARCHAR(50) NOT NULL,
+  effectivefrom DATE NOT NULL,
+  basicsalary NUMERIC(12,2) NOT NULL CONSTRAINT DF_SalMaster_Basic DEFAULT(0),
+  pfapplicable BIT NOT NULL CONSTRAINT DF_SalMaster_Pf DEFAULT(0),
+  esiapplicable BIT NOT NULL CONSTRAINT DF_SalMaster_Esi DEFAULT(0),
+  pfwage NUMERIC(12,2) NOT NULL CONSTRAINT DF_SalMaster_PfWage DEFAULT(0),
+  esiwage NUMERIC(12,2) NOT NULL CONSTRAINT DF_SalMaster_EsiWage DEFAULT(0),
+  createddate DATETIME2 NOT NULL CONSTRAINT DF_SalMaster_Created DEFAULT SYSUTCDATETIME(),
+  updateddate DATETIME2 NOT NULL CONSTRAINT DF_SalMaster_Updated DEFAULT SYSUTCDATETIME(),
+  updatedby NVARCHAR(50) NULL,
+  CONSTRAINT UQ_SalMaster UNIQUE (paycode, effectivefrom)
+);
+
+-- Dataset B: pay elements (EARNING / DEDUCTION / EMPLOYER_CONTRIBUTION).
+CREATE TABLE dbo.HR_SalaryElement (
+  id INT IDENTITY(1,1) PRIMARY KEY,
+  paycode NVARCHAR(50) NOT NULL,
+  payelementcode NVARCHAR(20) NOT NULL,
+  payelementname NVARCHAR(100) NOT NULL,
+  payelementtype NVARCHAR(30) NOT NULL,
+  calculationtype NVARCHAR(20) NOT NULL,
+  amount NUMERIC(12,2) NULL,
+  percentage NUMERIC(9,4) NULL,
+  percentagebase NVARCHAR(20) NULL,
+  effectivefrom DATE NOT NULL,
+  createddate DATETIME2 NOT NULL CONSTRAINT DF_SalElem_Created DEFAULT SYSUTCDATETIME(),
+  updateddate DATETIME2 NOT NULL CONSTRAINT DF_SalElem_Updated DEFAULT SYSUTCDATETIME(),
+  updatedby NVARCHAR(50) NULL,
+  CONSTRAINT UQ_SalElem UNIQUE (paycode, payelementcode, effectivefrom)
+);
+
+-- Company settlement rules (gratuity / bonus / encashment / notice / PF / ESI).
+CREATE TABLE dbo.HR_SalaryConfig (
+  id INT IDENTITY(1,1) PRIMARY KEY,
+  configkey NVARCHAR(60) NOT NULL,
+  configvalue NVARCHAR(200) NULL,
+  updatedat DATETIME2 NOT NULL CONSTRAINT DF_SalCfg_Updated DEFAULT SYSUTCDATETIME(),
+  updatedby NVARCHAR(50) NULL,
+  CONSTRAINT UQ_SalCfg_Key UNIQUE (configkey)
+);
+
+-- HR-approved other dues / recoveries (arrears, incentives, loans, ...).
+CREATE TABLE dbo.HR_SalaryDues (
+  id INT IDENTITY(1,1) PRIMARY KEY,
+  paycode NVARCHAR(50) NOT NULL,
+  category NVARCHAR(20) NOT NULL,
+  kind NVARCHAR(40) NOT NULL,
+  description NVARCHAR(200) NULL,
+  amount NUMERIC(12,2) NOT NULL,
+  status NVARCHAR(20) NOT NULL CONSTRAINT DF_SalDues_Status DEFAULT('Pending'),
+  applieddate DATETIME2 NOT NULL CONSTRAINT DF_SalDues_Applied DEFAULT SYSUTCDATETIME(),
+  decidedby NVARCHAR(50) NULL,
+  decidedat DATETIME2 NULL,
+  decisionnote NVARCHAR(500) NULL,
+  createdby NVARCHAR(50) NULL,
+  updatedat DATETIME2 NOT NULL CONSTRAINT DF_SalDues_Updated DEFAULT SYSUTCDATETIME()
+);
+
 
 
