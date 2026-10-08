@@ -33,11 +33,12 @@
  * attendance rule is introduced anywhere in this file.
  */
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { View, Text, ScrollView, StyleSheet, TouchableOpacity, Modal, RefreshControl, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../../theme';
-import { Card, Button, ScreenContainer, currentMonthKey } from '../../components';
+import { Card, Button, ScreenContainer } from '../../components';
+import EmployeeMonthNav, { currentMonthKey, previousMonthKey, nextMonthKey } from '../../components/EmployeeMonthNav';
 import { useAuth } from '../../hooks/useAuth';
 import { api } from '../../services/api';
 import { API_ENDPOINTS } from '../../utils/constants';
@@ -66,17 +67,9 @@ const dayName = (v) => {
 };
 const isoOf = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
-// Month stepping is pure calendar arithmetic on the 'YYYY-MM' key - no dates are
-// ever parsed through UTC, so an attendance date can never shift a day.
-const monthKeyOf = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-const shiftMonthKey = (key, delta) => {
-  const m = /^(\d{4})-(\d{2})$/.exec(clean(key));
-  if (!m) return currentMonthKey();
-  const d = new Date(Number(m[1]), Number(m[2]) - 1 + delta, 1);
-  return monthKeyOf(d);
-};
-const previousMonthKey = (key) => shiftMonthKey(key, -1);
-const nextMonthKey = (key) => shiftMonthKey(key, 1);
+// Month stepping comes from the shared EmployeeMonthNav helpers (integer
+// 'YYYY-MM' arithmetic - no date is ever parsed through UTC, so an attendance
+// date can never shift a day).
 
 /** hoursworked is minutes; display-only conversion. */
 const hoursText = (minutes) => {
@@ -104,15 +97,25 @@ const STATUS_COLORS = {
   'Miss Punch': '#D97706', // orange
   Holiday: '#7C3AED',   // purple
   'Week Off': '#CA8A04',  // yellow
+  Leave: '#0891B2',     // cyan — distinct from all five states above (Phase J s6)
 };
+const HOLIDAY_COLOR = STATUS_COLORS.Holiday;      // PURPLE
+const WEEK_OFF_COLOR = STATUS_COLORS['Week Off']; // YELLOW
+const LEAVE_COLOR = STATUS_COLORS.Leave;          // CYAN
 const dayColor = (row) => {
   if (!row) return null;                                   // no record -> neutral
   const code = clean(row.statusCode).toUpperCase();
-  if (code === 'H' || code === 'HOLIDAY') return STATUS_COLORS.Holiday;
+  if (code === 'H' || code === 'HOLIDAY') return HOLIDAY_COLOR;
   const label = statusOf(row);
-  if (label === 'Week Off' || label === 'Holiday') return STATUS_COLORS['Week Off'];
+  if (label === 'Holiday') return HOLIDAY_COLOR;
+  if (label === 'Week Off') return WEEK_OFF_COLOR;
   return STATUS_COLORS[label] || null;
 };
+/**
+ * A day that the application marks as a holiday for this employee's own group.
+ * This is a CALENDAR / STATUS OVERLAY only: the underlying Savior attendance row
+ * is never changed, and the real row (if any) stays available in the day sheet.
+ */
 const isHolidayRow = (row) => {
   const code = clean(row?.statusCode).toUpperCase();
   return code === 'H' || code === 'HOLIDAY';
@@ -121,8 +124,9 @@ const LEGEND = [
   { label: 'Present', color: STATUS_COLORS.Present },
   { label: 'Absent', color: STATUS_COLORS.Absent },
   { label: 'Miss Punch', color: STATUS_COLORS['Miss Punch'] },
-  { label: 'Holiday', color: STATUS_COLORS.Holiday },
-  { label: 'Weekly Off', color: STATUS_COLORS['Week Off'] },
+  { label: 'Holiday', color: HOLIDAY_COLOR },
+  { label: 'Weekly Off', color: WEEK_OFF_COLOR },
+  { label: 'Leave', color: LEAVE_COLOR },
 ];
 
 /**
@@ -140,25 +144,78 @@ export const EmployeeAttendanceScreen = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
   const [pickedDay, setPickedDay] = useState(null);
+  // Real holiday data for THIS employee's own group(s), for the selected month.
+  // Loaded beside the attendance so both month views always stay in sync.
+  const [holidays, setHolidays] = useState([]);
+  // Real APPROVED leave for this employee in the displayed month (Phase J).
+  const [leaveDates, setLeaveDates] = useState([]);
+  // Tracks which month is currently being displayed so a slow response for an
+  // older month can never overwrite the one the user is looking at.
+  const shownMonth = useRef(currentMonthKey());
 
   const load = useCallback(async (isRefresh, targetMonth) => {
     if (isRefresh) setIsRefreshing(true); else setIsLoading(true);
     setError(null);
+    // Clear the previous month's rows up-front when a DIFFERENT month is requested,
+    // so the calendar, summary, late details and attendance list can never show one
+    // month's data under another month's label while the request is in flight.
+    shownMonth.current = clean(targetMonth);
+    setData((prev) => (prev && clean(prev.month) === clean(targetMonth) ? prev : null));
+    setHolidays([]);
     try {
       // Only the month is sent - the backend uses the authenticated identity.
       const res = await api.get(API_ENDPOINTS.EMPLOYEE_DASHBOARD, { month: targetMonth });
-      setData(res);
+      // Drop the response if the user already moved on to another month.
+      if (shownMonth.current === clean(targetMonth)) setData(res);
     } catch (e) {
       // Never substitute fake numbers - show a real error instead.
-      setData(null);
-      setError('Unable to load your attendance data. Please try again.');
+      if (shownMonth.current === clean(targetMonth)) {
+        setData(null);
+        setError('Unable to load your attendance data. Please try again.');
+      }
     } finally {
       setIsLoading(false);
       setIsRefreshing(false);
     }
   }, []);
 
+  // Holidays are loaded SEPARATELY and are never allowed to fail the attendance
+  // screen: a holiday-service problem must not hide real attendance data.
+  const loadHolidays = useCallback(async (targetMonth) => {
+    try {
+      const res = await api.get(API_ENDPOINTS.EMPLOYEE_HOLIDAYS, { month: targetMonth });
+      if (shownMonth.current === clean(targetMonth)) {
+        setHolidays(Array.isArray(res?.holidays) ? res.holidays : []);
+      }
+    } catch (_) {
+      if (shownMonth.current === clean(targetMonth)) setHolidays([]);
+    }
+  }, []);
+
+  // APPROVED leave for the displayed month (Phase J section 6). This is also an
+  // application-level OVERLAY: no Savior attendance record is read differently or
+  // written, a leave day is simply drawn as "Leave" on top of the real row.
+  const loadLeave = useCallback(async (targetMonth) => {
+    try {
+      const [y, m] = clean(targetMonth).split('-');
+      if (!y || !m) throw new Error('bad month');
+      const lastDay = new Date(Date.UTC(Number(y), Number(m), 0)).getUTCDate();
+      const res = await api.get(API_ENDPOINTS.EMPLOYEE_LEAVE_CALENDAR, {
+        from: `${targetMonth}-01`,
+        to: `${targetMonth}-${String(lastDay).padStart(2, '0')}`,
+      });
+      if (shownMonth.current === clean(targetMonth)) {
+        setLeaveDates(Array.isArray(res?.dates) ? res.dates : []);
+      }
+    } catch (_) {
+      // Leave overlay is optional: attendance must still render without it.
+      if (shownMonth.current === clean(targetMonth)) setLeaveDates([]);
+    }
+  }, []);
+
   useEffect(() => { load(false, month); }, [month]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadHolidays(month); }, [month, loadHolidays]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadLeave(month); }, [month, loadLeave]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Rows oldest -> newest (the attendance tab is always ascending).
   const rows = useMemo(() => {
@@ -174,6 +231,89 @@ export const EmployeeAttendanceScreen = () => {
     rows.forEach((r) => m.set(clean(r.date || r.dateoffice).slice(0, 10), r));
     return m;
   }, [rows]);
+
+  /**
+   * Real holidays applicable to this employee, keyed by calendar date.
+   *
+   * The backend already restricts the list to the signed-in employee's own group
+   * plus "All Employees", so an employee can never see another group's holiday.
+   * A day may hold more than one holiday (e.g. a Factory Staff holiday and an
+   * All Employees holiday on the same date).
+   */
+  const holidayByDate = useMemo(() => {
+    const m = new Map();
+    holidays.forEach((h) => {
+      const key = clean(h.holidaydate).slice(0, 10);
+      if (!key) return;
+      const list = m.get(key) || [];
+      list.push(h);
+      m.set(key, list);
+    });
+    return m;
+  }, [holidays]);
+
+  /** Holiday names for a day, comma separated (empty when the day is not one). */
+  const holidayNames = useCallback(
+    (key) => (holidayByDate.get(clean(key).slice(0, 10)) || []).map((h) => clean(h.holidayname)).filter(Boolean).join(', '),
+    [holidayByDate],
+  );
+
+  /**
+   * APPROVED leave keyed by calendar date (Phase J section 6).
+   *
+   * The server already restricted the list to this employee's own approved
+   * requests and expanded each request into individual dates. A leave day is an
+   * overlay: the real attendance row underneath is never modified.
+   */
+  const leaveByDate = useMemo(() => {
+    const m = new Map();
+    leaveDates.forEach((entry) => {
+      const key = clean(entry?.date).slice(0, 10);
+      if (!key) return;
+      m.set(key, Array.isArray(entry?.leaves) ? entry.leaves : []);
+    });
+    return m;
+  }, [leaveDates]);
+
+  const isLeaveDay = useCallback((key) => leaveByDate.has(clean(key).slice(0, 10)), [leaveByDate]);
+
+  const leaveLabel = useCallback((key) => {
+    const list = leaveByDate.get(clean(key).slice(0, 10)) || [];
+    const names = list.map((l) => clean(l.typename) || clean(l.leavetype)).filter(Boolean);
+    if (!names.length) return '';
+    // de-duplicate so one request does not repeat its type name.
+    return [...new Set(names)].join(', ');
+  }, [leaveByDate]);
+
+  /**
+   * Displayed status for a day, in priority order.
+   *
+   *   Holiday > Leave > Week Off > real attendance status
+   *
+   * A company holiday wins because nobody works on it; an APPROVED leave wins over
+   * the attendance label because a leave day must never be shown as Present, Absent
+   * or Miss Punch. A weekly off that is ALSO a leave shows as Leave, which keeps
+   * the two visually distinct as required.
+   */
+  const displayStatus = useCallback((row, key) => {
+    const k = clean(key).slice(0, 10);
+    if (holidayByDate.has(k)) return 'Holiday';
+    if (leaveByDate.has(k)) return 'Leave';
+    if (isHolidayRow(row)) return 'Holiday';
+    return statusOf(row);
+  }, [holidayByDate, leaveByDate]);
+
+  /**
+   * Calendar colour for a day, honouring the overlays first so a holiday is always
+   * PURPLE and an approved leave is always CYAN - each clearly distinct from
+   * Present green, Absent red, Miss Punch orange and Weekly Off yellow.
+   */
+  const displayColor = useCallback((row, key) => {
+    const k = clean(key).slice(0, 10);
+    if (holidayByDate.has(k)) return HOLIDAY_COLOR;
+    if (leaveByDate.has(k)) return LEAVE_COLOR;
+    return dayColor(row);
+  }, [holidayByDate, leaveByDate]);
 
   /**
    * Google-style month grid for the SELECTED month: Monday-first, correct
@@ -195,15 +335,23 @@ export const EmployeeAttendanceScreen = () => {
     for (let i = 0; i < 42; i += 1) {
       const d = new Date(gridStart.getFullYear(), gridStart.getMonth(), gridStart.getDate() + i);
       const key = isoOf(d);
+      const holiday = holidayByDate.get(key) || [];
+      const leave = leaveByDate.get(key) || [];
       cells.push({
         key,
         day: d.getDate(),
         inMonth: d.getMonth() === mon && d.getFullYear() === year,
         row: byDate.get(key) || null,
+        // An application holiday or an approved leave makes the day tappable even
+        // when Savior has no attendance row for it.
+        holiday,
+        leave,
+        isHoliday: holiday.length > 0,
+        isLeave: leave.length > 0,
       });
     }
     return cells;
-  }, [month, byDate]);
+  }, [month, byDate, holidayByDate, leaveByDate]);
 
   // Weekday header, Monday first (matching the grid).
   const WEEK_HEADER = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -230,6 +378,38 @@ export const EmployeeAttendanceScreen = () => {
 
   // Grace consumption: derived arithmetically from the backend's own remaining
   // values (quota per tier is the same constant the server uses).
+    /**
+   * Grace position AS OF the tapped date.
+   *
+   * `graceTimeline` comes from the backend and replays the SAME monthly grace
+   * consumption the HR audit already reports (it is derived from that function's
+   * own lateDetails, which stay untouched), giving the cumulative used/remaining
+   * after every late day of the selected month. Taking the latest entry on or
+   * before the tapped date means a later date correctly reflects the grace
+   * already consumed on earlier dates - grace is never reset per date.
+   */
+  const graceAsOf = useCallback((dateIso) => {
+    const timeline = Array.isArray(data?.graceTimeline) ? data.graceTimeline : [];
+    const d = clean(dateIso).slice(0, 10);
+    let hit = null;
+    timeline.forEach((e) => {
+      const ed = clean(e.date).slice(0, 10);
+      if (ed && ed <= d) hit = e;
+    });
+    const g = data?.graceRemaining;
+    if (!hit) {
+      if (!g) return null;
+      // No late event yet on this date: full allowance is still available.
+      const totals = timeline.length ? timeline[0].total : null;
+      return {
+        total: totals || { grace30min: Number(g.grace30min || 0), grace1hr: Number(g.grace1hr || 0), grace2hr: Number(g.grace2hr || 0) },
+        remaining: totals || { grace30min: Number(g.grace30min || 0), grace1hr: Number(g.grace1hr || 0), grace2hr: Number(g.grace2hr || 0) },
+        used: { grace30min: 0, grace1hr: 0, grace2hr: 0 },
+      };
+    }
+    return hit;
+  }, [data]);
+
   const grace = useMemo(() => {
     const g = data?.graceRemaining;
     if (!g) return null;
@@ -274,37 +454,7 @@ export const EmployeeAttendanceScreen = () => {
         </Text>
 
         {/* ---------- Month navigation (calendar + details stay in sync) ---------- */}
-        <View style={[styles.navBar, { borderColor: theme.border, backgroundColor: theme.surface || '#FFFFFF' }]}>
-          <TouchableOpacity
-            style={styles.navArrow}
-            accessibilityLabel="Previous month"
-            activeOpacity={0.7}
-            onPress={() => setMonth(previousMonthKey(month))}
-          >
-            <Ionicons name="chevron-back" size={20} color={theme.primary} />
-          </TouchableOpacity>
-          <Text style={[styles.navLabel, { color: theme.textPrimary }]}>
-            {`${MONTHS[Number(clean(month).slice(5, 7)) - 1] || ''} ${clean(month).slice(0, 4)}`}
-          </Text>
-          <TouchableOpacity
-            style={styles.navArrow}
-            accessibilityLabel="Next month"
-            activeOpacity={0.7}
-            onPress={() => setMonth(nextMonthKey(month))}
-          >
-            <Ionicons name="chevron-forward" size={20} color={theme.primary} />
-          </TouchableOpacity>
-          {month !== currentMonthKey() ? (
-            <TouchableOpacity
-              style={[styles.navCurrent, { backgroundColor: `${theme.primary}15`, borderColor: `${theme.primary}40` }]}
-              accessibilityLabel="Current month"
-              activeOpacity={0.8}
-              onPress={() => setMonth(currentMonthKey())}
-            >
-              <Text style={[styles.navCurrentText, { color: theme.primary }]}>Current</Text>
-            </TouchableOpacity>
-          ) : null}
-        </View>
+        <EmployeeMonthNav month={month} onChange={setMonth} theme={theme} />
 
         {isLoading ? (
           <View style={styles.stateBox}>
@@ -335,6 +485,9 @@ export const EmployeeAttendanceScreen = () => {
                 {summaryCard('Absent', summary.absent, '#DC2626')}
                 {summaryCard('Miss Punch', summary.miss, '#D97706')}
                 {summaryCard('Late', summary.late, '#7C3AED')}
+                {/* Holidays are an overlay count, kept separate from the real
+                    Present / Absent / Miss Punch totals above. */}
+                {summaryCard('Holiday', holidays.length, HOLIDAY_COLOR)}
               </View>
               <View style={styles.hoursRow}>
                 <Text style={[styles.hoursLabel, { color: theme.textSecondary }]}>Total Working Hours</Text>
@@ -362,27 +515,33 @@ export const EmployeeAttendanceScreen = () => {
               {calendarCells.length ? (
                 <View style={styles.calGrid}>
                   {calendarCells.map((c) => {
-                    const color = c.inMonth ? dayColor(c.row) : null;
+                    // Holiday overlay wins: a holiday day is always purple.
+                    const color = c.inMonth ? displayColor(c.row, c.key) : null;
+                    const label = displayStatus(c.row, c.key);
                     return (
                       <TouchableOpacity
                         key={c.key}
-                        style={[styles.calCell, c.inMonth && c.row && styles.calCellHas]}
+                        style={[styles.calCell, c.inMonth && (c.row || c.isHoliday || c.isLeave) && styles.calCellHas]}
                         activeOpacity={0.7}
-                        disabled={!c.row}
-                        onPress={() => c.row && setPickedDay(c)}
+                        disabled={!(c.row || c.isHoliday || c.isLeave)}
+                        // Exposes the real day + its real status for accessibility.
+                        accessibilityLabel={`${c.key} ${label}`}
+                        onPress={() => (c.row || c.isHoliday || c.isLeave) && setPickedDay(c)}
                       >
                         <View style={[styles.calDot, { backgroundColor: color || 'transparent' }]} />
                         <Text
                           style={[
                             styles.calDay,
                             { color: c.inMonth ? (color || theme.textPrimary) : theme.textTertiary },
-                            c.inMonth && !c.row && styles.calDayNeutral,
+                            c.inMonth && !c.row && !c.isHoliday && !c.isLeave && styles.calDayNeutral,
                           ]}
                         >
                           {c.day}
                         </Text>
-                        {c.inMonth && c.row && c.row.isLate ? <Text style={styles.calLate}>L</Text> : null}
-                        {c.inMonth && c.row && isHolidayRow(c.row) ? <Text style={styles.calHol}>H</Text> : null}
+                        {/* Late is a flag beside the main status, never a replacement. */}
+                        {c.inMonth && c.row && c.row.isLate && !c.isHoliday && !c.isLeave ? <Text style={styles.calLate}>L</Text> : null}
+                        {c.inMonth && c.isHoliday ? <Text style={styles.calHol}>H</Text> : null}
+                        {c.inMonth && c.isLeave && !c.isHoliday ? <Text style={styles.calLv}>LV</Text> : null}
                       </TouchableOpacity>
                     );
                   })}
@@ -399,6 +558,52 @@ export const EmployeeAttendanceScreen = () => {
                   </View>
                 ))}
               </View>
+            </Card>
+
+            {/* ---------- Holidays applicable to this employee (real data) ---------- */}
+            <Card style={styles.card}>
+              <View style={styles.cardHeader}>
+                <Text style={[styles.cardTitle, { color: theme.textPrimary }]}>Holidays</Text>
+                <Text style={[styles.cardSub, { color: theme.textSecondary }]}>{`${holidays.length} in this month`}</Text>
+              </View>
+              {holidays.length ? (
+                holidays
+                  .slice()
+                  .sort((a, b) => (clean(a.holidaydate) < clean(b.holidaydate) ? -1 : 1))
+                  .map((h, i) => (
+                    <TouchableOpacity
+                      key={`hol-${h.id ?? i}`}
+                      style={[styles.holidayRow, { borderColor: theme.border }]}
+                      activeOpacity={0.7}
+                      onPress={() => setPickedDay({
+                        key: clean(h.holidaydate).slice(0, 10),
+                        day: partsOf(h.holidaydate)?.getDate(),
+                        row: byDate.get(clean(h.holidaydate).slice(0, 10)) || null,
+                        holiday: [h],
+                      })}
+                    >
+                      <View style={styles.holidayDotWrap}>
+                        <View style={styles.holidayDot} />
+                      </View>
+                      <View style={styles.holidayInfo}>
+                        <Text style={[styles.holidayName, { color: theme.textPrimary }]}>{clean(h.holidayname)}</Text>
+                        <Text style={[styles.holidayMeta, { color: theme.textSecondary }]}>
+                          {`${shortDate(h.holidaydate)} (${dayName(h.holidaydate)})`}
+                          {clean(h.category) ? ` · ${clean(h.category)}` : ''}
+                        </Text>
+                        {clean(h.description) ? (
+                          <Text style={[styles.holidayDesc, { color: theme.textTertiary }]}>{clean(h.description)}</Text>
+                        ) : null}
+                      </View>
+                      {/* A weekly off on the same date stays visible as a separate fact. */}
+                      {statusOf(byDate.get(clean(h.holidaydate).slice(0, 10))) === 'Week Off' ? (
+                        <Text style={[styles.weekOffTag, { color: WEEK_OFF_COLOR }]}>WO</Text>
+                      ) : null}
+                    </TouchableOpacity>
+                  ))
+              ) : (
+                <Text style={[styles.empty, { color: theme.textTertiary }]}>Is month me aapke group ka koi holiday nahi hai.</Text>
+              )}
             </Card>
 
             {/* ---------- Late arrival details ---------- */}
@@ -459,8 +664,13 @@ export const EmployeeAttendanceScreen = () => {
               </View>
 
               {rows.length ? rows.map((r, i) => {
-                const label = isHolidayRow(r) ? 'Holiday' : statusOf(r);
-                const color = dayColor(r) || theme.textPrimary;
+                const key = clean(r.date || r.dateoffice).slice(0, 10);
+                // Same overlay order as the calendar: holiday > leave > real status,
+                // each in its own colour so nothing is mislabelled.
+                const isHol = holidayByDate.has(key) || isHolidayRow(r);
+                const isLv = !isHol && leaveByDate.has(key);
+                const label = isHol ? 'Holiday' : isLv ? 'Leave' : statusOf(r);
+                const color = isHol ? HOLIDAY_COLOR : isLv ? LEAVE_COLOR : (dayColor(r) || theme.textPrimary);
                 const inT = clean(r.inTime);
                 const outT = clean(r.outTime);
                 return (
@@ -468,7 +678,7 @@ export const EmployeeAttendanceScreen = () => {
                     key={`${clean(r.date)}-${i}`}
                     style={[styles.attRow, { borderColor: theme.border }]}
                     activeOpacity={0.7}
-                    onPress={() => setPickedDay({ key: clean(r.date).slice(0, 10), day: partsOf(r.date)?.getDate(), row: r })}
+                    onPress={() => setPickedDay({ key, day: partsOf(r.date)?.getDate(), row: r, holiday: holidayByDate.get(key) || [], leave: leaveByDate.get(key) || [], isHoliday: isHol, isLeave: isLv })}
                   >
                     <View style={styles.attDateCol}>
                       <Text style={[styles.attDay, { color: theme.textPrimary }]}>{dayName(r.date)}</Text>
@@ -499,13 +709,34 @@ export const EmployeeAttendanceScreen = () => {
         <View style={styles.sheetBackdrop}>
           <TouchableOpacity style={styles.sheetDismiss} activeOpacity={1} onPress={() => setPickedDay(null)} />
           <View style={styles.sheet}>
-            {pickedDay && pickedDay.row ? (() => {
+            {pickedDay && (() => {
               const r = pickedDay.row;
-              const color = dayColor(r) || theme.textPrimary;
-              const inT = clean(r.inTime);
-              const outT = clean(r.outTime);
+              // The holiday overlay wins for display; the real row (if any) is kept.
+              const isHoliday = Boolean(pickedDay.isHoliday) || (pickedDay.holiday && pickedDay.holiday.length > 0);
+              // Holiday wins over leave: nobody works on a company holiday.
+              const isLeave = !isHoliday && (Boolean(pickedDay.isLeave) || (pickedDay.leave && pickedDay.leave.length > 0));
+              const color = isHoliday
+                ? HOLIDAY_COLOR
+                : isLeave
+                  ? LEAVE_COLOR
+                  : (r ? dayColor(r) || theme.textPrimary : theme.textPrimary);
+              const label = isHoliday ? 'Holiday' : isLeave ? 'Leave' : (r ? statusOf(r) : 'No Record');
+              const holidayList = (pickedDay.holiday && pickedDay.holiday.length)
+                ? pickedDay.holiday
+                : (holidayByDate.get(pickedDay.key) || []);
+              const leaveList = (pickedDay.leave && pickedDay.leave.length)
+                ? pickedDay.leave
+                : (leaveByDate.get(pickedDay.key) || []);
+              const inT = clean(r?.inTime);
+              const outT = clean(r?.outTime);
               const late = lateList.find((l) => l.key.startsWith(pickedDay.key));
-              const rowGrace = r.graceUsed ? ` (${clean(r.graceUsed)})` : '';
+              const rowGrace = r?.graceUsed ? ` (${clean(r.graceUsed)})` : '';
+              // Cumulative grace position as of THIS date (earlier days included).
+              const graceForDay = graceAsOf(pickedDay.key);
+              const graceAllSpent = !!graceForDay
+                && graceForDay.remaining.grace30min === 0
+                && graceForDay.remaining.grace1hr === 0
+                && graceForDay.remaining.grace2hr === 0;
               return (
                 <View>
                   <View style={styles.sheetHeader}>
@@ -517,10 +748,31 @@ export const EmployeeAttendanceScreen = () => {
                     </TouchableOpacity>
                   </View>
                   <View style={[styles.sheetBadge, { backgroundColor: `${color}18`, borderColor: color }]}>
-                    <Text style={[styles.sheetBadgeText, { color }]}>
-                      {isHolidayRow(r) ? 'Holiday' : statusOf(r)}
-                    </Text>
+                    <Text style={[styles.sheetBadgeText, { color }]}>{label}</Text>
                   </View>
+
+                  {/* Holiday facts come first - this is the reason the day is shown. */}
+                  {holidayList.map((h, i) => (
+                    <View key={`sh-${h.id ?? i}`}>
+                      <View style={styles.sheetRow}>
+                        <Text style={[styles.sheetKey, { color: theme.textSecondary }]}>Holiday</Text>
+                        <Text style={[styles.sheetVal, { color: HOLIDAY_COLOR }]}>{clean(h.holidayname)}</Text>
+                      </View>
+                      {clean(h.category) ? (
+                        <View style={styles.sheetRow}>
+                          <Text style={[styles.sheetKey, { color: theme.textSecondary }]}>Group</Text>
+                          <Text style={[styles.sheetVal, { color: theme.textPrimary }]}>{clean(h.category)}</Text>
+                        </View>
+                      ) : null}
+                      {clean(h.description) ? (
+                        <View style={styles.sheetRow}>
+                          <Text style={[styles.sheetKey, { color: theme.textSecondary }]}>Note</Text>
+                          <Text style={[styles.sheetVal, { color: theme.textSecondary }]}>{clean(h.description)}</Text>
+                        </View>
+                      ) : null}
+                    </View>
+                  ))}
+
                   <View style={styles.sheetRow}>
                     <Text style={[styles.sheetKey, { color: theme.textSecondary }]}>In</Text>
                     <Text style={[styles.sheetVal, { color: inT ? '#166534' : theme.textTertiary }]}>{inT || PLACEHOLDER}</Text>
@@ -531,9 +783,9 @@ export const EmployeeAttendanceScreen = () => {
                   </View>
                   <View style={styles.sheetRow}>
                     <Text style={[styles.sheetKey, { color: theme.textSecondary }]}>Hours</Text>
-                    <Text style={[styles.sheetVal, { color: theme.primary }]}>{hoursText(r.hoursworked)}</Text>
+                    <Text style={[styles.sheetVal, { color: theme.primary }]}>{hoursText(r?.hoursworked)}</Text>
                   </View>
-                  {r.shift ? (
+                  {r?.shift ? (
                     <View style={styles.sheetRow}>
                       <Text style={[styles.sheetKey, { color: theme.textSecondary }]}>Shift</Text>
                       <Text style={[styles.sheetVal, { color: theme.textPrimary }]}>{clean(r.shift)}</Text>
@@ -541,8 +793,37 @@ export const EmployeeAttendanceScreen = () => {
                   ) : null}
                   <View style={styles.sheetRow}>
                     <Text style={[styles.sheetKey, { color: theme.textSecondary }]}>Status</Text>
-                    <Text style={[styles.sheetVal, { color }]}>{isHolidayRow(r) ? 'Holiday' : statusOf(r)}</Text>
+                    <Text style={[styles.sheetVal, { color }]}>{label}</Text>
                   </View>
+                  {/* The untouched Savior label stays visible for full transparency. */}
+                  {/* Approved leave detail (Phase J). Display-only overlay — the
+                      untouched Savior label stays visible below for transparency. */}
+                  {leaveList.map((l, i) => (
+                    <View key={`sl-${l.id ?? i}`}>
+                      <View style={styles.sheetRow}>
+                        <Text style={[styles.sheetKey, { color: theme.textSecondary }]}>Leave Type</Text>
+                        <Text style={[styles.sheetVal, { color: LEAVE_COLOR }]}>{clean(l.typename) || clean(l.leavetype)}</Text>
+                      </View>
+                      {l.isHalfDay ? (
+                        <View style={styles.sheetRow}>
+                          <Text style={[styles.sheetKey, { color: theme.textSecondary }]}>Duration</Text>
+                          <Text style={[styles.sheetVal, { color: theme.textPrimary }]}>Half day</Text>
+                        </View>
+                      ) : null}
+                      {clean(l.reason) ? (
+                        <View style={styles.sheetRow}>
+                          <Text style={[styles.sheetKey, { color: theme.textSecondary }]}>Leave Reason</Text>
+                          <Text style={[styles.sheetVal, { color: theme.textSecondary }]}>{clean(l.reason)}</Text>
+                        </View>
+                      ) : null}
+                    </View>
+                  ))}
+                  {(isHoliday || isLeave) && r ? (
+                    <View style={styles.sheetRow}>
+                      <Text style={[styles.sheetKey, { color: theme.textSecondary }]}>Recorded as</Text>
+                      <Text style={[styles.sheetVal, { color: dayColor(r) || theme.textSecondary }]}>{statusOf(r)}</Text>
+                    </View>
+                  ) : null}
                   {late ? (
                     <View style={styles.sheetRow}>
                       <Text style={[styles.sheetKey, { color: theme.textSecondary }]}>Late</Text>
@@ -550,7 +831,7 @@ export const EmployeeAttendanceScreen = () => {
                         {`+${late.lateMinutes} min${late.covered ? ` · covered by ${late.graceUsed || 'grace'}` : ' · not covered'}`}
                       </Text>
                     </View>
-                  ) : clean(r.latearrival) > 0 ? (
+                  ) : clean(r?.latearrival) > 0 ? (
                     <View style={styles.sheetRow}>
                       <Text style={[styles.sheetKey, { color: theme.textSecondary }]}>Late</Text>
                       <Text style={[styles.sheetVal, { color: '#DC2626' }]}>
@@ -558,17 +839,26 @@ export const EmployeeAttendanceScreen = () => {
                       </Text>
                     </View>
                   ) : null}
-                  {grace ? (
+                  {graceForDay ? (
                     <View style={styles.sheetRow}>
-                      <Text style={[styles.sheetKey, { color: theme.textSecondary }]}>Grace left</Text>
+                      <Text style={[styles.sheetKey, { color: theme.textSecondary }]}>Grace Used</Text>
                       <Text style={[styles.sheetVal, { color: theme.textPrimary }]}>
-                        {`${grace.tiers.map((t) => `${t.name} ${t.left}/${t.total}`).join(' · ')}`}
+                        {`30-min ${graceForDay.used.grace30min}/${graceForDay.total.grace30min} · 1-hour ${graceForDay.used.grace1hr}/${graceForDay.total.grace1hr} · 2-hour ${graceForDay.used.grace2hr}/${graceForDay.total.grace2hr}`}
+                      </Text>
+                    </View>
+                  ) : null}
+                  {graceForDay ? (
+                    <View style={styles.sheetRow}>
+                      <Text style={[styles.sheetKey, { color: theme.textSecondary }]}>Grace Remaining</Text>
+                      <Text style={[styles.sheetVal, { color: graceAllSpent ? theme.error : theme.textPrimary }]}>
+                        {`30-min ${graceForDay.remaining.grace30min}/${graceForDay.total.grace30min} · 1-hour ${graceForDay.remaining.grace1hr}/${graceForDay.total.grace1hr} · 2-hour ${graceForDay.remaining.grace2hr}/${graceForDay.total.grace2hr}`}
+                        {graceAllSpent ? '  (none left)' : ''}
                       </Text>
                     </View>
                   ) : null}
                 </View>
               );
-            })() : null}
+            })()}
           </View>
         </View>
       </Modal>
@@ -603,28 +893,22 @@ const styles = StyleSheet.create({
   calDot: { width: 14, height: 4, borderRadius: 2, marginBottom: 2 },
   calDay: { fontSize: 12.5, fontWeight: '700' },
   calDayNeutral: { fontWeight: '500' },
-  calLate: { fontSize: 7, color: '#7C3AED', fontWeight: '900', lineHeight: 9 },
-  calHol: { fontSize: 7, color: '#7C3AED', fontWeight: '900', lineHeight: 9 },
-  navBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderRadius: 12,
-    borderWidth: 1,
-    paddingHorizontal: 4,
-    paddingVertical: 4,
-    marginBottom: 12,
-  },
-  navArrow: { width: 38, paddingVertical: 6, alignItems: 'center', justifyContent: 'center' },
-  navLabel: { flex: 1, textAlign: 'center', fontSize: 15, fontWeight: '800' },
-  navCurrent: {
-    position: 'absolute',
-    right: 6,
-    paddingHorizontal: 9,
-    paddingVertical: 4,
-    borderRadius: 999,
-    borderWidth: 1,
-  },
-  navCurrentText: { fontSize: 10.5, fontWeight: '800' },
+  // A late PRESENT day keeps its green status; the small "L" marker is RED.
+  calLate: { fontSize: 8, color: '#DC2626', fontWeight: '900', lineHeight: 10 },
+  calHol: { fontSize: 7, color: HOLIDAY_COLOR, fontWeight: '900', lineHeight: 9 },
+  // Approved leave marker (Phase J) — cyan, matching the Leave legend entry.
+  calLv: { fontSize: 7, color: LEAVE_COLOR, fontWeight: '900', lineHeight: 9 },
+  // Holidays applicable to this employee's own group (real backend data).
+  holidayRow: { flexDirection: 'row', alignItems: 'center', gap: 8, borderTopWidth: 1, borderTopColor: '#EEE', paddingVertical: 9 },
+  holidayDotWrap: { width: 14, alignItems: 'center' },
+  holidayDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: HOLIDAY_COLOR },
+  holidayInfo: { flex: 1, gap: 2 },
+  holidayName: { fontSize: 12.5, fontWeight: '700' },
+  holidayMeta: { fontSize: 10.5 },
+  holidayDesc: { fontSize: 10 },
+  // A weekly off that falls on a holiday is tagged separately (YELLOW) so the
+  // purple Holiday state and the yellow Weekly Off state stay distinguishable.
+  weekOffTag: { fontSize: 10, fontWeight: '900' },
   legend: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 10 },
   legendItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   legendDot: { width: 8, height: 8, borderRadius: 3 },
