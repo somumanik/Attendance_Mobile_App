@@ -1,0 +1,98 @@
+## tblemployeeshiftmaster columns
+  paycode | char | max=12 | null=false
+  cardno | char | max=12 | null=true
+  shift | char | max=3 | null=true
+  shifttype | char | max=1 | null=true
+  shiftpattern | char | max=11 | null=true
+  shiftremaindays | numeric | max=5 | null=true
+  lastshiftperformed | char | max=3 | null=true
+  inonly | char | max=1 | null=true
+  ispunchall | char | max=1 | null=true
+  istimelossallowed | char | max=1 | null=true
+  alternate_off_days | char | max=10 | null=true
+  cdays | numeric | max=9 | null=true
+  isroundtheclockwork | char | max=1 | null=true
+  outpassduration | numeric | max=9 | null=true
+  outpassfrequency | numeric | max=9 | null=true
+  isot | char | max=1 | null=true
+  otrate | char | max=6 | null=true
+  firstoffday | char | max=3 | null=true
+  secondofftype | char | max=1 | null=true
+  halfdayshift | char | max=3 | null=true
+  secondoffday | char | max=3 | null=true
+  permislatearrival | numeric | max=5 | null=true
+  permisearlydeprt | numeric | max=5 | null=true
+  isautoshift | char | max=1 | null=true
+  isoutwork | char | max=1 | null=true
+  maxdaymin | numeric | max=9 | null=true
+  isos | char | max=1 | null=true
+  isosminus | char | max=1 | null=true
+  auth_shifts | char | max=50 | null=true
+  time | numeric | max=5 | null=true
+  short | numeric | max=5 | null=true
+  half | numeric | max=5 | null=true
+  ishalfday | char | max=1 | null=true
+  isshort | char | max=1 | null=true
+  two | char | max=1 | null=true
+  lossduration | numeric | max=9 | null=true
+  lossfrequency | numeric | max=9 | null=true
+  ishalflate | char | max=1 | null=true
+  halflateduration | numeric | max=5 | null=true
+  halfearlyduration | numeric | max=5 | null=true
+  isNightShift | char | max=1 | null=true
+
+## tblshiftmaster columns
+  shift | char | max=3
+  companycode | char | max=5
+  starttime | datetime | max=8
+  endtime | datetime | max=8
+  lunchtime | datetime | max=8
+  lunchduration | numeric | max=5
+  lunchendtime | datetime | max=8
+  orderinf12 | numeric | max=5
+  otstartafter | numeric | max=5
+  otdeducthrs | numeric | max=5
+  lunchdeduction | numeric | max=5
+  shiftposition | char | max=1
+  shiftduration | numeric | max=5
+  otdeductafter | numeric | max=5
+  lunchdeductionflexi | char | max=1
+  otdeducthrs1 | numeric | max=5
+  otdeductafter1 | numeric | max=5
+  time | numeric | max=5
+  short | numeric | max=5
+  half | numeric | max=5
+  AttendanceTimeFrom | datetime | max=8
+  AttendanceTimeTo | datetime | max=8
+  OutPunchStartTime | datetime | max=8
+
+## tblemployee for S00069
+  {"paycode":"S00069","companycode":"002","cat":"001","active":"Y"}
+
+## tblemployeeshiftmaster for S00069
+  rows: 1
+  {"paycode":"S00069      ","cardno":"S00069      ","shift":"GEM","shifttype":"F","shiftpattern":"           ","shiftremaindays":7,"lastshiftperformed":null,"inonly":"N","ispunchall":"Y","istimelossallowed":"Y","alternate_off_days":"          ","cdays":7,"isroundtheclockwork":"Y","outpassduration":300,"outpassfrequency":10,"isot":"Y","otrate":"000.00","firstoffday":"SUN","secondofftype":" ","halfdayshift":"   ","secondoffday":"NON","permislatearrival":10,"permisearlydeprt":10,"isautoshift":"N","isoutwork":"N","maxdaymin":960,"isos":"Y","isosminus":"N","auth_shifts":"                                                  ","time":240,"short":120,"half":300,"ishalfday":"Y","isshort":"N","two":"N","lossduration":0,"lossfrequency":0,"ishalflate":"N","halflateduration":0,"halfearlyduration":0,"isNightShift":"N"}
+
+## tblemployeeshiftmaster total rows
+  [{"n":347}]
+
+## tblshiftmaster rows where shift matches register codes (GEN/OFF/GEM/WK)
+  {"shift":"GEM","companycode":"002","starttime":"1900-01-01T10:00:00.000Z","endtime":"1900-01-01T19:00:00.000Z"}
+  {"shift":"GEN","companycode":"001","starttime":"1900-01-01T10:00:00.000Z","endtime":"1900-01-01T19:00:00.000Z"}
+  {"shift":"GEN","companycode":"002","starttime":"1900-01-01T09:00:00.000Z","endtime":"1900-01-01T18:00:00.000Z"}
+  {"shift":"GEN","companycode":"003","starttime":"1900-01-01T09:00:00.000Z","endtime":"1900-01-01T18:00:00.000Z"}
+  {"shift":"GEN","companycode":"004","starttime":"1900-01-01T09:00:00.000Z","endtime":"1900-01-01T18:00:00.000Z"}
+  {"shift":"WK","companycode":"002","starttime":"1900-01-01T09:00:00.000Z","endtime":"1900-01-01T18:00:00.000Z"}
+  {"shift":"WK","companycode":"003","starttime":"1900-01-01T09:00:00.000Z","endtime":"1900-01-01T18:00:00.000Z"}
+  {"shift":"WK","companycode":"004","starttime":"1900-01-01T09:00:00.000Z","endtime":"1900-01-01T18:00:00.000Z"}
+  {"shift":"WK_","companycode":"003","starttime":"1900-01-01T09:00:00.000Z","endtime":"1900-01-01T19:00:00.000Z"}
+
+## tblemployeeshiftmaster distinct shift values + count
+  {"shift":"GEN","cnt":227}
+  {"shift":"WK","cnt":99}
+  {"shift":"GEF","cnt":8}
+  {"shift":"GAU","cnt":6}
+  {"shift":"GEE","cnt":3}
+  {"shift":"GNN","cnt":2}
+  {"shift":"WK_","cnt":1}
+  {"shift":"GEM","cnt":1}

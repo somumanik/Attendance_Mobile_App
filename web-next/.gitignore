@@ -1,0 +1,13 @@
+# dependencies
+node_modules/
+
+# Next.js build output
+.next/
+out/
+
+# logs
+*.log
+
+# local env (never commit real values)
+.env
+.env*.local

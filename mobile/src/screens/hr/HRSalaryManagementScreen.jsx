@@ -36,6 +36,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '../../utils/colors';
 import { ScreenContainer } from '../../components/ScreenContainer';
 import { Button } from '../../components/Button';
+import { Can } from '../../components/Can';
 import {
   getHrSalaryMaster, importHrSalaryMaster, getHrSalaryElements, importHrSalaryElements,
   getHrSalaryConfig, saveHrSalaryConfig, getHrSalaryDues, createHrSalaryDue, decideHrSalaryDue,
@@ -361,15 +362,17 @@ export const HRSalaryManagementScreen = () => {
                   <View key={c} style={styles.colChip}><Text style={styles.colChipText}>{c}</Text></View>
                 ))}
               </View>
-              <Button
-                title={importing === 'master' ? 'Reading file...' : 'Import Salary Master'}
-                onPress={() => handlePickAndImport('master')}
-                variant="primary"
-                size="small"
-                disabled={!!importing}
-                leftIcon={<Ionicons name="document-text" size={14} color="#FFFFFF" />}
-                style={styles.importBtn}
-              />
+              <Can module="salary" action="import">
+                <Button
+                  title={importing === 'master' ? 'Reading file...' : 'Import Salary Master'}
+                  onPress={() => handlePickAndImport('master')}
+                  variant="primary"
+                  size="small"
+                  disabled={!!importing}
+                  leftIcon={<Ionicons name="document-text" size={14} color="#FFFFFF" />}
+                  style={styles.importBtn}
+                />
+              </Can>
             </View>
 
             <View style={styles.card}>
@@ -380,15 +383,17 @@ export const HRSalaryManagementScreen = () => {
                   <View key={c} style={styles.colChip}><Text style={styles.colChipText}>{c}</Text></View>
                 ))}
               </View>
-              <Button
-                title={importing === 'elements' ? 'Reading file...' : 'Import Pay Elements'}
-                onPress={() => handlePickAndImport('elements')}
-                variant="primary"
-                size="small"
-                disabled={!!importing}
-                leftIcon={<Ionicons name="document-text" size={14} color="#FFFFFF" />}
-                style={styles.importBtn}
-              />
+              <Can module="salary" action="import">
+                <Button
+                  title={importing === 'elements' ? 'Reading file...' : 'Import Pay Elements'}
+                  onPress={() => handlePickAndImport('elements')}
+                  variant="primary"
+                  size="small"
+                  disabled={!!importing}
+                  leftIcon={<Ionicons name="document-text" size={14} color="#FFFFFF" />}
+                  style={styles.importBtn}
+                />
+              </Can>
             </View>
 
             {importError ? (
@@ -454,14 +459,16 @@ export const HRSalaryManagementScreen = () => {
               </View>
             ))}
             {configMsg ? <Text style={styles.configMsg}>{configMsg}</Text> : null}
-            <Button
-              title={savingConfig ? 'Saving...' : 'Save Rules'}
-              onPress={saveConfig}
-              variant="primary"
-              size="medium"
-              disabled={savingConfig}
-              style={styles.importBtn}
-            />
+            <Can module="salary" action="edit">
+              <Button
+                title={savingConfig ? 'Saving...' : 'Save Rules'}
+                onPress={saveConfig}
+                variant="primary"
+                size="medium"
+                disabled={savingConfig}
+                style={styles.importBtn}
+              />
+            </Can>
           </View>
         ) : null}
 
@@ -488,7 +495,9 @@ export const HRSalaryManagementScreen = () => {
               <Text style={styles.label}>Amount</Text>
               <TextInput style={styles.input} value={dueForm.amount} onChangeText={(v) => setDueForm({ ...dueForm, amount: v })} placeholder="0.00" keyboardType="decimal-pad" />
               {dueError ? <Text style={styles.configMsg}>⚠️ {dueError}</Text> : null}
-              <Button title="Add Entry" onPress={addDue} variant="primary" size="small" style={styles.importBtn} />
+              <Can module="salary" action="create">
+                <Button title="Add Entry" onPress={addDue} variant="primary" size="small" style={styles.importBtn} />
+              </Can>
             </View>
 
             {dues.length ? dues.map((d) => (
@@ -503,8 +512,10 @@ export const HRSalaryManagementScreen = () => {
                 {clean(d.description) ? <Text style={styles.empMeta}>{clean(d.description)}</Text> : null}
                 {clean(d.status) === 'Pending' ? (
                   <View style={styles.chipRow}>
-                    <Button title="Approve" onPress={() => decideDue(d, 'Approved')} variant="primary" size="small" style={styles.flexBtn} />
-                    <Button title="Reject" onPress={() => decideDue(d, 'Rejected')} variant="outline" size="small" style={styles.flexBtn} />
+                    <Can module="salary" action="approve">
+                      <Button title="Approve" onPress={() => decideDue(d, 'Approved')} variant="primary" size="small" style={styles.flexBtn} />
+                      <Button title="Reject" onPress={() => decideDue(d, 'Rejected')} variant="outline" size="small" style={styles.flexBtn} />
+                    </Can>
                   </View>
                 ) : null}
               </View>
@@ -528,7 +539,9 @@ export const HRSalaryManagementScreen = () => {
               <TextInput style={styles.input} value={estimateLeaving} onChangeText={setEstimateLeaving} placeholder="2026-12-31" />
               <Text style={styles.label}>Notice Served Days (optional)</Text>
               <TextInput style={styles.input} value={estimateNotice} onChangeText={setEstimateNotice} placeholder="e.g. 30" keyboardType="number-pad" />
-              <Button title={estimating ? 'Calculating...' : 'Run Estimate'} onPress={runEstimate} variant="primary" size="small" disabled={estimating || !clean(estimatePaycode)} style={styles.importBtn} />
+              <Can module="fullfinal" action="view">
+                <Button title={estimating ? 'Calculating...' : 'Run Estimate'} onPress={runEstimate} variant="primary" size="small" disabled={estimating || !clean(estimatePaycode)} style={styles.importBtn} />
+              </Can>
               {estimateError ? <Text style={styles.configMsg}>⚠️ {estimateError}</Text> : null}
             </View>
 

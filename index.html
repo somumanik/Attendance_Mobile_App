@@ -137,6 +137,47 @@
   </div>
 </div>
 
+<!-- ============= PHASE I FORCED CREDENTIAL GATES (web portal) ============= -->
+<!-- Shown INSTEAD of any dashboard while the forced new password or the
+     one-time 4-digit PIN setup is still owed. HR login never lands here. -->
+<div id="forcedPasswordGate" class="hidden login-bg min-h-screen flex items-center justify-center p-4 relative overflow-hidden">
+  <div class="w-full max-w-md fade-in relative z-10">
+    <div class="glass rounded-3xl p-8 shadow-2xl border border-white/10">
+      <h2 class="text-xl font-extrabold text-white">Set Your New Password</h2>
+      <p class="text-xs text-slate-400 mt-1 mb-5">A temporary password was issued for your account. Dashboard se pehle naya password banana zaroori hai.</p>
+      <div class="mb-4">
+        <label class="block text-xs font-semibold text-slate-300 mb-2">New Password</label>
+        <input id="forcedNewPass" type="password" placeholder="Min 8 chars, letters + numbers" class="w-full bg-slate-900/60 border border-white/10 rounded-xl py-3 px-4 text-white placeholder-slate-500 text-sm input-focus outline-none transition" />
+      </div>
+      <div class="mb-5">
+        <label class="block text-xs font-semibold text-slate-300 mb-2">Confirm New Password</label>
+        <input id="forcedConfirmPass" type="password" placeholder="Repeat new password" class="w-full bg-slate-900/60 border border-white/10 rounded-xl py-3 px-4 text-white placeholder-slate-500 text-sm input-focus outline-none transition" />
+      </div>
+      <button type="button" onclick="submitForcedPassword()" class="w-full py-3.5 rounded-xl card-gradient-1 text-white font-bold text-sm shadow-xl shadow-indigo-600/30 hover:opacity-95 transition">Set New Password</button>
+      <button type="button" onclick="handleLogout();hideForcedGates();document.getElementById('loginPage').classList.remove('hidden');" class="w-full mt-3 py-2.5 rounded-xl bg-white/5 border border-white/10 text-slate-300 font-bold text-xs hover:bg-white/10 transition">Logout</button>
+    </div>
+  </div>
+</div>
+
+<div id="forcedPinGate" class="hidden login-bg min-h-screen flex items-center justify-center p-4 relative overflow-hidden">
+  <div class="w-full max-w-md fade-in relative z-10">
+    <div class="glass rounded-3xl p-8 shadow-2xl border border-white/10">
+      <h2 class="text-xl font-extrabold text-white">Create Your 4-Digit PIN</h2>
+      <p class="text-xs text-slate-400 mt-1 mb-5">Dashboard kholne se pehle apna 4-digit PIN banana zaroori hai. Ye password ka replacement nahi hai.</p>
+      <div class="mb-4">
+        <label class="block text-xs font-semibold text-slate-300 mb-2">New 4-Digit PIN</label>
+        <input id="forcedPin" type="password" inputmode="numeric" maxlength="4" placeholder="••••" class="w-full bg-slate-900/60 border border-white/10 rounded-xl py-3 px-4 text-white placeholder-slate-500 text-sm input-focus outline-none transition" />
+      </div>
+      <div class="mb-5">
+        <label class="block text-xs font-semibold text-slate-300 mb-2">Confirm 4-Digit PIN</label>
+        <input id="forcedPinConfirm" type="password" inputmode="numeric" maxlength="4" placeholder="••••" class="w-full bg-slate-900/60 border border-white/10 rounded-xl py-3 px-4 text-white placeholder-slate-500 text-sm input-focus outline-none transition" />
+      </div>
+      <button type="button" onclick="submitForcedPin()" class="w-full py-3.5 rounded-xl card-gradient-1 text-white font-bold text-sm shadow-xl shadow-indigo-600/30 hover:opacity-95 transition">Create PIN</button>
+      <button type="button" onclick="handleLogout();hideForcedGates();document.getElementById('loginPage').classList.remove('hidden');" class="w-full mt-3 py-2.5 rounded-xl bg-white/5 border border-white/10 text-slate-300 font-bold text-xs hover:bg-white/10 transition">Logout</button>
+    </div>
+  </div>
+</div>
+
 <!-- ============= FORGOT PASSWORD MODAL ============= -->
 <div id="forgotModal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4 modal-overlay" onclick="if(event.target===this)closeForgotModal()">
   <div class="glass rounded-3xl p-7 w-full max-w-md shadow-2xl border border-white/10 fade-in relative overflow-hidden">
@@ -1898,6 +1939,16 @@ async function bootstrapData(){
     const me = await apiFetch('/me');
     if (!me.ok) throw new Error('Session unavailable');
     const identity = await me.json();
+    // Phase I: a restored session still owes the forced gates. Never render a
+    // dashboard first - route to the same gates a fresh login would show.
+    if (identity.role === 'EMPLOYEE' && identity.mustChangePassword === true) {
+      showForcedPasswordGate();
+      return;
+    }
+    if (identity.role === 'EMPLOYEE' && identity.pinSetupRequired === true) {
+      showForcedPinGate();
+      return;
+    }
     await loadAuthenticatedData(identity.role);
     document.getElementById('loginPage').classList.add('hidden');
     if (identity.role === 'HR') {
@@ -2038,6 +2089,18 @@ async function handleLogin(){
     });
     const result = await readApiResponse(response);
     if (!response.ok || !result.success) throw new Error(result.message || 'Authentication service unavailable.');
+    if (result.role === 'EMPLOYEE' && result.mustChangePassword === true) {
+      authToken = result.token;
+      sessionStorage.setItem('attendance_token', authToken);
+      showForcedPasswordGate();
+      return;
+    }
+    if (result.role === 'EMPLOYEE' && result.pinSetupRequired === true) {
+      authToken = result.token;
+      sessionStorage.setItem('attendance_token', authToken);
+      showForcedPinGate();
+      return;
+    }
     authToken = result.token;
     sessionStorage.setItem('attendance_token', authToken);
     await loadAuthenticatedData(result.role);
@@ -2060,11 +2123,97 @@ function handleLogout(){
   document.getElementById('empDashboard').classList.add('hidden');
   document.getElementById('hrDashboard').classList.add('hidden');
   document.getElementById('loginPage').classList.remove('hidden');
+  hideForcedGates();
   authToken = null;
   sessionStorage.removeItem('attendance_token');
   loggedInEmployee = null;
   Object.values(chartInstances).forEach(c => { try { c.destroy(); } catch(e){} });
   chartInstances = {};
+}
+
+/* =========================================================================
+   6b. PHASE I — FORCED CREDENTIAL GATES (web portal)
+   An employee whose account still owes the forced new password (temporary
+   password / HR force-change) or the one-time 4-digit PIN setup must NOT
+   enter the main dashboard. These gates are UI-only mirrors of the mobile
+   EmployeeNavigator gates; the backend requirePasswordChanged (all employee
+   data) + requirePinSetupDone (dashboard) middleware enforce the same rules,
+   so bypassing this UI still returns 403. HR login is never gated.
+   ========================================================================= */
+function showForcedPasswordGate(){
+  document.getElementById('loginPage').classList.add('hidden');
+  document.getElementById('empDashboard').classList.add('hidden');
+  document.getElementById('hrDashboard').classList.add('hidden');
+  document.getElementById('forcedPasswordGate').classList.remove('hidden');
+  document.getElementById('forcedPinGate').classList.add('hidden');
+  document.getElementById('forcedNewPass').value = '';
+  document.getElementById('forcedConfirmPass').value = '';
+  setTimeout(() => document.getElementById('forcedNewPass').focus(), 100);
+}
+function hideForcedGates(){
+  document.getElementById('forcedPasswordGate').classList.add('hidden');
+  document.getElementById('forcedPinGate').classList.add('hidden');
+}
+function showForcedPinGate(){
+  document.getElementById('loginPage').classList.add('hidden');
+  document.getElementById('empDashboard').classList.add('hidden');
+  document.getElementById('hrDashboard').classList.add('hidden');
+  document.getElementById('forcedPasswordGate').classList.add('hidden');
+  document.getElementById('forcedPinGate').classList.remove('hidden');
+  document.getElementById('forcedPin').value = '';
+  document.getElementById('forcedPinConfirm').value = '';
+  setTimeout(() => document.getElementById('forcedPin').focus(), 100);
+}
+async function submitForcedPassword(){
+  const currentPassword = document.getElementById('empPass').value;
+  const newPassword = document.getElementById('forcedNewPass').value;
+  const confirmPassword = document.getElementById('forcedConfirmPass').value;
+  if (!newPassword || newPassword !== confirmPassword) { showToast('Password Setup', 'New password and confirmation must match.'); return; }
+  if (newPassword.length < 8) { showToast('Password Setup', 'Password must be at least 8 characters long.'); return; }
+  try {
+    const response = await fetch(CONFIG.API_BASE + '/employee/password/change', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + authToken },
+      body: JSON.stringify({ currentPassword, newPassword, confirmPassword })
+    });
+    const result = await readApiResponse(response);
+    if (!response.ok || !result.success) throw new Error(result.message || 'Password setup failed.');
+    // Password gate cleared. If the one-time PIN setup is still owed, the
+    // employee goes there next - never straight to the dashboard.
+    const me = await apiFetch('/me');
+    const identity = me.ok ? await me.json() : null;
+    hideForcedGates();
+    if (identity && identity.pinSetupRequired === true) { showForcedPinGate(); return; }
+    await enterEmployeePortal();
+  } catch (error) {
+    showToast('Password Setup', error.message || 'Password setup failed.');
+  }
+}
+async function submitForcedPin(){
+  const pin = document.getElementById('forcedPin').value.trim();
+  const confirmPin = document.getElementById('forcedPinConfirm').value.trim();
+  if (!/^\d{4}$/.test(pin) || pin !== confirmPin) { showToast('PIN Setup', 'PIN must be exactly 4 digits and match the confirmation.'); return; }
+  try {
+    const response = await fetch(CONFIG.API_BASE + '/employee/pin/setup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + authToken },
+      body: JSON.stringify({ pin, confirmPin })
+    });
+    const result = await readApiResponse(response);
+    if (!response.ok || !result.success) throw new Error(result.message || 'PIN setup failed.');
+    hideForcedGates();
+    await enterEmployeePortal();
+  } catch (error) {
+    showToast('PIN Setup', error.message || 'PIN setup failed.');
+  }
+}
+async function enterEmployeePortal(){
+  await loadAuthenticatedData('EMPLOYEE');
+  hideForcedGates();
+  document.getElementById('loginPage').classList.add('hidden');
+  loggedInEmployee = employees[0];
+  document.getElementById('empDashboard').classList.remove('hidden');
+  initEmployee();
 }
 
 /* =========================================================================

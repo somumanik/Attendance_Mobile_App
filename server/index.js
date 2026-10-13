@@ -55,6 +55,20 @@ import {
   listSalaryMaster, listSalaryElements, listSalaryDues,
   createSalaryDue, decideSalaryDue, computeFullFinal,
 } from './salary-service.js';
+// SuperAdmin authentication lives in its OWN isolated module
+// (server/superadmin-auth.js). The HR login path never imports it and it has no
+// database access at all, so adding it cannot change HR or employee behaviour.
+import { isSuperAdminConfigured, verifySuperAdminLogin } from './superadmin-auth.js';
+// HR Admin accounts + per-module/action permissions (SuperAdmin console).
+// Application-owned tables only; the env HR/SA accounts remain the bootstrap.
+import {
+  ensureAdminAccessTables, hasPermission, moduleAllowed, getEffectivePermissions, savePermissions,
+  MODULE_CATALOG, SUPERADMIN_ONLY_MODULES, ACTION_KEYS,
+  listHrAdmins, createHrAdmin, setHrAdminActive, setHrAdminPassword, deleteHrAdmin, verifyHrAdminAccount,
+  listSuperAdmins, createSuperAdmin, setSuperAdminActive, setSuperAdminPassword, deleteSuperAdmin, verifySuperAdminAccount,
+  isBootstrapHr, validateAdminPassword,
+  getCompanyScope, setCompanyScope, listCompanyCodes, employeeCompany, companyInScope,
+} from './admin-access.js';
 
 const app = express();
 const port = Number(process.env.API_PORT || 4000);
@@ -161,8 +175,255 @@ function authenticate(req, res, next) {
   catch { res.status(401).json({ success: false, message: 'Invalid or expired session.' }); }
 }
 
+/* ---------------------------------------------------------------------------
+   SuperAdmin management surface (role-based authorisation).
+   ---------------------------------------------------------------------------
+   SuperAdmin is a MANAGEMENT role. It may call ONLY the configured management
+   endpoints below — Employee Leave, Employee Credentials, Holiday Management,
+   Salary / Full & Final and their Excel imports, plus the read-only employee
+   lookups those screens need.
+
+   Everything else stays HR-only: the attendance dashboards, Single Employee
+   Audit, analytics, diagnostics and email routes are NOT in this list, so a
+   SuperAdmin token gets a 403 there.
+
+   This is enforced on the SERVER, not by hiding UI. The check is placed inside
+   requireRole and only ever fires for role === 'SUPERADMIN' — a role that did
+   not exist before — so it is impossible for it to change the behaviour of any
+   existing HR or employee request.
+--------------------------------------------------------------------------- */
+const SUPERADMIN_MANAGEMENT_PATHS = [
+  '/api/hr/leave',                 // Employee leave management (+ balance import)
+  '/api/hr/employee/credentials',  // Employee credential management
+  '/api/hr/employee/',             // read-only single employee lookup
+  '/api/hr/employees',             // read-only employee picker
+  '/api/employees',                // read-only employee picker
+  '/api/hr/holidays',              // Holiday management
+  '/api/hr/holiday-categories',    // Holiday management helpers
+  '/api/hr/filters',               // filter metadata used by the management screens
+  '/api/hr/salary',                // Salary / Full & Final (+ imports)
+  '/api/email',                    // Email management / configuration
+  '/api/superadmin',               // HR Admin + SuperAdmin account management (SuperAdmin-only)
+];
+
+/** True when this request path is inside the SuperAdmin management surface. */
+function isSuperAdminManagementPath(req) {
+  const path = String(req.path || req.originalUrl || '').split('?')[0];
+  return SUPERADMIN_MANAGEMENT_PATHS.some((prefix) => path.startsWith(prefix));
+}
+
+/* ---------------------------------------------------------------------------
+   HR ADMIN module / action enforcement
+   ---------------------------------------------------------------------------
+   Maps the management endpoints to (module, action). Order matters: the FIRST
+   matching rule wins, so specific rules (import / decision / fullfinal) are
+   listed before their generic module prefix.
+
+   Endpoints that are NOT listed stay exactly as they were (attendance
+   dashboards, audit, analytics, celebrations, filters, diagnostics) — the phase
+   only gates the management modules, so existing HR functionality is preserved.
+--------------------------------------------------------------------------- */
+const HR_PERMISSION_RULES = [
+  // ---- Email Management
+  { methods: ['GET'], re: /^\/api\/email\//, module: 'email', action: 'view' },
+  { methods: ['POST', 'PUT', 'PATCH'], re: /^\/api\/email\//, module: 'email', action: 'email' },
+  // ---- Employee Credential Management
+  { methods: ['GET'], re: /^\/api\/hr\/employee\/credentials/, module: 'credentials', action: 'view' },
+  { methods: ['POST'], re: /^\/api\/hr\/employee\/credentials/, module: 'credentials', action: 'edit' },
+  // ---- Holiday Management
+  { methods: ['GET'], re: /^\/api\/hr\/holidays/, module: 'holidays', action: 'view' },
+  { methods: ['POST'], re: /^\/api\/hr\/holidays/, module: 'holidays', action: 'create' },
+  { methods: ['PUT', 'PATCH'], re: /^\/api\/hr\/holidays/, module: 'holidays', action: 'edit' },
+  { methods: ['DELETE'], re: /^\/api\/hr\/holidays/, module: 'holidays', action: 'delete' },
+  { methods: ['GET'], re: /^\/api\/hr\/holidays/, module: 'holidays', action: 'view' },
+  { methods: ['GET'], re: /^\/api\/hr\/holiday-categories/, module: 'holidays', action: 'view' },
+  // ---- Leave Management
+  { methods: ['POST'], re: /^\/api\/hr\/leave\/[^/]+\/import$/, module: 'leave', action: 'import' },
+  { methods: ['POST'], re: /^\/api\/hr\/leave\/requests\/[^/]+\/decision$/, module: 'leave', action: 'approve' },
+  { methods: ['GET'], re: /^\/api\/hr\/leave/, module: 'leave', action: 'view' },
+  { methods: ['POST'], re: /^\/api\/hr\/leave/, module: 'leave', action: 'create' },
+  { methods: ['PUT', 'PATCH'], re: /^\/api\/hr\/leave/, module: 'leave', action: 'edit' },
+  { methods: ['DELETE'], re: /^\/api\/hr\/leave/, module: 'leave', action: 'delete' },
+  // ---- Salary Management / Full & Final Management
+  { methods: ['POST'], re: /^\/api\/hr\/salary\/[^/]+\/import$/, module: 'salary', action: 'import' },
+  { methods: ['POST'], re: /^\/api\/hr\/salary\/dues\/[^/]+\/decision$/, module: 'salary', action: 'approve' },
+  { methods: ['GET'], re: /^\/api\/hr\/salary\/fullfinal/, module: 'fullfinal', action: 'view' },
+  { methods: ['GET'], re: /^\/api\/hr\/salary/, module: 'salary', action: 'view' },
+  { methods: ['POST'], re: /^\/api\/hr\/salary/, module: 'salary', action: 'create' },
+  { methods: ['PUT', 'PATCH'], re: /^\/api\/hr\/salary/, module: 'salary', action: 'edit' },
+  { methods: ['DELETE'], re: /^\/api\/hr\/salary/, module: 'salary', action: 'delete' },
+  // ---- Employee Management
+  { methods: ['GET'], re: /^\/api\/(hr\/)?employees/, module: 'employees', action: 'view' },
+  { methods: ['GET'], re: /^\/api\/hr\/employee\/[^/]+$/, module: 'employees', action: 'view' },
+  /* ---- Phase 4.4 — HR NAVIGATION SECTIONS.
+     These routes previously had NO module gate, so every HR account could reach them.
+     Each is now gated on its real section key with `legacy: true`, so an account with no
+     stored row for that section keeps the historical ALLOW behaviour, while an explicit
+     Visible=Hidden or View=false row denies it — which is what makes the SuperAdmin
+     Visible/Hidden and View controls enforceable on the SERVER, not just in the UI. */
+  { methods: ['GET'], re: /^\/api\/hr\/dashboard$/, module: 'dashboard', action: 'view', legacy: true },
+  { methods: ['GET'], re: /^\/api\/hr\/summary$/, module: 'dashboard', action: 'view', legacy: true },
+  { methods: ['GET'], re: /^\/api\/hr\/audit\//, module: 'audit', action: 'view', legacy: true },
+  { methods: ['GET'], re: /^\/api\/hr\/category-analytics$/, module: 'analytics', action: 'view', legacy: true },
+  { methods: ['GET'], re: /^\/api\/hr\/dashboard-charts$/, module: 'analytics', action: 'view', legacy: true },
+  { methods: ['GET'], re: /^\/api\/hr\/late-employees$/, module: 'analytics', action: 'view', legacy: true },
+  { methods: ['GET'], re: /^\/api\/hr\/daily(-master)?$/, module: 'dailymaster', action: 'view', legacy: true },
+  { methods: ['GET'], re: /^\/api\/hr\/celebrations$/, module: 'celebrations', action: 'view', legacy: true },
+  { methods: ['GET'], re: /^\/api\/marriage-anniversary$/, module: 'marriage', action: 'view', legacy: true },
+  { methods: ['POST'], re: /^\/api\/marriage-anniversary\/(validate|import)$/, module: 'marriage', action: 'edit', legacy: true },
+  { methods: ['DELETE'], re: /^\/api\/marriage-anniversary\//, module: 'marriage', action: 'delete', legacy: true },
+];
+
+/** First matching permission rule for this request, or null (not gated). */
+function matchHrPermissionRule(req) {
+  const path = String(req.path || req.originalUrl || '').split('?')[0];
+  const method = String(req.method || 'GET').toUpperCase();
+  for (const rule of HR_PERMISSION_RULES) {
+    if (rule.methods.includes(method) && rule.re.test(path)) return rule;
+  }
+  return null;
+}
+
+/**
+ * Reads the SAVED permission from the application store on EVERY request, so a
+ * revoked permission denies the very next call — even from an already-open
+ * screen or a hand-written API request. Fails closed if the store is unusable.
+ */
+function enforceHrModulePermission(req, res, next, rule) {
+  const username = req.user?.sub;
+  if (!username) return res.status(401).json({ success: false, message: 'Authentication required.' });
+  getPool()
+    .then(async (pool) => {
+      await ensureAdminAccessTables(pool);
+      /* Phase 4.4: ONE gate for every module rule, using the visibility-aware check.
+         `legacy: true` keeps the historical ALLOW for a section with no stored row
+         (the six new navigation sections); the pre-existing module rules keep their
+         strict behaviour. Because `visible` is NULL for every pre-existing row,
+         `visible === false` can never be true for existing data, so this change is
+         behaviour-preserving for existing accounts while making Hidden block DATA
+         (not just the tab) for every section. */
+      return moduleAllowed(pool, username, rule.module, rule.action, rule.legacy === true);
+    })
+    .then((allowed) => {
+      if (allowed) return next();
+      /* Phase 4.4.2 — name the EXACT setting to enable so the operator can fix it in the
+         SuperAdmin console, instead of a vague message. No internals are exposed. */
+      const ACTION_LABEL = { view: 'View', create: 'Add', edit: 'Edit', delete: 'Delete', import: 'Import', export: 'Export', approve: 'Approve', email: 'Email' };
+      return res.status(403).json({
+        success: false,
+        code: 'PERMISSION_DENIED',
+        module: rule.module,
+        action: rule.action,
+        message: `Your HR Admin account is not permitted to ${rule.action} the ${rule.module} module. Enable "${ACTION_LABEL[rule.action] || rule.action}" for the "${rule.module}" section for this account in the SuperAdmin console (HR Admin Accounts).`,
+      });
+    })
+    .catch((error) => sendDbError(res, error));
+}
+
+/**
+ * Combined HR Admin gate: COMPANY SCOPE + MODULE/ACTION permission.
+ *
+ * Both must pass. The company scope is resolved from the verified JWT subject
+ * (`req.user.sub`) plus the stored assignment — a company code sent by the
+ * client is only ever VALIDATED against that scope, never trusted as proof.
+ *
+ * Fail-closed rules:
+ *   - a table-based HR Admin with NO assigned company is denied (403)
+ *   - an out-of-scope `companycode`/`company`/`companies` in query or body is denied
+ *   - a referenced employee whose company is outside the scope, or cannot be
+ *     resolved at all, is denied
+ * The `.env` bootstrap HR account is unrestricted (recovery path, never locked out).
+ */
+function enforceHrAccess(req, res, next) {
+  const username = req.user?.sub;
+  if (!username) return res.status(401).json({ success: false, message: 'Authentication required.' });
+
+  getPool()
+    .then(async (pool) => {
+      await ensureAdminAccessTables(pool);
+      // scope === null  -> unrestricted (bootstrap HR)
+      // scope === []    -> nothing assigned -> DENY
+      const scope = await getCompanyScope(pool, username);
+
+      if (scope !== null) {
+        if (scope.length === 0) {
+          return { deny: { status: 403, code: 'COMPANY_NOT_ASSIGNED', message: 'No company has been assigned to this HR Admin account. Contact SuperAdmin.' } };
+        }
+
+        // 1) Any company code the caller supplied must be inside the scope.
+        const supplied = [];
+        for (const key of ['companycode', 'company', 'companies', 'companyCode']) {
+          const v = req.query?.[key];
+          if (v) supplied.push(...String(v).split(','));
+          const b = req.body?.[key];
+          if (b) supplied.push(...String(b).split(','));
+        }
+        for (const raw of supplied) {
+          const code = String(raw || '').trim();
+          if (code && !companyInScope(scope, code)) {
+            return { deny: { status: 403, code: 'COMPANY_FORBIDDEN', message: `You are not authorized for company ${code}.` } };
+          }
+        }
+
+        // 2) A referenced employee must belong to an in-scope company.
+        const paycode = req.params?.paycode || req.body?.paycode || req.query?.paycode;
+        if (paycode) {
+          const empCompany = await employeeCompany(pool, paycode);
+          if (empCompany === null) {
+            return { deny: { status: 403, code: 'COMPANY_UNRESOLVED', message: 'That employee has no resolvable company; access denied.' } };
+          }
+          if (!companyInScope(scope, empCompany)) {
+            return { deny: { status: 403, code: 'COMPANY_FORBIDDEN', message: 'That employee belongs to a company you are not authorized for.' } };
+          }
+        }
+      }
+
+      return { pool, companyScope: scope };
+    })
+    .then((result) => {
+      if (result.deny) {
+        return res.status(result.deny.status).json({ success: false, code: result.deny.code, message: result.deny.message });
+      }
+      // Prompt 4: expose the SERVER-resolved company scope to the handlers so the
+      // actual SQL can be filtered. `null` = unrestricted (bootstrap HR);
+      // an array = the only company codes this HR Admin may ever see.
+      req.hrCompanyScope = result.companyScope;
+      // Reusable, injection-safe SQL fragment for the shared query layer.
+      // '' when the caller is unrestricted (bootstrap HR) or the route is not
+      // company-shaped; otherwise it restricts the result set to the scope.
+      req.hrCompanyScopeClause = Array.isArray(result.companyScope) && result.companyScope.length
+        ? `AND LTRIM(RTRIM(e.companycode)) IN (${result.companyScope
+            .map((c) => `'${String(c).replace(/'/g, "''")}'`)
+            .join(', ')})`
+        : '';
+      // Company scope passed — now the existing module/action permission rule.
+      const rule = matchHrPermissionRule(req);
+      if (rule) return enforceHrModulePermission(req, res, next, rule);
+      return next();
+    })
+    .catch((error) => sendDbError(res, error));
+}
+
 function requireRole(...roles) {
-  return (req, res, next) => roles.includes(req.user?.role) ? next() : res.status(403).json({ success: false, message: 'Forbidden.' });
+  return (req, res, next) => {
+    const role = req.user?.role;
+    if (roles.includes(role)) {
+      // Role confirmed. An HR Admin is additionally gated by its saved COMPANY
+      // scope AND its saved module/action permissions (SuperAdmin bypasses both:
+      // it keeps its allow-listed full management access).
+      if (role === 'HR') {
+        return enforceHrAccess(req, res, next);
+      }
+      return next();
+    }
+    // SuperAdmin management scope: only when the route is HR-guarded AND the
+    // path is explicitly allow-listed. Any other role always falls through to
+    // the unchanged 403 below.
+    if (role === 'SUPERADMIN' && roles.includes('HR') && isSuperAdminManagementPath(req)) {
+      return next();
+    }
+    return res.status(403).json({ success: false, message: 'Forbidden.' });
+  };
 }
 
 /**
@@ -294,7 +555,7 @@ function punchTimeToMinutes(punchValue) {
   return d.getUTCHours() * 60 + d.getUTCMinutes();
 }
 
-function computeLateStatus(row, shiftMap, employeeCategory, companycode, paycode) {
+function computeLateStatus(row, shiftMap, employeeCategory, companycode, paycode, shiftCodeOverride = null) {
   if (!row) return { isLate: false, lateMinutes: 0, graceUsed: null };
   
   // Check if status is explicitly LATE
@@ -307,11 +568,19 @@ function computeLateStatus(row, shiftMap, employeeCategory, companycode, paycode
   const punchMinutes = punchTimeToMinutes(inTime);
   if (punchMinutes === null) return { isLate: false, lateMinutes: 0, graceUsed: null };
   
-  // Get shift code - use row.shift or fallback to employee-shift mapping
-  let shiftCode = row.shift;
+  /* PHASE 6 — Savior LIVE shift sync (authoritative shift source).
+     Pehle yahan `row.shift` (dbo.tbltimeregister ka purana/processed shift) priority
+     leta tha, isliye Savior portal par shift badalne ke baad bhi Late Coming purane
+     shift se hi calculate hota rehta tha. Ab EMPLOYEE ki CURRENT assignment
+     (dbo.tblemployeeshiftmaster, jo loadEmployeeShiftMap() se aati hai) PEHLE dekhi
+     jaati hai — yehi authoritative source hai. Register ka shift sirf LAST fallback
+     hai (jab employee mapping hi na mile). PROMPT 4.2 cold-process guard bhi bana
+     hua hai: empShiftCache kabhi null nahi hota (cold process safe). */
+  let shiftCode = shiftCodeOverride ? String(shiftCodeOverride).trim() : '';
   if (!shiftCode && paycode) {
-    shiftCode = empShiftCache.get(String(paycode).trim());
+    shiftCode = empShiftCache ? (empShiftCache.get(String(paycode).trim()) || '') : '';
   }
+  if (!shiftCode) shiftCode = row.shift;
   
   // Get shift start time
   const shiftStartMinutes = getShiftStartMinutes(shiftMap, shiftCode, companycode);
@@ -344,7 +613,7 @@ function computeLateStatus(row, shiftMap, employeeCategory, companycode, paycode
  * - 30min grace (2/month) ? 1hr grace (1/month) ? 2hr grace (1/month)
  * - Once a grace is consumed, it's unavailable for subsequent late events in the same month
  */
-function computeMonthlyLateForEmployee(rows, shiftMap, employeeCategory, companycode, paycode, year, month) {
+function computeMonthlyLateForEmployee(rows, shiftMap, employeeCategory, companycode, paycode, year, month, shiftCodeOverride = null) {
   const isStaff = isStaffCategory(employeeCategory, categoryCache);
   
   // Initialize grace allowances for this employee/month
@@ -369,7 +638,9 @@ function computeMonthlyLateForEmployee(rows, shiftMap, employeeCategory, company
   const lateDetails = [];
   
   for (const row of monthRows) {
-    const lateStatus = computeLateStatus(row, shiftMap, employeeCategory, companycode, paycode);
+    // PHASE 6: har row par resolved (current) shift hi lagu hoti hai, isliye poore
+    // selected month ka Late Coming latest assigned shift se recalculate hota hai.
+    const lateStatus = computeLateStatus(row, shiftMap, employeeCategory, companycode, paycode, shiftCodeOverride);
     
     if (!lateStatus.isLate) {
       continue;
@@ -511,19 +782,35 @@ function usableRegisterRows(rows) {
 // Miss     = DISTINCT employees with >=1 incomplete row and zero complete rows.
 // Absent   = staff - punched - weekoff-only (daily: staff with no punch row).
 // Late     = DISTINCT employees with FINAL late (after monthly Staff grace consumption) in range.
-async function aggregateAttendance(pool, fromDate, toDate, activeFilter = 'Y') {
+async function aggregateAttendance(pool, fromDate, toDate, activeFilter = 'Y', companyScope = null) {
   // Ongoing-shift context (tblshiftmaster): aaj ki incomplete shift Miss Punch nahi.
   const shiftMap = await loadShiftEndTimes(pool);
   const categoryMap = await loadCategoryNames(pool);
   const empShiftMap = await loadEmployeeShiftMap(pool);
   const nowMin = indiaNowMinutes(), todayIso = indiaTodayISO();
   let empQuery = 'SELECT paycode, LTRIM(RTRIM(cat)) AS cat, LTRIM(RTRIM(companycode)) AS companycode FROM dbo.tblemployee';
+  const empConditions = [];
   if (activeFilter === 'Y') {
-    empQuery += " WHERE LTRIM(RTRIM(active)) = 'Y'";
+    empConditions.push("LTRIM(RTRIM(active)) = 'Y'");
   } else if (activeFilter === 'N') {
-    empQuery += " WHERE LTRIM(RTRIM(active)) = 'N'";
+    empConditions.push("LTRIM(RTRIM(active)) = 'N'");
   }
-  // activeFilter === null or 'ALL' -> no filter
+  // activeFilter === null or 'ALL' -> no active filter
+  // Prompt 4.1 — COMPANY ISOLATION at the query level. `null` = unrestricted
+  // (bootstrap HR / SuperAdmin); an array restricts the population itself, so
+  // every count/chart/aggregate derived from it is scoped too. Codes come from
+  // dbo.HR_AdminCompany and are quote-escaped.
+  if (Array.isArray(companyScope)) {
+    if (companyScope.length === 0) {
+      return { totalstaff: 0, punched: 0, complete: 0, miss: 0, absent: 0, late: 0, rawPunchRecords: 0 };
+    }
+    empConditions.push(
+      `LTRIM(RTRIM(companycode)) IN (${companyScope
+        .map((c) => `'${String(c).replace(/'/g, "''")}'`)
+        .join(', ')})`,
+    );
+  }
+  if (empConditions.length) empQuery += ' WHERE ' + empConditions.join(' AND ');
   const [empResult, regResult, rawResult] = await Promise.all([
     pool.request().query(empQuery),
     pool.request().input('fromDate', sql.Date, fromDate).input('toDate', sql.Date, toDate).query(
@@ -645,6 +932,116 @@ async function loadShiftEndTimes(pool) {
   return shiftEndCache;
 }
 
+/* ============================================================================
+   PHASE 6 — AUTHORITATIVE EMPLOYEE SHIFT LOOKUP (Savior LIVE shift sync)
+   ----------------------------------------------------------------------------
+   Employee ka CURRENT shift dbo.tblemployeeshiftmaster se milta hai.
+   Verified schema (read-only inspection):
+     dbo.tblemployeeshiftmaster: paycode (PK, char 12), shift (char 3), ...
+     - ek row per paycode; koi effective-date / company column NAHI hai.
+     - isliye "latest assigned" = us paycode ki current row (jise Savior web
+       portal update karta hai).
+     dbo.tblshiftmaster: shift (char 3) + companycode (char 5) + starttime/endtime.
+     - timing company-wise hoti hai, isliye employee ke companycode se exact row
+       match karte hain, warna us shift ka koi bhi row (default) le lete hain.
+   Ye lookup INTENTIONALLY non-cached hai (per call SELECT) taaki Savior portal par
+   shift badalne ke turant baad app fresh value dikhaye — koi stale in-memory /
+   persistent cache purana shift wapas nahi laata. Sirf READ-only SQL; Savior me
+   koi write / schema change nahi hota.
+   ============================================================================ */
+function minutesToClockLabel(minutes) {
+  if (minutes === null || minutes === undefined || Number.isNaN(Number(minutes))) return null;
+  const total = ((Number(minutes) % 1440) + 1440) % 1440;
+  const h = Math.floor(total / 60);
+  const m = total % 60;
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  let h12 = h % 12;
+  if (h12 === 0) h12 = 12;
+  return `${String(h12).padStart(2, '0')}:${String(m).padStart(2, '0')} ${ampm}`;
+}
+
+// Return shape is always the same, so callers can rely on it (resolved true/false).
+function unresolvedShift(paycode, companycode, reason) {
+  return {
+    paycode: paycode || null,
+    resolved: false,
+    shiftCode: null,
+    shiftName: null,
+    startTime: null,
+    endTime: null,
+    startMinutes: null,
+    endMinutes: null,
+    companycode: companycode || null,
+    source: null,
+    reason: reason || 'UNRESOLVED',
+  };
+}
+
+async function resolveEmployeeShift(pool, paycode, companycode = null) {
+  const pc = String(paycode == null ? '' : paycode).trim();
+  if (!pc) return unresolvedShift(null, companycode, 'NO_PAYCODE');
+  try {
+    // 1) Employee ki CURRENT assigned shift (authoritative).
+    const a = await pool.request()
+      .input('paycode', sql.VarChar(50), pc)
+      .query(`SELECT TOP 1 LTRIM(RTRIM(shift)) AS shift
+              FROM dbo.tblemployeeshiftmaster
+              WHERE LTRIM(RTRIM(paycode)) = @paycode
+              ORDER BY LTRIM(RTRIM(paycode))`);
+    const shiftCode = String(a.recordset?.[0]?.shift || '').trim();
+    if (!shiftCode) {
+      console.warn(`[SHIFT_LOOKUP] NO_SHIFT_MAPPING for paycode=${pc}`);
+      return unresolvedShift(pc, companycode, 'NO_SHIFT_MAPPING');
+    }
+
+    // 2) Company code (caller pass kare to wahi; warna employee master se).
+    let comp = String(companycode || '').trim();
+    if (!comp) {
+      const c = await pool.request()
+        .input('paycode', sql.VarChar(50), pc)
+        .query(`SELECT TOP 1 LTRIM(RTRIM(companycode)) AS companycode
+                FROM dbo.tblemployee WHERE LTRIM(RTRIM(paycode)) = @paycode`);
+      comp = String(c.recordset?.[0]?.companycode || '').trim();
+    }
+
+    // 3) Shift master se actual start/end (company match pehle, warna default).
+    const m = await pool.request()
+      .input('shift', sql.VarChar(50), shiftCode)
+      .input('companycode', sql.VarChar(50), comp || null)
+      .query(`SELECT TOP 1 LTRIM(RTRIM(shift)) AS shift, LTRIM(RTRIM(companycode)) AS companycode,
+                     starttime, endtime
+              FROM dbo.tblshiftmaster
+              WHERE LTRIM(RTRIM(shift)) = @shift
+              ORDER BY CASE WHEN LTRIM(RTRIM(companycode)) = @companycode THEN 0 ELSE 1 END,
+                       LTRIM(RTRIM(companycode))`);
+    const row = m.recordset?.[0];
+    if (!row) {
+      console.warn(`[SHIFT_LOOKUP] SHIFT_NOT_IN_MASTER for paycode=${pc} shift=${shiftCode} company=${comp || ''}`);
+      return { ...unresolvedShift(pc, comp || null, 'SHIFT_NOT_IN_MASTER'), shiftCode, shiftName: shiftCode };
+    }
+    const startMinutes = shiftTimeToMinutes(row.starttime);
+    const endMinutes = shiftTimeToMinutes(row.endtime);
+    return {
+      paycode: pc,
+      resolved: true,
+      shiftCode,
+      // tblshiftmaster me alag 'shift name' column nahi hai — code hi display naam hai.
+      shiftName: shiftCode,
+      startTime: minutesToClockLabel(startMinutes),
+      endTime: minutesToClockLabel(endMinutes),
+      startMinutes,
+      endMinutes,
+      companycode: String(row.companycode || comp || '').trim() || null,
+      source: 'tblemployeeshiftmaster+tblshiftmaster',
+      reason: null,
+    };
+  } catch (error) {
+    // SQL error ko chupchap fake data me nahi badalte — caller ko explicit failure milta hai.
+    console.warn(`[SHIFT_LOOKUP] LOOKUP_ERROR for paycode=${pc}: ${String((error && error.message) || error).slice(0, 200)}`);
+    return { ...unresolvedShift(pc, companycode, 'LOOKUP_ERROR'), error: String((error && error.message) || error).slice(0, 200) };
+  }
+}
+
 /* ---- CATEGORY NAME CACHE ----
    dbo.tblcategory maps category codes (e.g. "STF", "MGR") to names.
    tblemployee.cat stores the category CODE, not the name.
@@ -675,11 +1072,15 @@ async function loadCategoryNames(pool) {
 /* ---- EMPLOYEE SHIFT ASSIGNMENT CACHE ----
    dbo.tblemployeeshiftmaster maps paycode ? shift code (with optional effective dates).
    Used as fallback when tbltimeregister.shift is null/empty. */
-let empShiftCache = null;
+let empShiftCache = new Map();   // PROMPT 4.2: never null — cold-process safety (see computeLateStatus)
 let empShiftLoadedAt = 0;
-const EMP_SHIFT_TTL_MS = 10 * 60 * 1000;
-async function loadEmployeeShiftMap(pool) {
-  if (empShiftCache && Date.now() - empShiftLoadedAt < EMP_SHIFT_TTL_MS) return empShiftCache;
+// PHASE 6 — TTL 30 second (pehle 10 minute thi). Savior portal par shift change hone ke
+// baad app ko stale shift nahi dikhana chahiye. Employee-facing / HR-detail calls
+// `{ force: true }` ke saath aati hain aur TTL bypass karti hain (query chhoti hai:
+// ek row per paycode). Batch/aggregate screens cached value use karti hain.
+const EMP_SHIFT_TTL_MS = 30 * 1000;
+async function loadEmployeeShiftMap(pool, { force = false } = {}) {
+  if (!force && empShiftCache && Date.now() - empShiftLoadedAt < EMP_SHIFT_TTL_MS) return empShiftCache;
   try {
     const r = await pool.request().query('SELECT LTRIM(RTRIM(paycode)) AS paycode, LTRIM(RTRIM(shift)) AS shift FROM dbo.tblemployeeshiftmaster');
     const map = new Map();
@@ -771,7 +1172,12 @@ function isOngoingShiftRow(row, shiftMap, nowMin, todayIso) {
   if (!(row.in1 || row.in2)) return false;          // koi IN punch nahi ? Absent branch
   let endMin = shiftTimeToMinutes(row.shiftendtime); // register row ka apna shift end (jab populated ho)
   if (endMin === null) {
-    const entry = shiftMap && shiftMap.get(String(row.shift || '').trim());
+    // PHASE 6 — employee ki CURRENT (resolved) shift pehle, register ka shift fallback.
+    const effShift = row.currentShift
+      || (row.paycode && empShiftCache ? empShiftCache.get(String(row.paycode).trim()) : '')
+      || row.shift
+      || '';
+    const entry = shiftMap && shiftMap.get(String(effShift).trim());
     if (!entry) return true;                        // shift config unknown ? din bhar in-progress
     const chosen = entry.byCompany.get(String(row.companycode || '').trim()) || { end: entry.defaultEnd, cross: entry.defaultCross };
     if (chosen.cross) return true;                  // midnight-crossing shift aaj complete nahi hoti
@@ -807,17 +1213,36 @@ function classifyRow(row) {
   return 'Absent';
 }
 
-function normalizeAttendance(row, shiftMap, employeeCategory, companycode) {
+function normalizeAttendance(row, shiftMap, employeeCategory, companycode, shiftInfo = null) {
+  // PHASE 6: resolved (current) shift code ko late calculation me EXPLICIT pass karte
+  // hain, taaki hr screen aur har row same authoritative shift par Late nikaale.
+  const resolvedShiftCode = shiftInfo && shiftInfo.resolved ? shiftInfo.shiftCode : null;
   const lateResult = shiftMap && employeeCategory !== undefined
-    ? computeLateStatus(row, shiftMap, employeeCategory, companycode, row.paycode)
+    ? computeLateStatus(row, shiftMap, employeeCategory, companycode, row.paycode, resolvedShiftCode)
     : { isLate: isLateRow(row), lateMinutes: Number(row.latearrival || 0), graceUsed: null };
   
   const normalized = {
-    paycode: row.paycode, date: row.dateoffice, dateoffice: row.dateoffice, shift: row.shift,
+    paycode: row.paycode, date: row.dateoffice, dateoffice: row.dateoffice,
+    // PHASE 6 — `shift` ab resolved (CURRENT) shift dikhata hai jab mapping mil jaye,
+    // warna register ka purana shift (safe fallback). Raw value `registerShift` me
+    // alag se safe rehta hai, isliye koi purani transparency kam nahi hoti.
+    shift: resolvedShiftCode || row.shift,
+    registerShift: row.shift,
     in1: row.in1, in2: row.in2, out1: row.out1, out2: row.out2,
     hoursworked: row.hoursworked, otduration: row.otduration ?? null, latearrival: lateResult.lateMinutes,
     status: row.status, statusCode: attendanceCode(row.status),
-    isLate: lateResult.isLate, reason: row.reason, graceUsed: lateResult.graceUsed
+    isLate: lateResult.isLate, reason: row.reason, graceUsed: lateResult.graceUsed,
+    /* PHASE 6 — additive shift fields (purane fields waise hi hain, backward compatible).
+       currentShift/shiftName/shiftStart/shiftEnd employee ki LATEST resolved Savior shift
+       batate hain, jo selected month ke HAR din par lagu hoti hai. `shift` purane
+       register value ke roop me bhi bana hua hai (registerShift). */
+    currentShift: resolvedShiftCode,
+    shiftName: shiftInfo && shiftInfo.resolved ? (shiftInfo.shiftName || shiftInfo.shiftCode) : null,
+    shiftStart: resolvedShiftCode ? (shiftInfo.startTime || null) : null,
+    shiftEnd: resolvedShiftCode ? (shiftInfo.endTime || null) : null,
+    shiftResolved: Boolean(shiftInfo && shiftInfo.resolved),
+    shiftSource: resolvedShiftCode ? 'EMPLOYEE_ASSIGNMENT' : (row.shift ? 'REGISTER' : 'UNRESOLVED'),
+    shiftUnavailableReason: shiftInfo && !shiftInfo.resolved ? (shiftInfo.reason || 'UNRESOLVED') : null
   };
   // DB datetime untouched; display-only IST wall-clock time (HH:MM AM/PM).
   normalized.inTime = formatPunchTimeIST(row.in1 || row.in2);
@@ -841,7 +1266,15 @@ function calculateStats(rows) {
   }, { present: 0, absent: 0, miss: 0, late: 0, hours: 0 });
 }
 
-async function queryAttendance(pool, paycode, range) {
+/**
+ * Attendance rows for one paycode, or for a whole SCOPED population.
+ *
+ * `scopeClause` (Phase 4.4.1) is an OPTIONAL server-built SQL fragment appended to the
+ * WHERE. It is only ever produced from the server-resolved assignment array with quote
+ * escaping, so it cannot be influenced by the client. Default '' keeps every existing
+ * caller (the single-employee audit) byte-for-byte unchanged.
+ */
+async function queryAttendance(pool, paycode, range, scopeClause = '') {
   const request = pool.request()
     .input('paycode', sql.VarChar(50), paycode || null)
     .input('fromDate', sql.Date, range.fromDate)
@@ -852,6 +1285,7 @@ async function queryAttendance(pool, paycode, range) {
     WHERE (@paycode IS NULL OR paycode = @paycode)
       AND dateoffice >= @fromDate
       AND dateoffice < DATEADD(DAY, 1, @toDate)
+      ${scopeClause}
     ORDER BY dateoffice DESC`);
   return result.recordset;
 }
@@ -1136,7 +1570,7 @@ app.put('/api/hr/leave/config', authenticate, requireRole('HR'), requireDbConfig
 
 app.get('/api/hr/leave/balances', authenticate, requireRole('HR'), requireDbConfig,
   withLeaveProvider(async ({ req, res, pool, provider }) => {
-    res.json({ success: true, ...(await provider.listBalances(pool, { leaveyear: req.query?.leaveyear, search: req.query?.search, limit: req.query?.limit })) });
+    res.json({ success: true, ...(await provider.listBalances(pool, { leaveyear: req.query?.leaveyear, search: req.query?.search, limit: req.query?.limit, companyScope: req.hrCompanyScope })) });
   }));
 
 app.get('/api/hr/leave/requests', authenticate, requireRole('HR'), requireDbConfig,
@@ -1146,6 +1580,7 @@ app.get('/api/hr/leave/requests', authenticate, requireRole('HR'), requireDbConf
       status: req.query?.status,
       search: req.query?.search,
       limit: req.query?.limit,
+      companyScope: req.hrCompanyScope,
     });
     const pending = requests.filter((r) => r.status === 'Pending').length;
     res.json({ success: true, requests, counts: { total: requests.length, pending } });
@@ -1153,7 +1588,7 @@ app.get('/api/hr/leave/requests', authenticate, requireRole('HR'), requireDbConf
 
 app.post('/api/hr/leave/requests/:id/decision', authenticate, requireRole('HR'), requireDbConfig,
   withLeaveProvider(async ({ req, res, pool, provider }) => {
-    const outcome = await provider.decideRequest(pool, { id: req.params?.id, decision: req.body?.decision, note: req.body?.note, actor: req.user?.sub });
+    const outcome = await provider.decideRequest(pool, { id: req.params?.id, decision: req.body?.decision, note: req.body?.note, actor: req.user?.sub, companyScope: req.hrCompanyScope });
     if (!outcome.ok) return res.status(outcome.status).json({ success: false, message: outcome.message, code: outcome.code });
     res.json({ success: true, request: outcome.request });
   }));
@@ -1169,7 +1604,7 @@ app.post('/api/hr/leave/balances/import', authenticate, requireRole('HR'), requi
     const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
     if (!rows.length) return res.status(400).json({ success: false, message: 'No rows to import.', code: 'NO_ROWS' });
     if (rows.length > 5000) return res.status(400).json({ success: false, message: 'Please import at most 5000 rows at a time.', code: 'TOO_MANY_ROWS' });
-    const summary = await provider.importBalances(pool, { rows, actor: req.user?.sub });
+    const summary = await provider.importBalances(pool, { rows, actor: req.user?.sub, companyScope: req.hrCompanyScope });
     res.json({ success: true, summary });
   }));
 
@@ -1570,7 +2005,40 @@ app.post('/api/auth/employee/reset-password', requireConfiguredAuth, async (req,
 // EMPLOYEE token is rejected with 403 and can never reset another employee.
 // Password reset changes password columns only; PIN reset changes PIN columns
 // only. No hash, password or PIN is ever returned or logged.
-app.get('/api/hr/employee/credentials', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+/**
+ * PROMPT 4.2 — COMPANY ISOLATION for paycode-keyed HR credential operations.
+ *
+ * All six /api/hr/employee/credentials* routes act on ONE employee identified by a
+ * paycode supplied in the query/body, and none of them previously verified that the
+ * employee belongs to a company the HR Admin is assigned to — so a scoped admin could
+ * reset another company's employee password, PIN or login access.
+ *
+ * This single middleware resolves the paycode -> company from dbo.tblemployee and
+ * fails CLOSED (403 COMPANY_FORBIDDEN) when the paycode is missing/unresolvable or the
+ * employee's company is outside req.hrCompanyScope. A null scope means the unrestricted
+ * bootstrap HR / SuperAdmin path, which stays byte-for-byte unchanged. It only READS
+ * dbo.tblemployee; it never touches password/PIN columns.
+ */
+async function requirePaycodeInScope(req, res, next) {
+  try {
+    if (!req.hrCompanyScope) return next();
+    const paycode = String(req.body?.paycode ?? req.query?.paycode ?? '').trim();
+    const allowed = req.hrCompanyScope.map((c) => String(c).trim().toUpperCase());
+    if (!allowed.length || !paycode) {
+      return res.status(403).json({ success: false, code: 'COMPANY_FORBIDDEN', message: 'You are not authorized for this employee.' });
+    }
+    const pool = await getPool();
+    const r = await pool.request().input('paycode', sql.VarChar(50), paycode)
+      .query('SELECT TOP 1 LTRIM(RTRIM(companycode)) AS companycode FROM dbo.tblemployee WHERE LTRIM(RTRIM(paycode)) = @paycode');
+    const comp = String(r.recordset?.[0]?.companycode || '').trim().toUpperCase();
+    if (!comp || !allowed.includes(comp)) {
+      return res.status(403).json({ success: false, code: 'COMPANY_FORBIDDEN', message: 'This employee belongs to a company outside your access.' });
+    }
+    return next();
+  } catch (error) { return sendDbError(res, error); }
+}
+
+app.get('/api/hr/employee/credentials', authenticate, requireRole('HR'), requireDbConfig, requirePaycodeInScope, async (req, res) => {
   try {
     const pool = await getPool();
     const outcome = await getEmployeeCredentialStatus(pool, req.query?.paycode);
@@ -1590,7 +2058,7 @@ app.get('/api/hr/employee/credentials', authenticate, requireRole('HR'), require
   } catch (error) { sendDbError(res, error); }
 });
 
-app.post('/api/hr/employee/credentials/password', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+app.post('/api/hr/employee/credentials/password', authenticate, requireRole('HR'), requireDbConfig, requirePaycodeInScope, async (req, res) => {
   try {
     const pool = await getPool();
     // mustChange:true stores the password as a TEMPORARY one and forces the
@@ -1618,7 +2086,7 @@ app.post('/api/hr/employee/credentials/password', authenticate, requireRole('HR'
 });
 
 // HR forces a password change WITHOUT replacing the password (Phase I section 7).
-app.post('/api/hr/employee/credentials/force-password-change', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+app.post('/api/hr/employee/credentials/force-password-change', authenticate, requireRole('HR'), requireDbConfig, requirePaycodeInScope, async (req, res) => {
   try {
     const pool = await getPool();
     const outcome = await hrForcePasswordChange(pool, { paycode: req.body?.paycode, actor: req.user?.sub });
@@ -1631,7 +2099,7 @@ app.post('/api/hr/employee/credentials/force-password-change', authenticate, req
 
 // HR enables / disables an employee's login (Phase I section 7).
 // Flips dbo.HR_EmployeeAuth.isactive only - no Savior row is ever touched.
-app.post('/api/hr/employee/credentials/access', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+app.post('/api/hr/employee/credentials/access', authenticate, requireRole('HR'), requireDbConfig, requirePaycodeInScope, async (req, res) => {
   try {
     const pool = await getPool();
     const outcome = await hrSetEmployeeLoginEnabled(pool, {
@@ -1651,7 +2119,7 @@ app.post('/api/hr/employee/credentials/access', authenticate, requireRole('HR'),
   } catch (error) { sendDbError(res, error); }
 });
 
-app.post('/api/hr/employee/credentials/pin', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+app.post('/api/hr/employee/credentials/pin', authenticate, requireRole('HR'), requireDbConfig, requirePaycodeInScope, async (req, res) => {
   try {
     const pool = await getPool();
     const outcome = await hrResetEmployeePin(pool, {
@@ -1670,7 +2138,7 @@ app.post('/api/hr/employee/credentials/pin', authenticate, requireRole('HR'), re
 // HR optionally requires the one-time 4-digit PIN setup again (Phase I
 // section 4). Sets only the application-owned pinsetuprequired flag - no
 // password, PIN hash or Savior row is touched, and nothing secret is returned.
-app.post('/api/hr/employee/credentials/require-pin-setup', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+app.post('/api/hr/employee/credentials/require-pin-setup', authenticate, requireRole('HR'), requireDbConfig, requirePaycodeInScope, async (req, res) => {
   try {
     const pool = await getPool();
     const outcome = await hrRequireEmployeePinSetup(pool, { paycode: req.body?.paycode, actor: req.user?.sub });
@@ -1686,12 +2154,259 @@ app.post('/api/auth/hr/login', requireConfiguredAuth, async (req, res) => {
   const password = String(req.body?.password || '');
   if (!username || !password) return res.status(400).json({ success: false, message: 'HR username and password are required.' });
   if (!hrUsername || !hrPassword) return res.status(503).json({ success: false, message: 'HR authentication is not configured.' });
-  if (username !== hrUsername || password !== hrPassword) return res.status(401).json({ success: false, message: 'Invalid HR credentials.' });
-  res.json({ success: true, token: signUser({ id: username, role: 'HR' }), role: 'HR' });
+  // 1) The .env bootstrap HR account — compared EXACTLY as before, so the
+  //    existing HR Admin login keeps working byte-for-byte.
+  if (username === hrUsername && password === hrPassword) {
+    return res.json({ success: true, token: signUser({ id: username, role: 'HR' }), role: 'HR' });
+  }
+  // 2) ADDITIONAL HR Admin accounts created from the SuperAdmin console
+  //    (application-owned store, scrypt hash). Purely additive: a failure here
+  //    still returns the original 401.
+  if (process.env.DB_SERVER && process.env.DB_DATABASE && process.env.DB_USER && process.env.DB_PASSWORD) {
+    try {
+      const pool = await getPool();
+      await ensureAdminAccessTables(pool);
+      const outcome = await verifyHrAdminAccount(pool, username, password);
+      if (outcome.ok) {
+        return res.json({ success: true, token: signUser({ id: outcome.username, role: 'HR' }), role: 'HR' });
+      }
+      if (outcome.status === 403) return res.status(403).json({ success: false, message: outcome.message });
+    } catch (error) {
+      console.error('[HR_LOGIN_TABLE_ERROR]', error && (error.message || error).toString().slice(0, 200));
+    }
+  }
+  return res.status(401).json({ success: false, message: 'Invalid HR credentials.' });
+});
+
+// SuperAdmin sign-in — a SEPARATE management role.
+// This route does not touch the HR or employee login paths: it has its own
+// configuration, its own verifier (scrypt hash, constant-time compare) and its
+// own token role. If SUPERADMIN_* is not configured it fails closed with 503 —
+// no default admin account exists anywhere in the codebase.
+app.post('/api/auth/superadmin/login', requireConfiguredAuth, async (req, res) => {
+  const username = String(req.body?.username || '').trim();
+  const password = String(req.body?.password || '');
+  if (!username || !password) return res.status(400).json({ success: false, message: 'SuperAdmin username and password are required.' });
+  const dbReady = Boolean(process.env.DB_SERVER && process.env.DB_DATABASE && process.env.DB_USER && process.env.DB_PASSWORD);
+  try {
+    // 1) The .env bootstrap SuperAdmin — unchanged path.
+    if (isSuperAdminConfigured()) {
+      const outcome = await verifySuperAdminLogin(username, password);
+      if (outcome.ok) return res.json({ success: true, token: signUser({ id: outcome.username, role: 'SUPERADMIN' }), role: 'SUPERADMIN' });
+    }
+    // 2) ADDITIONAL SuperAdmin accounts created from the console (additive).
+    if (dbReady) {
+      const pool = await getPool();
+      await ensureAdminAccessTables(pool);
+      const outcome = await verifySuperAdminAccount(pool, username, password);
+      if (outcome.ok) return res.json({ success: true, token: signUser({ id: outcome.username, role: 'SUPERADMIN' }), role: 'SUPERADMIN' });
+      if (outcome.status === 403) return res.status(403).json({ success: false, message: outcome.message });
+    }
+    if (!isSuperAdminConfigured() && !dbReady) {
+      return res.status(503).json({ success: false, message: 'SuperAdmin authentication is not configured.' });
+    }
+    return res.status(401).json({ success: false, message: 'Invalid SuperAdmin credentials.' });
+  } catch (error) {
+    console.error('[SUPERADMIN_LOGIN_ERROR]', error && (error.message || error).toString().slice(0, 200));
+    res.status(503).json({ success: false, message: 'SuperAdmin authentication is unavailable.' });
+  }
+});
+
+/* ---------------------------------------------------------------------------
+   SuperAdmin console management APIs.
+   EVERY route below requires the SUPERADMIN role itself, so an HR Admin can
+   never create/promote an account, grant itself permissions, or manage
+   SuperAdmin users — the guard runs before any handler.
+--------------------------------------------------------------------------- */
+const superAdminOnly = [authenticate, requireRole('SUPERADMIN'), requireDbConfig];
+
+app.get('/api/superadmin/catalog', superAdminOnly, (_req, res) => {
+  res.json({
+    success: true,
+    modules: MODULE_CATALOG,
+    superAdminOnlyModules: SUPERADMIN_ONLY_MODULES,
+    actions: ACTION_KEYS,
+  });
+});
+
+app.get('/api/superadmin/hr-admins', superAdminOnly, async (_req, res) => {
+  try {
+    const pool = await getPool();
+    await ensureAdminAccessTables(pool);
+    const admins = await listHrAdmins(pool);
+    const withPerms = await Promise.all(admins.map(async (admin) => ({
+      ...admin,
+      permissions: await getEffectivePermissions(pool, admin.username),
+      // Company scope (Prompt 4). `null` = unrestricted (bootstrap account).
+      companies: await getCompanyScope(pool, admin.username),
+    })));
+    res.json({ success: true, admins: withPerms, modules: MODULE_CATALOG, actions: ACTION_KEYS, availableCompanies: await listCompanyCodes(pool) });
+  } catch (error) { sendDbError(res, error); }
+});
+
+app.post('/api/superadmin/hr-admins', superAdminOnly, async (req, res) => {
+  try {
+    const pool = await getPool();
+    await ensureAdminAccessTables(pool);
+    const outcome = await createHrAdmin(pool, {
+      username: req.body?.username,
+      password: req.body?.password,
+      displayname: req.body?.displayname,
+      // Phase 4.4 — optional company assignment supplied by the create form. When the
+      // key is absent the behaviour is exactly as before (no assignment rows).
+      companies: Array.isArray(req.body?.companies) ? req.body.companies : undefined,
+    }, req.user.sub);
+    if (!outcome.ok) return res.status(outcome.status).json({ success: false, message: outcome.message });
+    res.status(201).json({ success: true, username: outcome.username, companies: outcome.companies || [] });
+  } catch (error) { sendDbError(res, error); }
+});
+
+app.put('/api/superadmin/hr-admins/:username', superAdminOnly, async (req, res) => {
+  try {
+    const pool = await getPool();
+    await ensureAdminAccessTables(pool);
+    const username = req.params.username;
+    if (req.body?.permissions) {
+      const outcome = await savePermissions(pool, username, req.body.permissions, req.user.sub);
+      if (outcome && outcome.ok === false) return res.status(outcome.status).json({ success: false, message: outcome.message });
+      return res.json({ success: true, username, permissions: await getEffectivePermissions(pool, username) });
+    }
+    if (typeof req.body?.isactive === 'boolean') {
+      const outcome = await setHrAdminActive(pool, username, req.body.isactive, req.user.sub);
+      if (!outcome.ok) return res.status(outcome.status).json({ success: false, message: outcome.message });
+      return res.json({ success: true, username, isactive: outcome.isactive });
+    }
+    return res.status(400).json({ success: false, message: 'Nothing to update (send permissions or isactive).' });
+  } catch (error) { sendDbError(res, error); }
+});
+
+app.post('/api/superadmin/hr-admins/:username/password', superAdminOnly, async (req, res) => {
+  try {
+    const pool = await getPool();
+    await ensureAdminAccessTables(pool);
+    const outcome = await setHrAdminPassword(pool, req.params.username, req.body?.password, req.user.sub);
+    if (!outcome.ok) return res.status(outcome.status).json({ success: false, message: outcome.message });
+    res.json({ success: true, username: outcome.username });
+  } catch (error) { sendDbError(res, error); }
+});
+
+app.delete('/api/superadmin/hr-admins/:username', superAdminOnly, async (req, res) => {
+  try {
+    const pool = await getPool();
+    await ensureAdminAccessTables(pool);
+    const outcome = await deleteHrAdmin(pool, req.params.username);
+    if (!outcome.ok) return res.status(outcome.status).json({ success: false, message: outcome.message });
+    res.json({ success: true, username: outcome.username });
+  } catch (error) { sendDbError(res, error); }
+});
+
+/* Company scope management (Prompt 4) — SuperAdmin only.
+   Company codes come from the REAL dbo.tblemployee.companycode values. */
+app.get('/api/superadmin/companies', superAdminOnly, async (_req, res) => {
+  try {
+    const pool = await getPool();
+    await ensureAdminAccessTables(pool);
+    res.json({ success: true, companies: await listCompanyCodes(pool) });
+  } catch (error) { sendDbError(res, error); }
+});
+
+app.put('/api/superadmin/hr-admins/:username/companies', superAdminOnly, async (req, res) => {
+  try {
+    const pool = await getPool();
+    await ensureAdminAccessTables(pool);
+    const outcome = await setCompanyScope(pool, req.params.username, req.body?.companies, req.user.sub);
+    if (!outcome.ok) return res.status(outcome.status).json({ success: false, message: outcome.message });
+    res.json({ success: true, username: outcome.username, companies: outcome.companies });
+  } catch (error) { sendDbError(res, error); }
+});
+
+app.get('/api/superadmin/super-admins', superAdminOnly, async (_req, res) => {
+  try {
+    const pool = await getPool();
+    await ensureAdminAccessTables(pool);
+    res.json({ success: true, admins: await listSuperAdmins(pool) });
+  } catch (error) { sendDbError(res, error); }
+});
+
+app.post('/api/superadmin/super-admins', superAdminOnly, async (req, res) => {
+  try {
+    const pool = await getPool();
+    await ensureAdminAccessTables(pool);
+    const outcome = await createSuperAdmin(pool, {
+      username: req.body?.username,
+      password: req.body?.password,
+      displayname: req.body?.displayname,
+    }, req.user.sub);
+    if (!outcome.ok) return res.status(outcome.status).json({ success: false, message: outcome.message });
+    res.status(201).json({ success: true, username: outcome.username });
+  } catch (error) { sendDbError(res, error); }
+});
+
+app.put('/api/superadmin/super-admins/:username', superAdminOnly, async (req, res) => {
+  try {
+    const pool = await getPool();
+    await ensureAdminAccessTables(pool);
+    if (typeof req.body?.isactive !== 'boolean') {
+      return res.status(400).json({ success: false, message: 'Nothing to update (send isactive).' });
+    }
+    const outcome = await setSuperAdminActive(pool, req.params.username, req.body.isactive, req.user.sub);
+    if (!outcome.ok) return res.status(outcome.status).json({ success: false, message: outcome.message });
+    res.json({ success: true, username: outcome.username, isactive: outcome.isactive });
+  } catch (error) { sendDbError(res, error); }
+});
+
+app.post('/api/superadmin/super-admins/:username/password', superAdminOnly, async (req, res) => {
+  try {
+    const pool = await getPool();
+    await ensureAdminAccessTables(pool);
+    const weak = validateAdminPassword(req.body?.password);
+    if (weak) return res.status(400).json({ success: false, message: weak });
+    const outcome = await setSuperAdminPassword(pool, req.params.username, req.body.password, req.user.sub);
+    if (!outcome.ok) return res.status(outcome.status).json({ success: false, message: outcome.message });
+    res.json({ success: true, username: outcome.username });
+  } catch (error) { sendDbError(res, error); }
+});
+
+app.delete('/api/superadmin/super-admins/:username', superAdminOnly, async (req, res) => {
+  try {
+    const pool = await getPool();
+    await ensureAdminAccessTables(pool);
+    const outcome = await deleteSuperAdmin(pool, req.params.username);
+    if (!outcome.ok) return res.status(outcome.status).json({ success: false, message: outcome.message });
+    res.json({ success: true, username: outcome.username });
+  } catch (error) { sendDbError(res, error); }
 });
 
 app.get('/api/me', authenticate, async (req, res) => {
-  if (req.user.role === 'HR') return res.json({ role: 'HR' });
+  if (req.user.role === 'HR') {
+    // Additive fields: the SAVED module/action permissions so the HR UI can
+    // show only what is permitted. Every request is still enforced server-side.
+    try {
+      if (process.env.DB_SERVER && process.env.DB_DATABASE && process.env.DB_USER && process.env.DB_PASSWORD) {
+        const pool = await getPool();
+        await ensureAdminAccessTables(pool);
+        const permissions = await getEffectivePermissions(pool, req.user.sub);
+        return res.json({
+          role: 'HR',
+          permissions,
+          modules: MODULE_CATALOG,
+          actions: ACTION_KEYS,
+          bootstrap: isBootstrapHr(req.user.sub) === true,
+        });
+      }
+    } catch (error) {
+      console.error('[ME_HR_PERM_ERROR]', error && (error.message || error).toString().slice(0, 200));
+    }
+    return res.json({ role: 'HR' });
+  }
+  if (req.user.role === 'SUPERADMIN') {
+    return res.json({
+      role: 'SUPERADMIN',
+      fullAccess: true,
+      modules: MODULE_CATALOG.concat(SUPERADMIN_ONLY_MODULES.map((key) => ({ key, label: key }))),
+      actions: ACTION_KEYS,
+    });
+  }
   if (req.user.role === 'EMPLOYEE' && req.user.devEmployee === true && devEmployeeAuthEnabled && req.user.paycode === devEmployeePaycode) return res.json({ role: 'EMPLOYEE', employee: { paycode: devEmployeePaycode, empname: 'Development Employee', presentcardno: null, companycode: null }, mustChangePassword: false, pinSetupRequired: false });
   if (!process.env.DB_SERVER || !process.env.DB_DATABASE || !process.env.DB_USER || !process.env.DB_PASSWORD) return res.status(503).json({ success: false, message: 'Database connection unavailable.' });
   try {
@@ -1718,18 +2433,36 @@ async function employeeAttendance(req, res, parser = parseDateRange) {
   try {
     const pool = await getPool();
     const shiftMap = await loadShiftEndTimes(pool);
+    // PHASE 6 — force refresh taaki Savior shift change turant reflect ho.
+    await loadEmployeeShiftMap(pool, { force: true });
     // Fetch employee category and company code
     const empResult = await pool.request().input('paycode', sql.VarChar(50), req.user.paycode).query(`
       SELECT LTRIM(RTRIM(cat)) AS cat, LTRIM(RTRIM(companycode)) AS companycode FROM dbo.tblemployee WHERE paycode = @paycode`);
     const empInfo = empResult.recordset[0] || { cat: '', companycode: '' };
+    // PHASE 6 — authoritative current shift (employee ki latest assigned Savior shift).
+    const shiftInfo = await resolveEmployeeShift(pool, req.user.paycode, empInfo.companycode);
     const rows = await queryAttendance(pool, req.user.paycode, range);
-    res.json(rows.map(r => normalizeAttendance(r, shiftMap, empInfo.cat, empInfo.companycode)));
+    res.json(rows.map(r => normalizeAttendance(r, shiftMap, empInfo.cat, empInfo.companycode, shiftInfo)));
   } catch (error) { sendDbError(res, error); }
 }
 
 app.get('/api/employee/daily', authenticate, requireRole('EMPLOYEE'), requirePasswordChanged, requireDbConfig, (req, res) => employeeAttendance(req, res));
 app.get('/api/employee/weekly', authenticate, requireRole('EMPLOYEE'), requirePasswordChanged, requireDbConfig, (req, res) => employeeAttendance(req, res, parseWeekRange));
 app.get('/api/employee/monthly', authenticate, requireRole('EMPLOYEE'), requirePasswordChanged, requireDbConfig, (req, res) => employeeAttendance(req, res));
+
+// PHASE 6 — employee ki CURRENT authoritative Savior shift (code/name + real start/end
+// timings). Identity sirf verified JWT se aati hai (req.user.paycode); client koi paycode
+// nahi bhejta, isliye ek employee doosre ka shift nahi dekh sakta. Ye lookup live hai
+// (non-cached) taaki Savior portal par shift badalne ke baad turant nayi value mile.
+app.get('/api/employee/shift', authenticate, requireRole('EMPLOYEE'), requirePasswordChanged, requireDbConfig, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const empResult = await pool.request().input('paycode', sql.VarChar(50), req.user.paycode).query(`
+      SELECT LTRIM(RTRIM(companycode)) AS companycode FROM dbo.tblemployee WHERE paycode = @paycode`);
+    const companycode = empResult.recordset[0]?.companycode || null;
+    res.json(await resolveEmployeeShift(pool, req.user.paycode, companycode));
+  } catch (error) { sendDbError(res, error); }
+});
 
 app.get('/api/employee/dashboard', authenticate, requireRole('EMPLOYEE'), requirePasswordChanged, requirePinSetupDone, requireDbConfig, async (req, res) => {
   // Identity is ALWAYS req.user.paycode (from the verified JWT). A paycode in the
@@ -1748,11 +2481,14 @@ app.get('/api/employee/dashboard', authenticate, requireRole('EMPLOYEE'), requir
     const pool = await getPool();
     const shiftMap = await loadShiftEndTimes(pool);
     const categoryMap = await loadCategoryNames(pool);
-    const empShiftMap = await loadEmployeeShiftMap(pool);
+    // PHASE 6 — force refresh (Savior shift change turant reflect ho).
+    const empShiftMap = await loadEmployeeShiftMap(pool, { force: true });
     // Fetch employee category and company code
     const empResult = await pool.request().input('paycode', sql.VarChar(50), req.user.paycode).query(`
       SELECT LTRIM(RTRIM(cat)) AS cat, LTRIM(RTRIM(companycode)) AS companycode FROM dbo.tblemployee WHERE paycode = @paycode`);
     const empInfo = empResult.recordset[0] || { cat: '', companycode: '' };
+    // PHASE 6 — authoritative current shift; poore selected month par yahi lagu hoti hai.
+    const shiftInfo = await resolveEmployeeShift(pool, req.user.paycode, empInfo.companycode);
     const rows = await queryAttendance(pool, req.user.paycode, range);
 
     // Never report a date that has not happened yet: the India-local "today" is the
@@ -1782,7 +2518,7 @@ app.get('/api/employee/dashboard', authenticate, requireRole('EMPLOYEE'), requir
     let graceRemaining = null;
     for (const [monthKey, monthRows] of rowsByMonth) {
       const [year, month] = monthKey.split('-').map(Number);
-      const monthlyResult = computeMonthlyLateForEmployee(monthRows, shiftMap, empInfo.cat, empInfo.companycode, req.user.paycode, year, month);
+      const monthlyResult = computeMonthlyLateForEmployee(monthRows, shiftMap, empInfo.cat, empInfo.companycode, req.user.paycode, year, month, shiftInfo.resolved ? shiftInfo.shiftCode : null);
       finalLateCount += monthlyResult.finalLateCount;
       // Same computation the HR audit already exposes; surfaced here for the
       // employee's own dashboard instead of being recalculated anywhere.
@@ -1815,7 +2551,7 @@ app.get('/api/employee/dashboard', authenticate, requireRole('EMPLOYEE'), requir
     const trend = trendRows
       .filter((row) => rowDateIso(row.dateoffice) <= todayIso)
       .map((row) => {
-        const n = normalizeAttendance(row, shiftMap, empInfo.cat, empInfo.companycode);
+        const n = normalizeAttendance(row, shiftMap, empInfo.cat, empInfo.companycode, shiftInfo);
         return {
           date: rowDateIso(row.dateoffice),
           status: n.computedStatus || n.statusLabel,
@@ -1845,7 +2581,9 @@ app.get('/api/employee/dashboard', authenticate, requireRole('EMPLOYEE'), requir
       fromDate: effectiveRange.fromDate,
       toDate: effectiveRange.toDate,
       month: effectiveRange.fromDate.slice(0, 7),
-      attendance: eligibleRows.map((r) => normalizeAttendance(r, shiftMap, empInfo.cat, empInfo.companycode)),
+      attendance: eligibleRows.map((r) => normalizeAttendance(r, shiftMap, empInfo.cat, empInfo.companycode, shiftInfo)),
+      // PHASE 6 — employee ki current authoritative Savior shift (shift name/code + timings).
+      shift: shiftInfo,
       trend,
       trendFrom: trendRange.fromDate,
       trendTo: trendRange.toDate,
@@ -1857,20 +2595,104 @@ app.get('/api/employee/dashboard', authenticate, requireRole('EMPLOYEE'), requir
   } catch (error) { sendDbError(res, error); }
 });
 
-app.get('/api/attendance', authenticate, requireDbConfig, async (req, res) => {
+/**
+ * PROMPT 4.2 — generic company-scope test for non-email routes. Identical semantics to
+ * emailInScope (the module helper); kept under its own name so the call site reads
+ * correctly outside the email module.
+ */
+function hrCompanyInScope(req, companycode) { return emailInScope(req, companycode); }
+
+/**
+ * PROMPT 4.2 — attach the HR Admin COMPANY SCOPE to routes that are deliberately NOT
+ * HR-role-gated.
+ *
+ * /api/attendance and /api/raw-punches are also reached by the EMPLOYEE app (their
+ * handlers pin an employee token to its OWN paycode), so requireRole('HR') cannot be
+ * added there. Without this middleware those routes never receive req.hrCompanyScope,
+ * which is exactly why an earlier attempt at in-route guards stayed inert.
+ *
+ * This ONLY resolves the assignment for an HR Admin token and sets the SAME two fields
+ * the shared guards use (req.hrCompanyScope / req.hrCompanyScopeClause). An EMPLOYEE or
+ * SUPERADMIN token is left untouched — undefined means "unrestricted", so the employee
+ * own-paycode path behaves exactly as before. It is read-only (HR_AdminCompany lookup).
+ */
+async function attachHrCompanyScope(req, res, next) {
+  try {
+    if (String(req.user?.role || '').toUpperCase() !== 'HR') return next();
+    const username = req.user?.sub;
+    if (!username) return next();
+    const pool = await getPool();
+    await ensureAdminAccessTables(pool);
+    const scope = await getCompanyScope(pool, username);
+    if (Array.isArray(scope)) {
+      req.hrCompanyScope = scope;
+      req.hrCompanyScopeClause = scope.length
+        ? ` AND LTRIM(RTRIM(e.companycode)) IN (${scope.map((c) => `'${String(c).replace(/'/g, "''")}'`).join(', ')})`
+        : '';
+    }
+    return next();
+  } catch (error) { return sendDbError(res, error); }
+}
+
+async function hrPaycodeCompany(pool, paycode) {
+  const r = await pool.request().input('paycode', sql.VarChar(50), String(paycode || '').trim())
+    .query('SELECT TOP 1 LTRIM(RTRIM(companycode)) AS companycode FROM dbo.tblemployee WHERE LTRIM(RTRIM(paycode)) = @paycode');
+  return String(r.recordset?.[0]?.companycode || '').trim();
+}
+
+app.get('/api/attendance', authenticate, attachHrCompanyScope, requireDbConfig, async (req, res) => {
   const range = parseDateRange(req.query, 31);
   if (!validateRange(res, range)) return;
   if (req.user.role === 'EMPLOYEE' && req.query.paycode && req.query.paycode !== req.user.paycode) return res.status(403).json({ success: false, message: 'Forbidden.' });
+  /* PROMPT 4.4.1 — COMPANY ISOLATION applied as a SCOPE, not as a refusal.
+     An EMPLOYEE token is pinned to its own paycode above (and never carries
+     req.hrCompanyScope). For a company-scoped HR Admin:
+       - a NAMED paycode must belong to an assigned company (unchanged);
+       - NO paycode is the HR dashboard's company-wide "live biometric" read, which is
+         answered with the attendance rows of the ASSIGNED companies only. Refusing it
+         (the earlier behaviour) emptied that dashboard table for every scoped admin,
+         which is exactly the reported "HR Admin ko assigned company ka data nahi milta".
+     The filter is applied in SQL from the server-resolved assignment, so it remains the
+     security boundary — never a client-supplied company code. An EMPTY assignment still
+     denies (fail closed). */
+  if (req.hrCompanyScope && !req.hrCompanyScope.length) {
+    return res.status(403).json({ success: false, code: 'COMPANY_NOT_ASSIGNED', message: 'No company has been assigned to this HR Admin account.' });
+  }
   try {
     const pool = await getPool();
     const shiftMap = await loadShiftEndTimes(pool);
-    const paycode = req.user.role === 'EMPLOYEE' ? req.user.paycode : req.query.paycode || null;
-    // Fetch employee category and company code
-    const empResult = await pool.request().input('paycode', sql.VarChar(50), paycode).query(`
-      SELECT LTRIM(RTRIM(cat)) AS cat, LTRIM(RTRIM(companycode)) AS companycode FROM dbo.tblemployee WHERE paycode = @paycode`);
-    const empInfo = empResult.recordset[0] || { cat: '', companycode: '' };
-    const rows = await queryAttendance(pool, paycode, range);
-    res.json(rows.map(r => normalizeAttendance(r, shiftMap, empInfo.cat, empInfo.companycode)));
+    const requested = String(req.query.paycode || '').trim();
+    const paycode = req.user.role === 'EMPLOYEE' ? req.user.paycode : requested || null;
+
+    if (paycode) {
+      // Single-employee read (employee self-service, or an HR drill-down).
+      const empResult = await pool.request().input('paycode', sql.VarChar(50), paycode).query(`
+        SELECT LTRIM(RTRIM(cat)) AS cat, LTRIM(RTRIM(companycode)) AS companycode FROM dbo.tblemployee WHERE paycode = @paycode`);
+      const empInfo = empResult.recordset[0] || { cat: '', companycode: '' };
+      /* the named employee must belong to an assigned company. */
+      if (req.hrCompanyScope && !hrCompanyInScope(req, empInfo.companycode)) {
+        return res.status(403).json({ success: false, code: 'COMPANY_FORBIDDEN', message: 'Employee belongs to a company outside your access.' });
+      }
+      const rows = await queryAttendance(pool, paycode, range);
+      return res.json(rows.map(r => normalizeAttendance(r, shiftMap, empInfo.cat, empInfo.companycode)));
+    }
+
+    if (req.hrCompanyScope) {
+      // Company-wide read LIMITED to the assigned companies, in SQL.
+      const scopeClause = ` AND LTRIM(RTRIM(paycode)) IN (SELECT LTRIM(RTRIM(e.paycode)) FROM dbo.tblemployee e WHERE 1=1${req.hrCompanyScopeClause})`;
+      const info = await pool.request().query(
+        `SELECT LTRIM(RTRIM(e.paycode)) AS paycode, LTRIM(RTRIM(e.cat)) AS cat, LTRIM(RTRIM(e.companycode)) AS companycode FROM dbo.tblemployee e WHERE 1=1${req.hrCompanyScopeClause}`);
+      const infoMap = new Map((info.recordset || []).map((x) => [String(x.paycode).trim(), x]));
+      const rows = await queryAttendance(pool, null, range, scopeClause);
+      return res.json(rows.map((r) => {
+        const i = infoMap.get(String(r.paycode).trim()) || { cat: '', companycode: '' };
+        return normalizeAttendance(r, shiftMap, i.cat, i.companycode);
+      }));
+    }
+
+    // Unrestricted bootstrap HR / SuperAdmin: historical behaviour (every employee).
+    const rows = await queryAttendance(pool, null, range);
+    res.json(rows.map(r => normalizeAttendance(r, shiftMap, '', '')));
   } catch (error) { sendDbError(res, error); }
 });
 
@@ -1903,10 +2725,20 @@ async function listEmployees(req, res) {
       e.dateofbirth, e.dateofjoin, LTRIM(RTRIM(e.sex)) AS sex, LTRIM(RTRIM(e.cat)) AS cat,
       LTRIM(RTRIM(e.ismarried)) AS ismarried, LTRIM(RTRIM(e.active)) AS active,
       COALESCE(a.presentCount, 0) AS presentCount, COALESCE(a.absentCount, 0) AS absentCount,
-      COALESCE(a.missCount, 0) AS missCount, COALESCE(a.lateCount, 0) AS lateCount, COALESCE(a.totalHours, 0) AS totalHours
+      COALESCE(a.missCount, 0) AS missCount, COALESCE(a.lateCount, 0) AS lateCount, COALESCE(a.totalHours, 0) AS totalHours,
+      -- PHASE 6 — BATCH shift lookup (N+1 se bachne ke liye isi query me): employee ki
+      -- current assignment (tblemployeeshiftmaster) + us shift ki company-wise timing.
+      LTRIM(RTRIM(esm.shift)) AS shiftcode, smm.starttime AS shiftstart, smm.endtime AS shiftend
     FROM dbo.tblemployee e
     LEFT JOIN dbo.tbldepartment d ON LTRIM(RTRIM(d.departmentcode)) = LTRIM(RTRIM(e.departmentcode))
     LEFT JOIN dbo.tblcompany c ON LTRIM(RTRIM(c.companycode)) = LTRIM(RTRIM(e.companycode))
+    LEFT JOIN dbo.tblemployeeshiftmaster esm ON LTRIM(RTRIM(esm.paycode)) = LTRIM(RTRIM(e.paycode))
+    OUTER APPLY (
+      SELECT TOP 1 sm2.starttime, sm2.endtime
+      FROM dbo.tblshiftmaster sm2
+      WHERE LTRIM(RTRIM(sm2.shift)) = LTRIM(RTRIM(esm.shift))
+      ORDER BY CASE WHEN LTRIM(RTRIM(sm2.companycode)) = LTRIM(RTRIM(e.companycode)) THEN 0 ELSE 1 END
+    ) smm
     OUTER APPLY (
       -- P/A/M/L follow the SAME per-row decision as classifyRow() (the classifier used by
       -- /hr/daily-master, /hr/audit, /hr/summary and /hr/category-analytics). Previously this
@@ -1947,6 +2779,7 @@ async function listEmployees(req, res) {
     ) a
     WHERE (@search IS NULL OR e.empname LIKE '%' + @search + '%' OR e.paycode LIKE '%' + @search + '%' OR e.presentcardno LIKE '%' + @search + '%')
       AND (@companycode IS NULL OR LTRIM(RTRIM(e.companycode)) = @companycode)
+      ${req.hrCompanyScopeClause || ''}
       AND (@departmentcode IS NULL OR LTRIM(RTRIM(e.departmentcode)) = @departmentcode)
       AND (@sex IS NULL OR LTRIM(RTRIM(e.sex)) = @sex)
       AND (@cat IS NULL OR LTRIM(RTRIM(e.cat)) = @cat)
@@ -1954,7 +2787,23 @@ async function listEmployees(req, res) {
       AND (@ismarried IS NULL OR LTRIM(RTRIM(e.ismarried)) = @ismarried)
       AND (@active IS NULL OR LTRIM(RTRIM(e.active)) = @active)
     ORDER BY e.empname OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY`);
-  const rows = result.recordset.map(({ totalcount, ...row }) => ({ ...row, attendanceStats: { present: Number(row.presentCount), absent: Number(row.absentCount), miss: Number(row.missCount), late: Number(row.lateCount), hours: Number(row.totalHours) } }));
+  const rows = result.recordset.map(({ totalcount, shiftcode, shiftstart, shiftend, ...row }) => {
+    // PHASE 6 — employee ki current shift ko app ke baaki endpoints jaisa shape dete hain.
+    const startMin = shiftstart ? shiftTimeToMinutes(shiftstart) : null;
+    const endMin = shiftend ? shiftTimeToMinutes(shiftend) : null;
+    const shiftCode = String(shiftcode || '').trim() || null;
+    const resolved = Boolean(shiftCode && startMin !== null);
+    return {
+      ...row,
+      shiftCode,
+      shiftName: shiftCode,
+      shiftStart: startMin === null ? null : minutesToClockLabel(startMin),
+      shiftEnd: endMin === null ? null : minutesToClockLabel(endMin),
+      shiftResolved: resolved,
+      shiftUnavailableReason: resolved ? null : (shiftCode ? 'SHIFT_NOT_IN_MASTER' : 'NO_SHIFT_MAPPING'),
+      attendanceStats: { present: Number(row.presentCount), absent: Number(row.absentCount), miss: Number(row.missCount), late: Number(row.lateCount), hours: Number(row.totalHours) },
+    };
+  });
   res.json({ rows, page, pageSize, total: Number(result.recordset[0]?.totalcount || 0) });
 }
 
@@ -1979,7 +2828,37 @@ async function getEmployee(req, res) {
       LEFT JOIN dbo.tbldepartment d ON LTRIM(RTRIM(d.departmentcode)) = LTRIM(RTRIM(e.departmentcode))
       WHERE e.paycode = @paycode`);
     if (!result.recordset[0]) return res.status(404).json({ success: false, message: 'Employee not found.' });
-    res.json(trimEmployeeRow(result.recordset[0]));
+    /* Prompt 4.2 — COMPANY ISOLATION. This lookup is keyed by paycode only, so without
+       this a company-scoped HR Admin could read ANY employee's profile (company,
+       department, designation, DOB, sex, marital status, active) from another company
+       simply by knowing/guessing a paycode. Empty scope ⇒ deny (fail closed); a null
+       scope means the unrestricted bootstrap HR / SuperAdmin path. Same rule as the
+       audit endpoint. Covers BOTH /api/hr/employee/:paycode and /api/employees/:paycode. */
+    if (req.hrCompanyScope) {
+      const allowed = req.hrCompanyScope.map((c) => String(c).trim().toUpperCase());
+      const empCompany = String(result.recordset[0].companycode || '').trim().toUpperCase();
+      if (!allowed.length || !allowed.includes(empCompany)) {
+        return res.status(403).json({ success: false, message: 'Employee belongs to a company outside your access.' });
+      }
+    }
+    /* PHASE 6 — HR Admin "All Employees → View" ke liye employee ki CURRENT
+       authoritative Savior shift (name/code + real start/end timings). Sirf genuine,
+       resolvable fields hi bhejte hain; mapping na mile to shift: null + reason,
+       taaki koi guessed/old shift kabhi na dikhe. */
+    const employeeRow = trimEmployeeRow(result.recordset[0]);
+    const shiftInfo = await resolveEmployeeShift(await getPool(), employeeRow.paycode, employeeRow.companycode);
+    res.json({
+      ...employeeRow,
+      shiftCode: shiftInfo.shiftCode,
+      shiftName: shiftInfo.shiftName,
+      shiftStart: shiftInfo.startTime,
+      shiftEnd: shiftInfo.endTime,
+      shiftResolved: shiftInfo.resolved,
+      shiftUnavailableReason: shiftInfo.resolved ? null : (shiftInfo.reason || 'UNRESOLVED'),
+      shift: shiftInfo.resolved
+        ? { code: shiftInfo.shiftCode, name: shiftInfo.shiftName, start: shiftInfo.startTime, end: shiftInfo.endTime, companycode: shiftInfo.companycode }
+        : null,
+    });
   } catch (error) { sendDbError(res, error); }
 }
 
@@ -1996,7 +2875,7 @@ async function hrSummary(req, res, includePercentage = false) {
     const activeParam = String(req.query.active || 'Y').trim().toUpperCase();
     // activeParam: 'Y' = active only, 'N' = inactive only, 'ALL' = no filter
     const activeFilter = activeParam === 'ALL' ? null : activeParam;
-    const agg = await aggregateAttendance(pool, range.fromDate, range.toDate, activeFilter);
+    const agg = await aggregateAttendance(pool, range.fromDate, range.toDate, activeFilter, req.hrCompanyScope);
     const summary = {
       indiaToday: indiaTodayISO(),
       mode: range.mode, fromDate: range.fromDate, toDate: range.toDate,
@@ -2045,7 +2924,17 @@ app.get('/api/hr/dashboard-charts', authenticate, requireRole('HR'), requireDbCo
     
     // Build employee info map
     let empQuery = 'SELECT LTRIM(RTRIM(e.paycode)) AS paycode, LTRIM(RTRIM(e.companycode)) AS companycode, LTRIM(RTRIM(e.cat)) AS cat, LTRIM(RTRIM(e.departmentcode)) AS departmentcode FROM dbo.tblemployee e';
-    if (activeFilter) empQuery += ` WHERE ${activeCondition}`;
+    const chartConditions = [];
+    if (activeFilter) chartConditions.push(activeCondition);
+    /* Prompt 4.2 — COMPANY ISOLATION: chart 1/2/3 employee sets were built from
+       EVERY company. Shared verified scope clause (alias `e`). */
+    if (req.hrCompanyScope) {
+      if (req.hrCompanyScope.length === 0) {
+        return res.status(403).json({ success: false, message: 'No company assigned to this HR admin.' });
+      }
+      chartConditions.push(req.hrCompanyScopeClause.replace(/^\s*AND\s+/i, ''));
+    }
+    if (chartConditions.length) empQuery += ' WHERE ' + chartConditions.join(' AND ');
     const empResult = await pool.request()
       .input('active', sql.VarChar(50), activeFilter)
       .query(empQuery);
@@ -2193,7 +3082,7 @@ app.get('/api/hr/dashboard-charts', authenticate, requireRole('HR'), requireDbCo
     // Employees with IN today, no OUT, and shift not yet ended
     const chart3RegResult = await pool.request()
       .input('today', sql.Date, today)
-      .query(`SELECT ${attendanceFields} FROM dbo.tbltimeregister WHERE dateoffice = @today`);
+      .query(`SELECT ${attendanceFields} FROM dbo.tbltimeregister WHERE dateoffice >= @today AND dateoffice < DATEADD(DAY, 1, @today)`);
     
     const todayRows = chart3RegResult.recordset;
     const companyPresentMap = new Map();
@@ -2239,7 +3128,7 @@ app.get('/api/hr/dashboard-charts', authenticate, requireRole('HR'), requireDbCo
     // Use grace-aware classification for yesterday
     const chart4RegResult = await pool.request()
       .input('yesterday', sql.Date, yesterday)
-      .query(`SELECT ${attendanceFields} FROM dbo.tbltimeregister WHERE dateoffice = @yesterday`);
+      .query(`SELECT ${attendanceFields} FROM dbo.tbltimeregister WHERE dateoffice >= @yesterday AND dateoffice < DATEADD(DAY, 1, @yesterday)`);
     
     const yesterdayRows = chart4RegResult.recordset;
     let yesterdayPresent = 0, yesterdayAbsent = 0, yesterdayOnLeave = 0;
@@ -2388,8 +3277,10 @@ async function dailyMaster(req, res) {
   const departmentcode = String(req.query.departmentcode || '').trim() || null;
   const companycode = String(req.query.companycode || '').trim() || null;
   let query = `
-    SELECT e.paycode, e.empname, e.companycode, e.departmentcode, LTRIM(RTRIM(e.cat)) AS cat, tr.dateoffice, tr.in1, tr.in2, tr.out1, tr.out2, tr.hoursworked, tr.latearrival, tr.status, tr.reason
-    FROM dbo.tblemployee e OUTER APPLY (
+    SELECT e.paycode, e.empname, e.companycode, e.departmentcode, LTRIM(RTRIM(d.departmentname)) AS departmentname, LTRIM(RTRIM(e.cat)) AS cat, tr.dateoffice, tr.in1, tr.in2, tr.out1, tr.out2, tr.hoursworked, tr.latearrival, tr.status, tr.reason
+    FROM dbo.tblemployee e
+    LEFT JOIN dbo.tbldepartment d ON LTRIM(RTRIM(d.departmentcode)) = LTRIM(RTRIM(e.departmentcode))
+    OUTER APPLY (
       SELECT ${attendanceFields}
       FROM dbo.tbltimeregister tr WHERE tr.paycode = e.paycode AND tr.dateoffice >= @fromDate AND tr.dateoffice < DATEADD(DAY, 1, @toDate)
     ) tr`;
@@ -2404,6 +3295,18 @@ async function dailyMaster(req, res) {
   }
   if (companycode) {
     conditions.push("LTRIM(RTRIM(e.companycode)) = @companycode");
+  }
+  /* Prompt 4.2 — COMPANY ISOLATION for Daily Master (UNBLOCKED).
+     The earlier 503 was NOT this predicate: sendDbError() maps ANY throw to 503, and
+     computeLateStatus() dereferenced the lazy module-level `empShiftCache` (held null)
+     for rows whose register `shift` is empty — and dailyMaster never called
+     loadEmployeeShiftMap(), so a cold process threw
+     "Cannot read properties of null (reading 'get')". Fixed at the source in
+     computeLateStatus()/empShiftCache. This uses the SAME shared, verified scope
+     clause as the employee roster; the leading `AND ` is stripped because this
+     handler joins conditions with ' AND '. Empty string ⇒ unrestricted (bootstrap HR). */
+  if (req.hrCompanyScopeClause) {
+    conditions.push(req.hrCompanyScopeClause.replace(/^\s*AND\s+/i, ''));
   }
   if (conditions.length > 0) {
     query += ' WHERE ' + conditions.join(' AND ');
@@ -2423,7 +3326,7 @@ async function dailyMaster(req, res) {
       const computed = n.computedStatus || 'Absent';
       const hasRow = Boolean(row.dateoffice);
       return {
-        paycode: row.paycode, empname: row.empname, companycode: row.companycode, departmentcode: row.departmentcode,
+        paycode: row.paycode, empname: row.empname, companycode: row.companycode, departmentcode: row.departmentcode, departmentname: row.departmentname,
         date: row.dateoffice, in1: row.in1, in2: row.in2, out1: row.out1, out2: row.out2,
         hoursworked: row.hoursworked, latearrival: n.latearrival,
         status: row.status, statusCode: n.statusCode, statusLabel: hasRow ? computed : 'No Record',
@@ -2445,7 +3348,8 @@ app.get('/api/hr/audit/:paycode', authenticate, requireRole('HR'), requireDbConf
     const pool = await getPool();
     const shiftMap = await loadShiftEndTimes(pool);
     const categoryMap = await loadCategoryNames(pool);
-    const empShiftMap = await loadEmployeeShiftMap(pool);
+    // PHASE 6 — force refresh: HR audit bhi employee ki LIVE Savior shift use kare.
+    const empShiftMap = await loadEmployeeShiftMap(pool, { force: true });
     const employeeResult = await pool.request().input('paycode', sql.VarChar(50), req.params.paycode).query(`
       SELECT TOP 1 e.paycode, e.empname, e.presentcardno,
         LTRIM(RTRIM(e.companycode)) AS companycode, LTRIM(RTRIM(c.companyname)) AS companyname,
@@ -2462,6 +3366,20 @@ app.get('/api/hr/audit/:paycode', authenticate, requireRole('HR'), requireDbConf
     const rows = await queryAttendance(pool, req.params.paycode, range);
     const empCat = String(employee.cat || '').trim();
     const empCompany = String(employee.companycode || '').trim();
+    /* Prompt 4.2 — COMPANY ISOLATION: a company-scoped HR Admin may only audit an
+       employee inside its ASSIGNED companies. Without this, any paycode from any
+       company could be read (profile + attendance) by guessing/known paycode.
+       Empty scope ⇒ deny (fail closed); null scope ⇒ unrestricted bootstrap HR. */
+    if (req.hrCompanyScope) {
+      const allowed = req.hrCompanyScope.map((c) => String(c).trim().toUpperCase());
+      if (!allowed.includes(empCompany.toUpperCase())) {
+        return res.status(403).json({ success: false, message: 'Employee belongs to a company outside your access.' });
+      }
+    }
+
+    // PHASE 6 — is employee ki CURRENT authoritative Savior shift. Audit ke Late Coming
+    // aur attendance rows isi resolved shift se bante hain (register ke purane shift se nahi).
+    const shiftInfo = await resolveEmployeeShift(pool, employee.paycode, empCompany);
 
     // PHASE G.2 — application-level holiday overlay (display classification only).
     // Savior rows above are untouched; if this lookup fails we still return the
@@ -2481,7 +3399,7 @@ app.get('/api/hr/audit/:paycode', authenticate, requireRole('HR'), requireDbConf
     const auditMonth = new Date(range.toDate).getMonth() + 1;
     
     // Calculate FINAL late count with monthly grace consumption
-    const monthlyLate = computeMonthlyLateForEmployee(rows, shiftMap, empCat, empCompany, employee.paycode, auditYear, auditMonth);
+    const monthlyLate = computeMonthlyLateForEmployee(rows, shiftMap, empCat, empCompany, employee.paycode, auditYear, auditMonth, shiftInfo.resolved ? shiftInfo.shiftCode : null);
     
     // Calculate stats with grace-aware late computation
     const stats = rows.reduce((s, row) => {
@@ -2490,7 +3408,7 @@ app.get('/api/hr/audit/:paycode', authenticate, requireRole('HR'), requireDbConf
       if (label === 'Absent') s.absent += 1;
       else if (label === 'Miss Punch') s.miss += 1;
       else s.present += 1;
-      const lateResult = computeLateStatus(row, shiftMap, empCat, empCompany, employee.paycode);
+      const lateResult = computeLateStatus(row, shiftMap, empCat, empCompany, employee.paycode, shiftInfo.resolved ? shiftInfo.shiftCode : null);
       if (lateResult.isLate) s.late += 1;  // Raw late count
       s.hours += Number(row.hoursworked || 0);
       return s;
@@ -2503,7 +3421,9 @@ app.get('/api/hr/audit/:paycode', authenticate, requireRole('HR'), requireDbConf
     res.json({ 
       employee, 
       stats: { ...stats, attendancePercentage: total ? Number((stats.present / total * 100).toFixed(1)) : 0 }, 
-      attendance: rows.map(r => normalizeAttendance(r, shiftMap, empCat, empCompany)),
+      attendance: rows.map(r => normalizeAttendance(r, shiftMap, empCat, empCompany, shiftInfo)),
+      // PHASE 6 — employee ki current authoritative Savior shift (code/name + timings).
+      shift: shiftInfo,
       // PHASE G.2 — ACTIVE holidays applicable to THIS employee (real company +
       // real category) for the requested window. Display overlay only: the
       // `attendance` Savior rows above are unchanged.
@@ -2531,13 +3451,24 @@ app.get('/api/hr/category-analytics', authenticate, requireRole('HR'), requireDb
     // Default to active employees only; allow override via ?active=Y|N|ALL
     const activeParam = String(req.query.active || 'Y').trim().toUpperCase();
     
-    let empQuery = 'SELECT paycode, companycode, departmentcode, LTRIM(RTRIM(cat)) AS cat FROM dbo.tblemployee';
+    let empQuery = 'SELECT e.paycode, e.companycode, e.departmentcode, LTRIM(RTRIM(e.cat)) AS cat FROM dbo.tblemployee e';
+    const empConditions = [];
     if (activeParam === 'Y') {
-      empQuery += " WHERE LTRIM(RTRIM(active)) = 'Y'";
+      empConditions.push("LTRIM(RTRIM(e.active)) = 'Y'");
     } else if (activeParam === 'N') {
-      empQuery += " WHERE LTRIM(RTRIM(active)) = 'N'";
+      empConditions.push("LTRIM(RTRIM(e.active)) = 'N'");
     }
-    // 'ALL' = no filter
+    // 'ALL' = no active filter
+    /* Prompt 4.2 — COMPANY ISOLATION: without this the per-company split enumerated
+       EVERY company in tblemployee. Uses the SAME shared, verified scope clause as
+       the roster (alias `e`). Empty scope ⇒ deny (fail closed). */
+    if (req.hrCompanyScope) {
+      if (req.hrCompanyScope.length === 0) {
+        return res.status(403).json({ success: false, message: 'No company assigned to this HR admin.' });
+      }
+      empConditions.push(req.hrCompanyScopeClause.replace(/^\s*AND\s+/i, ''));
+    }
+    if (empConditions.length) empQuery += ' WHERE ' + empConditions.join(' AND ');
     const [empResult, regResult] = await Promise.all([
       pool.request().query(empQuery),
       pool.request().input('fromDate', sql.Date, effective.fromDate).input('toDate', sql.Date, effective.toDate).query(
@@ -2638,12 +3569,22 @@ app.get('/api/hr/late-employees', authenticate, requireRole('HR'), requireDbConf
           LTRIM(RTRIM(e.designation)) AS designation, LTRIM(RTRIM(e.cat)) AS cat
         FROM dbo.tblemployee e
         LEFT JOIN dbo.tbldepartment d ON LTRIM(RTRIM(d.departmentcode)) = LTRIM(RTRIM(e.departmentcode))`;
+    const lateConditions = [];
     if (activeParam === 'Y') {
-      empQuery += " WHERE LTRIM(RTRIM(e.active)) = 'Y'";
+      lateConditions.push("LTRIM(RTRIM(e.active)) = 'Y'");
     } else if (activeParam === 'N') {
-      empQuery += " WHERE LTRIM(RTRIM(e.active)) = 'N'";
+      lateConditions.push("LTRIM(RTRIM(e.active)) = 'N'");
     }
-    // 'ALL' = no filter
+    // 'ALL' = no active filter
+    /* Prompt 4.2 — COMPANY ISOLATION: this list enumerates late employees, so it is
+       company data by definition. Shared verified scope clause (alias `e`). */
+    if (req.hrCompanyScope) {
+      if (req.hrCompanyScope.length === 0) {
+        return res.status(403).json({ success: false, message: 'No company assigned to this HR admin.' });
+      }
+      lateConditions.push(req.hrCompanyScopeClause.replace(/^\s*AND\s+/i, ''));
+    }
+    if (lateConditions.length) empQuery += ' WHERE ' + lateConditions.join(' AND ');
     const [empResult, regResult] = await Promise.all([
       pool.request().query(empQuery),
       pool.request().input('fromDate', sql.Date, range.fromDate).input('toDate', sql.Date, range.toDate).query(
@@ -2723,23 +3664,36 @@ app.get('/api/hr/late-employees', authenticate, requireRole('HR'), requireDbConf
 // company / category name lookups). Read-only; no schema change, no invented values.
 app.get('/api/hr/filters', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
   try {
+    /* Prompt 4.2 — COMPANY ISOLATION for filter dropdowns.
+       Every list below EXCEPT the `tblcategory` master table is DERIVED from
+       dbo.tblemployee, so it is company-dependent: without this a company-scoped HR
+       admin was offered other companies' departments, company names, categories in
+       use, designations, genders and marital/active statuses. `SELECT * FROM
+       dbo.tblcategory` is genuine GLOBAL reference config and is deliberately left
+       UNSCOPED. Empty scope ⇒ deny (fail closed); null scope ⇒ bootstrap HR.
+       `req.hrCompanyScopeClause` = " AND LTRIM(RTRIM(e.companycode)) IN ('001')", so
+       every employee-derived FROM is aliased `e`. */
+    if (req.hrCompanyScope && req.hrCompanyScope.length === 0) {
+      return res.status(403).json({ success: false, message: 'No company assigned to this HR admin.' });
+    }
+    const scopeFilter = req.hrCompanyScopeClause || '';
     const result = await (await getPool()).request().batch(`
       SELECT DISTINCT LTRIM(RTRIM(e.departmentcode)) AS code, LTRIM(RTRIM(d.departmentname)) AS name
       FROM dbo.tblemployee e
       LEFT JOIN dbo.tbldepartment d ON LTRIM(RTRIM(d.departmentcode)) = LTRIM(RTRIM(e.departmentcode))
-      WHERE LTRIM(RTRIM(e.departmentcode)) <> ''
+      WHERE LTRIM(RTRIM(e.departmentcode)) <> ''${scopeFilter}
       ORDER BY code;
       SELECT DISTINCT LTRIM(RTRIM(e.companycode)) AS code, LTRIM(RTRIM(c.companyname)) AS name
       FROM dbo.tblemployee e
       LEFT JOIN dbo.tblcompany c ON LTRIM(RTRIM(c.companycode)) = LTRIM(RTRIM(e.companycode))
-      WHERE LTRIM(RTRIM(e.companycode)) <> ''
+      WHERE LTRIM(RTRIM(e.companycode)) <> ''${scopeFilter}
       ORDER BY code;
-      SELECT DISTINCT LTRIM(RTRIM(cat)) AS code FROM dbo.tblemployee WHERE LTRIM(RTRIM(cat)) <> '' ORDER BY code;
+      SELECT DISTINCT LTRIM(RTRIM(e.cat)) AS code FROM dbo.tblemployee e WHERE LTRIM(RTRIM(e.cat)) <> ''${scopeFilter} ORDER BY code;
       SELECT * FROM dbo.tblcategory;
-      SELECT DISTINCT LTRIM(RTRIM(sex)) AS sex FROM dbo.tblemployee WHERE LTRIM(RTRIM(sex)) <> '' ORDER BY sex;
-      SELECT DISTINCT LTRIM(RTRIM(designation)) AS designation FROM dbo.tblemployee WHERE LTRIM(RTRIM(designation)) <> '' ORDER BY designation;
-      SELECT DISTINCT LTRIM(RTRIM(ismarried)) AS ismarried FROM dbo.tblemployee WHERE LTRIM(RTRIM(ismarried)) <> '' ORDER BY ismarried;
-      SELECT DISTINCT LTRIM(RTRIM(active)) AS active FROM dbo.tblemployee WHERE LTRIM(RTRIM(active)) <> '' ORDER BY active;`);
+      SELECT DISTINCT LTRIM(RTRIM(e.sex)) AS sex FROM dbo.tblemployee e WHERE LTRIM(RTRIM(e.sex)) <> ''${scopeFilter} ORDER BY sex;
+      SELECT DISTINCT LTRIM(RTRIM(e.designation)) AS designation FROM dbo.tblemployee e WHERE LTRIM(RTRIM(e.designation)) <> ''${scopeFilter} ORDER BY designation;
+      SELECT DISTINCT LTRIM(RTRIM(e.ismarried)) AS ismarried FROM dbo.tblemployee e WHERE LTRIM(RTRIM(e.ismarried)) <> ''${scopeFilter} ORDER BY ismarried;
+      SELECT DISTINCT LTRIM(RTRIM(e.active)) AS active FROM dbo.tblemployee e WHERE LTRIM(RTRIM(e.active)) <> ''${scopeFilter} ORDER BY active;`);
     const rs = result.recordsets || [];
     const clean = v => String(v == null ? '' : v).trim();
     // tblcategory column names are not assumed: pick the code/name keys generically.
@@ -2766,20 +3720,45 @@ app.get('/api/hr/celebrations', authenticate, requireRole('HR'), requireDbConfig
     const pool = await getPool();
     // Default to active employees only; allow override via ?active=Y|N|ALL
     const activeParam = String(req.query.active || 'Y').trim().toUpperCase();
-    let empQuery = 'SELECT paycode, empname, presentcardno, companycode FROM dbo.tblemployee';
+    // PHASE (Birthdays & Anniversaries): designation/departmentcode bhi bhejo aur
+    // strings trim karo (listEmployees wala convention) taaki celebration list me
+    // original website jaisa "designation • department" dikhe aur marriage rows ke
+    // paycode se exact match ho jaye. Sirf ADDITIVE columns — existing consumers
+    // (Overview widgets, mobile) ko koi farq nahi padta.
+    let empQuery = "SELECT LTRIM(RTRIM(paycode)) AS paycode, LTRIM(RTRIM(empname)) AS empname, LTRIM(RTRIM(presentcardno)) AS presentcardno, LTRIM(RTRIM(companycode)) AS companycode, dateofbirth, dateofjoin, LTRIM(RTRIM(e.designation)) AS designation, LTRIM(RTRIM(e.departmentcode)) AS departmentcode FROM dbo.tblemployee e";
+    const celebConditions = [];
     if (activeParam === 'Y') {
-      empQuery += " WHERE LTRIM(RTRIM(active)) = 'Y'";
+      celebConditions.push("LTRIM(RTRIM(e.active)) = 'Y'");
     } else if (activeParam === 'N') {
-      empQuery += " WHERE LTRIM(RTRIM(active)) = 'N'";
+      celebConditions.push("LTRIM(RTRIM(e.active)) = 'N'");
     }
-    // 'ALL' = no filter
+    // 'ALL' = no active filter
+    /* Prompt 4.2 — COMPANY ISOLATION: the celebration list is an employee list, so it
+       is company data. Shared verified scope clause (alias `e`). */
+    if (req.hrCompanyScope) {
+      if (req.hrCompanyScope.length === 0) {
+        return res.status(403).json({ success: false, message: 'No company assigned to this HR admin.' });
+      }
+      celebConditions.push(req.hrCompanyScopeClause.replace(/^\s*AND\s+/i, ''));
+    }
+    if (celebConditions.length) empQuery += ' WHERE ' + celebConditions.join(' AND ');
     empQuery += ' ORDER BY empname';
     const employees = await pool.request().query(empQuery);
     let marriages = { recordset: [] };
     try {
       const mp = await getPool();
       await ensureMarriageTable(mp);
-      marriages = await mp.request().query(`SELECT id, paycode, presentcardno, anniversarydate, createddate, updateddate, importedby FROM ${marriageTable}`);
+      /* Prompt 4.2 — the HR-imported marriage rows are keyed by paycode, so a scoped
+         admin must only receive rows for employees inside its companies. The
+         UNSCOPED path keeps the ORIGINAL query verbatim so bootstrap/SuperAdmin
+         behaviour is byte-for-byte unchanged (no INNER JOIN, no dropped rows). */
+      const marriageSql = req.hrCompanyScope
+        ? `SELECT m.id, m.paycode, m.presentcardno, m.anniversarydate, m.createddate, m.updateddate, m.importedby
+             FROM ${marriageTable} m
+             INNER JOIN dbo.tblemployee e ON LTRIM(RTRIM(e.paycode)) = LTRIM(RTRIM(m.paycode))
+             WHERE 1=1${req.hrCompanyScopeClause}`
+        : `SELECT id, paycode, presentcardno, anniversarydate, createddate, updateddate, importedby FROM ${marriageTable}`;
+      marriages = await mp.request().query(marriageSql);
     } catch (e) {
       const msg = String(e?.message || e || '').toUpperCase();
       if (!msg.includes('INVALID OBJECT NAME') && !msg.includes('TABLE') && !msg.includes('NOT FOUND')) throw e;
@@ -3037,7 +4016,7 @@ app.get('/api/employee/fullfinal', authenticate, requireRole('EMPLOYEE'), requir
 app.get('/api/hr/salary/master', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
   try {
     const pool = await getPool();
-    const rows = await listSalaryMaster(pool, { search: req.query?.search, limit: req.query?.limit });
+    const rows = await listSalaryMaster(pool, { search: req.query?.search, limit: req.query?.limit, companyScope: req.hrCompanyScope });
     res.json({ success: true, rows });
   } catch (error) { sendDbError(res, error); }
 });
@@ -3048,7 +4027,7 @@ app.post('/api/hr/salary/master/import', authenticate, requireRole('HR'), requir
     const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
     if (!rows.length) return res.status(400).json({ success: false, message: 'No rows to import.', code: 'NO_ROWS' });
     if (rows.length > 5000) return res.status(400).json({ success: false, message: 'Please import at most 5000 rows at a time.', code: 'TOO_MANY_ROWS' });
-    const summary = await importSalaryMaster(pool, { rows, actor: req.user?.sub });
+    const summary = await importSalaryMaster(pool, { rows, actor: req.user?.sub, companyScope: req.hrCompanyScope });
     res.json({ success: true, summary });
   } catch (error) { sendDbError(res, error); }
 });
@@ -3056,7 +4035,7 @@ app.post('/api/hr/salary/master/import', authenticate, requireRole('HR'), requir
 app.get('/api/hr/salary/elements', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
   try {
     const pool = await getPool();
-    const rows = await listSalaryElements(pool, { paycode: req.query?.paycode, search: req.query?.search, limit: req.query?.limit });
+    const rows = await listSalaryElements(pool, { paycode: req.query?.paycode, search: req.query?.search, limit: req.query?.limit, companyScope: req.hrCompanyScope });
     res.json({ success: true, rows });
   } catch (error) { sendDbError(res, error); }
 });
@@ -3067,7 +4046,7 @@ app.post('/api/hr/salary/elements/import', authenticate, requireRole('HR'), requ
     const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
     if (!rows.length) return res.status(400).json({ success: false, message: 'No rows to import.', code: 'NO_ROWS' });
     if (rows.length > 5000) return res.status(400).json({ success: false, message: 'Please import at most 5000 rows at a time.', code: 'TOO_MANY_ROWS' });
-    const summary = await importSalaryElements(pool, { rows, actor: req.user?.sub });
+    const summary = await importSalaryElements(pool, { rows, actor: req.user?.sub, companyScope: req.hrCompanyScope });
     res.json({ success: true, summary });
   } catch (error) { sendDbError(res, error); }
 });
@@ -3096,6 +4075,7 @@ app.get('/api/hr/salary/dues', authenticate, requireRole('HR'), requireDbConfig,
     const rows = await listSalaryDues(pool, {
       paycode: req.query?.paycode, status: req.query?.status,
       search: req.query?.search, limit: req.query?.limit,
+      companyScope: req.hrCompanyScope,
     });
     res.json({ success: true, rows });
   } catch (error) { sendDbError(res, error); }
@@ -3104,7 +4084,7 @@ app.get('/api/hr/salary/dues', authenticate, requireRole('HR'), requireDbConfig,
 app.post('/api/hr/salary/dues', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
   try {
     const pool = await getPool();
-    const outcome = await createSalaryDue(pool, { ...req.body, actor: req.user?.sub });
+    const outcome = await createSalaryDue(pool, { ...req.body, actor: req.user?.sub, companyScope: req.hrCompanyScope });
     if (!outcome.ok) return res.status(outcome.status).json({ success: false, message: outcome.message, code: outcome.code });
     res.status(201).json({ success: true, due: outcome.due });
   } catch (error) { sendDbError(res, error); }
@@ -3113,7 +4093,7 @@ app.post('/api/hr/salary/dues', authenticate, requireRole('HR'), requireDbConfig
 app.post('/api/hr/salary/dues/:id/decision', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
   try {
     const pool = await getPool();
-    const outcome = await decideSalaryDue(pool, { id: req.params?.id, decision: req.body?.decision, note: req.body?.note, actor: req.user?.sub });
+    const outcome = await decideSalaryDue(pool, { id: req.params?.id, decision: req.body?.decision, note: req.body?.note, actor: req.user?.sub, companyScope: req.hrCompanyScope });
     if (!outcome.ok) return res.status(outcome.status).json({ success: false, message: outcome.message, code: outcome.code });
     res.json({ success: true, due: outcome.due });
   } catch (error) { sendDbError(res, error); }
@@ -3129,6 +4109,7 @@ app.get('/api/hr/salary/fullfinal/:paycode', authenticate, requireRole('HR'), re
       leavingdate: req.query?.leavingdate,
       noticeServedDays: req.query?.noticeServedDays,
       noticeWaived: ['true', 'Y', '1'].includes(String(req.query?.noticeWaived || '')),
+      companyScope: req.hrCompanyScope,
     });
     if (!outcome.ok) return res.status(outcome.status).json({ success: false, message: outcome.message, code: outcome.code });
     res.json({ success: true, employee: outcome.employee, salary: outcome.salary, rules: outcome.rules, rulesConfigured: true, estimate: outcome.estimate, disclaimer: outcome.disclaimer });
@@ -3178,9 +4159,18 @@ app.get('/api/marriage-anniversary', requireDbConfig, authenticate, requireRole(
     const pool = await getPool();
     await ensureMarriageTable(pool);
     const request = pool.request().input('paycode', sql.VarChar(50), req.user.role === 'EMPLOYEE' ? req.user.paycode : null);
+    /* PROMPT 4.2 — COMPANY ISOLATION. The EMPLOYEE token is already pinned to its own
+       paycode. For a company-scoped HR Admin the list is restricted through the REAL
+       roster to employees of the assigned companies (the table itself has no company
+       column), and an EMPTY scope denies rather than falling back to "all". */
+    let scopeFilter = '';
+    if (Array.isArray(req.hrCompanyScope)) {
+      if (!req.hrCompanyScope.length) return res.json([]);
+      scopeFilter = ` AND LTRIM(RTRIM(paycode)) IN (SELECT LTRIM(RTRIM(e.paycode)) FROM dbo.tblemployee e WHERE 1=1${req.hrCompanyScopeClause})`;
+    }
     let result = { recordset: [] };
     try {
-      result = await request.query(`SELECT id, paycode, presentcardno, anniversarydate, createddate, updateddate, importedby FROM ${marriageTable} WHERE (@paycode IS NULL OR paycode = @paycode) ORDER BY anniversarydate`);
+      result = await request.query(`SELECT id, paycode, presentcardno, anniversarydate, createddate, updateddate, importedby FROM ${marriageTable} WHERE (@paycode IS NULL OR paycode = @paycode)${scopeFilter} ORDER BY anniversarydate`);
     } catch (e) {
       const msg = String(e?.message || e || '').toUpperCase();
       if (!msg.includes('INVALID OBJECT NAME') && !msg.includes('TABLE') && !msg.includes('NOT FOUND')) throw e;
@@ -3200,6 +4190,12 @@ app.delete('/api/marriage-anniversary/:paycode', authenticate, requireRole('HR')
   try {
     const pool = await getPool();
     await ensureMarriageTable(pool);
+    /* PROMPT 4.2 — COMPANY ISOLATION: a company-scoped HR Admin may only delete records
+       belonging to its own companies (fail closed for an unresolvable paycode). */
+    const deleteCompany = await hrPaycodeCompany(pool, paycode);
+    if (req.hrCompanyScope && !hrCompanyInScope(req, deleteCompany)) {
+      return res.status(403).json({ success: false, code: 'COMPANY_FORBIDDEN', message: 'Employee belongs to a company outside your access.' });
+    }
     const result = await pool.request()
       .input('paycode', sql.VarChar(50), paycode)
       .query(`DELETE FROM ${marriageTable} WHERE paycode = @paycode`);
@@ -3720,7 +4716,23 @@ async function employeeHolidayCategories(pool, paycode) {
 app.get('/api/hr/holiday-categories', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
   try {
     const pool = await getPool();
-    const companies = String(req.query.companies || '').split(',').map(c => c.trim()).filter(Boolean);
+    let companies = String(req.query.companies || '').split(',').map(c => c.trim()).filter(Boolean);
+    /* Prompt 4.2 — COMPANY ISOLATION: this endpoint reads dbo.tblemployee for the
+       REQUESTED companies, so without this a scoped HR admin could enumerate another
+       company's categories + company/category pairs just by passing ?companies=002.
+       Intersect the request with the assigned scope (fail closed): an out-of-scope
+       request yields an empty result rather than other-company data, and when the
+       client sends nothing we default to the admin's own companies. */
+    if (req.hrCompanyScope) {
+      const allowed = new Set(req.hrCompanyScope.map((c) => String(c).trim().toUpperCase()));
+      if (!allowed.size) {
+        return res.status(403).json({ success: false, message: 'No company assigned to this HR admin.' });
+      }
+      companies = companies.length
+        ? companies.filter((c) => allowed.has(c.toUpperCase()))
+        : req.hrCompanyScope.map((c) => String(c).trim());
+      if (!companies.length) return res.json({ success: true, categories: [], pairs: [] });
+    }
     const { categories, pairs } = await getCategoriesForCompaniesWithPairs(pool, companies);
     const master = await readCategoryMaster(pool);
     const rows = categories.map(code => ({
@@ -3730,6 +4742,30 @@ app.get('/api/hr/holiday-categories', authenticate, requireRole('HR'), requireDb
     res.json({ success: true, categories: rows, pairs });
   } catch (error) { sendDbError(res, error); }
 });
+
+/**
+ * PROMPT 4.2 — COMPANY ISOLATION helper for holiday rows.
+ *
+ * A holiday row is company-dependent through THREE real sources (all present in the
+ * schema): the per-row `companies` child list, the legacy `companycode` column, and
+ * the company/category pairs. A row with NO company restriction at all is a GLOBAL
+ * holiday (e.g. "All Employees") and legitimately applies to every company, so it is
+ * always visible. Any other row is visible only when its company set INTERSECTS the
+ * HR admin's assigned scope.
+ */
+function holidayVisibleToScope(row, scope) {
+  const allowed = new Set((scope || []).map((c) => String(c).trim().toUpperCase()));
+  if (!allowed.size) return false;
+  const groups = [];
+  if (Array.isArray(row?.companies) && row.companies.length) groups.push(row.companies.map((c) => String(c).trim()));
+  const legacy = String(row?.companycode || '').trim();
+  if (legacy) groups.push([legacy]);
+  if (Array.isArray(row?.companyCategoryPairs) && row.companyCategoryPairs.length) {
+    groups.push(row.companyCategoryPairs.map((p) => String(p?.companycode || '').trim()).filter(Boolean));
+  }
+  if (!groups.length) return true;                       // global holiday
+  return groups.some((list) => list.some((c) => allowed.has(String(c || '').trim().toUpperCase())));
+}
 
 // GET /api/hr/holidays - HR Admin list. Supports search + category + month/year
 // + active filters so HR can find and manage holidays. HR role required.
@@ -3764,7 +4800,20 @@ app.get('/api/hr/holidays', authenticate, requireRole('HR'), requireDbConfig, as
       conditions.push('YEAR(holidaydate) = @year');
       inputs.push(['year', sql.Int, Number(q.year)]);
     }
-    res.json({ success: true, holidays: await readHolidays(pool, { where: conditions.join(' AND '), inputs }) });
+    /* Prompt 4.2 — COMPANY ISOLATION for the HR holiday list.
+       The read itself is unchanged (readHolidays is shared with the employee view and
+       the write paths); the authorization filter is applied to the RESULT, which is
+       the smallest safe change and cannot alter any SQL semantics. A scoped HR admin
+       therefore never receives another company's holiday, while legitimate GLOBAL
+       holidays remain visible (see holidayVisibleToScope). Empty scope ⇒ deny. */
+    if (req.hrCompanyScope && req.hrCompanyScope.length === 0) {
+      return res.status(403).json({ success: false, message: 'No company assigned to this HR admin.' });
+    }
+    const allHolidays = await readHolidays(pool, { where: conditions.join(' AND '), inputs });
+    const holidays = req.hrCompanyScope
+      ? allHolidays.filter((h) => holidayVisibleToScope(h, req.hrCompanyScope))
+      : allHolidays;
+    res.json({ success: true, holidays });
   } catch (error) { sendDbError(res, error); }
 });
 
@@ -3963,6 +5012,21 @@ app.post('/api/hr/holidays', authenticate, requireRole('HR'), requireDbConfig, a
     const legacyCategory = String(category || '').trim();
     const companiesList = cleanCodeList(companies);
     const categoriesList = cleanCodeList(categories);
+    /* Prompt 4.2 — COMPANY ISOLATION (write path). A company-scoped HR Admin may only
+       create a holiday for its OWN companies. `validateHolidayApplicability` already
+       requires at least one company, so an empty company list is refused too — that
+       would otherwise create a holiday applying globally to every company. */
+    if (req.hrCompanyScope) {
+      const allowed = new Set(req.hrCompanyScope.map((c) => String(c).trim().toUpperCase()));
+      const outside = companiesList.filter((c) => !allowed.has(String(c).trim().toUpperCase()));
+      if (!allowed.size || !companiesList.length || outside.length) {
+        return res.status(403).json({
+          success: false,
+          message: 'Holiday companies must be within the companies assigned to you.',
+          code: 'COMPANY_OUT_OF_SCOPE',
+        });
+      }
+    }
 
     if (!isValidIsoDate(holidaydate)) {
       return res.status(400).json({ success: false, message: 'Valid holiday date (YYYY-MM-DD) is required.', code: 'INVALID_DATE' });
@@ -4065,6 +5129,29 @@ app.put('/api/hr/holidays/:id', authenticate, requireRole('HR'), requireDbConfig
       return res.status(404).json({ success: false, message: 'Holiday not found.', code: 'NOT_FOUND' });
     }
     const before = current.recordset[0];
+    /* Prompt 4.2 — COMPANY ISOLATION (update path). A company-scoped HR Admin may only
+       modify a holiday that belongs to its OWN companies, and may only set companies
+       within its scope. Otherwise it could edit/deactivate another company's holiday or
+       re-assign it. A GLOBAL holiday (no company restriction) is refused on WRITE
+       because editing it affects every company — consistent with the POST rule. */
+    if (req.hrCompanyScope) {
+      const allowed = new Set(req.hrCompanyScope.map((c) => String(c).trim().toUpperCase()));
+      if (!allowed.size) {
+        return res.status(403).json({ success: false, message: 'No company assigned to this HR admin.' });
+      }
+      const existingCompanies = [...(await readHolidayCompanies(pool, id)), String(before.companycode || '').trim()]
+        .map((c) => String(c || '').trim()).filter(Boolean);
+      const existingOk = existingCompanies.length > 0 && existingCompanies.some((c) => allowed.has(c.toUpperCase()));
+      const requested = companies === undefined ? [] : cleanCodeList(companies);
+      const requestedOk = requested.length === 0 || requested.every((c) => allowed.has(String(c).trim().toUpperCase()));
+      if (!existingOk || !requestedOk) {
+        return res.status(403).json({
+          success: false,
+          message: 'Holiday is outside the companies assigned to you.',
+          code: 'COMPANY_OUT_OF_SCOPE',
+        });
+      }
+    }
 
     // Applicability is recomputed EXACTLY like POST:
     //   REAL employee pairs INTERSECT (companies x categories).
@@ -4204,8 +5291,31 @@ app.delete('/api/hr/holidays/:id', authenticate, requireRole('HR'), requireDbCon
     
     const pool = await getPool();
     await migrateHolidayStructure(pool);
+    /* Prompt 4.2 — COMPANY ISOLATION (delete path). A scoped HR Admin must not be able
+       to delete another company's holiday. Same rule as PUT: a GLOBAL holiday is also
+       refused, since deleting it applies to every company. Runs BEFORE the child-table
+       deletes so a denied request can never partially mutate the row. */
+    if (req.hrCompanyScope) {
+      const allowed = new Set(req.hrCompanyScope.map((c) => String(c).trim().toUpperCase()));
+      if (!allowed.size) {
+        return res.status(403).json({ success: false, message: 'No company assigned to this HR admin.' });
+      }
+      const found = await pool.request().input('id', sql.Int, id)
+        .query(`SELECT TOP 1 companycode FROM ${holidayTable} WHERE id = @id`);
+      if (!found.recordset[0]) {
+        return res.status(404).json({ success: false, message: 'Holiday not found.' });
+      }
+      const list = [...(await readHolidayCompanies(pool, id)), String(found.recordset[0].companycode || '').trim()]
+        .map((c) => String(c || '').trim()).filter(Boolean);
+      if (!list.length || !list.some((c) => allowed.has(c.toUpperCase()))) {
+        return res.status(403).json({
+          success: false,
+          message: 'Holiday is outside the companies assigned to you.',
+          code: 'COMPANY_OUT_OF_SCOPE',
+        });
+      }
+    }
     
-    await pool.request().input('id', sql.Int, id).query(`DELETE FROM ${holidayCompaniesTable} WHERE holiday_id = @id`);
     await pool.request().input('id', sql.Int, id).query(`DELETE FROM ${holidayCategoryEntriesTable} WHERE holiday_id = @id`);
     await pool.request().input('id', sql.Int, id).query(`DELETE FROM ${holidayCompanyCategoryTable} WHERE holiday_id = @id`);
     
@@ -4221,7 +5331,7 @@ app.delete('/api/hr/holidays/:id', authenticate, requireRole('HR'), requireDbCon
   } catch (error) { sendDbError(res, error); }
 });
 
-app.get('/api/raw-punches', requireDbConfig, authenticate, async (req, res) => {
+app.get('/api/raw-punches', requireDbConfig, authenticate, attachHrCompanyScope, async (req, res) => {
   const range = parseDateRange(req.query, 7);
   if (!validateRange(res, range)) return;
   try {
@@ -4230,6 +5340,21 @@ app.get('/api/raw-punches', requireDbConfig, authenticate, async (req, res) => {
     if (req.user.role === 'EMPLOYEE' || req.query.paycode) {
       request.input('paycode', sql.VarChar(50), req.user.role === 'EMPLOYEE' ? req.user.paycode : String(req.query.paycode));
       filter = 'AND e.paycode = @paycode';
+    }
+    /* PROMPT 4.2 — COMPANY ISOLATION. The EMPLOYEE branch above is already pinned to its
+       own paycode. A company-scoped HR Admin must name a paycode (an unscoped call would
+       return EVERY employee's raw punches across all companies) and that employee must
+       belong to an assigned company. Empty scope ⇒ deny (fail closed). */
+    if (req.hrCompanyScope) {
+      const allowed = req.hrCompanyScope.map((c) => String(c).trim().toUpperCase()).filter(Boolean);
+      const requested = String(req.query.paycode || '').trim();
+      if (!allowed.length || !requested) {
+        return res.status(403).json({ success: false, code: 'COMPANY_FORBIDDEN', message: 'Specify a paycode within the companies assigned to you.' });
+      }
+      const empCompany = await hrPaycodeCompany(await getPool(), requested);
+      if (!hrCompanyInScope(req, empCompany)) {
+        return res.status(403).json({ success: false, code: 'COMPANY_FORBIDDEN', message: 'Employee belongs to a company outside your access.' });
+      }
     }
     const result = await request.query(`SELECT p.cardno, p.mc_no, p.officepunch, p.inout, p.ismanual FROM dbo.machinerawpunch p JOIN dbo.tblemployee e ON e.presentcardno = p.cardno WHERE p.officepunch >= @fromDate AND p.officepunch < DATEADD(DAY, 1, @toDate) ${filter} ORDER BY p.officepunch DESC`);
     res.json(result.recordset);
@@ -4242,7 +5367,12 @@ app.post('/api/marriage-anniversary/validate', authenticate, requireRole('HR'), 
     await ensureMarriageTable(pool);
     for (const row of rows) {
       const result = await pool.request().input('employeeCode', sql.VarChar(50), String(row.employeeCode || '').trim() || null).input('biometricCode', sql.VarChar(50), String(row.biometricCode || '').trim() || null).query(`SELECT TOP 1 e.paycode, e.presentcardno, e.empname, e.companycode, m.anniversarydate AS existingDate FROM dbo.tblemployee e LEFT JOIN ${marriageTable} m ON m.paycode = e.paycode WHERE (@employeeCode IS NOT NULL AND e.paycode = @employeeCode) OR (@biometricCode IS NOT NULL AND e.presentcardno = @biometricCode)`);
-      validated.push({ ...row, employee: result.recordset[0] || null });
+      const emp = result.recordset[0] || null;
+      /* PROMPT 4.2 — COMPANY ISOLATION: a company-scoped HR Admin must not learn about
+         (nor later import for) an employee outside its companies, so an out-of-scope
+         match is reported as UNMATCHED rather than disclosed. */
+      const employee = emp && hrCompanyInScope(req, emp.companycode) ? emp : null;
+      validated.push({ ...row, employee });
     }
     res.json({ rows: validated });
   } catch (error) { sendDbError(res, error); }
@@ -4258,13 +5388,16 @@ app.post('/api/marriage-anniversary/import', authenticate, requireRole('HR'), re
     try {
       for (const row of rows) {
         if (!row.employee || !isValidIsoDate(row.anniversaryDate)) continue;
+        /* PROMPT 4.2 — never write an anniversary for an employee outside the companies
+           assigned to this HR Admin (the count below matches what was actually written). */
+        if (!hrCompanyInScope(req, row.employee.companycode)) continue;
         const request = new sql.Request(transaction);
         request.input('paycode', sql.VarChar(50), row.employee.paycode).input('presentcardno', sql.VarChar(50), row.employee.presentcardno || null).input('anniversarydate', sql.Date, row.anniversaryDate).input('importedby', sql.VarChar(50), String(req.user?.sub || 'HR').slice(0, 50));
         await request.query(`UPDATE ${marriageTable} SET presentcardno = @presentcardno, anniversarydate = @anniversarydate, updateddate = GETDATE(), importedby = @importedby WHERE paycode = @paycode; IF @@ROWCOUNT = 0 INSERT INTO ${marriageTable} (paycode, presentcardno, anniversarydate, createddate, updateddate, importedby) VALUES (@paycode, @presentcardno, @anniversarydate, GETDATE(), GETDATE(), @importedby);`);
       }
       await transaction.commit();
     } catch (error) { await transaction.rollback(); throw error; }
-    res.json({ imported: rows.filter(row => row.employee && isValidIsoDate(row.anniversaryDate)).length });
+    res.json({ imported: rows.filter(row => row.employee && isValidIsoDate(row.anniversaryDate) && hrCompanyInScope(req, row.employee.companycode)).length });
   } catch (error) { sendDbError(res, error); }
 });
 
@@ -4724,13 +5857,61 @@ app.get('/api/email/health', requireDbConfig, authenticate, requireRole('HR'), a
     return res.json({ success: true, ready: provider.configured && !!senderEmail && !!process.env.DB_SERVER, provider, checks, masterEmailCount, mappingCount, noEmailCount, recipientCount: recipients.length, senderEmail, senderName: String(cfg.sendername || '').trim() });
   } catch (error) { return emailErrorResponse(res, error); }
 });
+/**
+ * PROMPT 4.2 — COMPANY ISOLATION helper for the email module.
+ *
+ * The email ROUTES (not the transport-only email-provider.js) expose employee
+ * identity: the send log, the missing-email list, the recipient preview and the
+ * single/bulk senders. `emailInScope` answers "may this HR Admin touch an employee of
+ * this company?" — null scope means the unrestricted bootstrap HR / SuperAdmin path
+ * (unchanged); an EMPTY scope denies everything (fail closed).
+ */
+function emailInScope(req, companycode) {
+  if (!req.hrCompanyScope) return true;
+  const allowed = req.hrCompanyScope.map((c) => String(c).trim().toUpperCase());
+  if (!allowed.length) return false;
+  const c = String(companycode || '').trim().toUpperCase();
+  return Boolean(c) && allowed.includes(c);
+}
+
+/**
+ * PROMPT 4.2 — resolve the COMPANY FILTER a scoped HR Admin may use on the
+ * filter-driven email routes (missing / preview / send). Those handlers take a single
+ * `companycode` value, so:
+ *   - unrestricted (null scope)  -> the requested value passes through unchanged;
+ *   - requested value in scope   -> used as-is;
+ *   - nothing requested, 1 company assigned -> pinned to that company;
+ *   - nothing requested, several companies  -> REFUSED (the admin must choose one,
+ *     otherwise the call would span companies and/or send emails outside its scope);
+ *   - requested value out of scope / empty scope -> REFUSED (fail closed).
+ * Returns { ok, companycode }.
+ */
+function emailScopedCompanyFilter(req, requested) {
+  const clean = (v) => String(v || '').trim();
+  if (!req.hrCompanyScope) return { ok: true, companycode: clean(requested) };
+  const allowed = req.hrCompanyScope.map((c) => clean(c).toUpperCase()).filter(Boolean);
+  if (!allowed.length) return { ok: false, companycode: '' };
+  const want = clean(requested).toUpperCase();
+  if (want) return allowed.includes(want) ? { ok: true, companycode: want } : { ok: false, companycode: '' };
+  if (allowed.length === 1) return { ok: true, companycode: allowed[0] };
+  return { ok: false, companycode: '' };
+}
+
 /* Read-only list of employees with NO resolvable email (the "import needed" item). */
 app.get('/api/email/missing', requireDbConfig, authenticate, requireRole('HR'), async (req, res) => {
   try {
     const pool = await getPool();
     const recipients = await loadEmailRecipients(pool);
-    const filters = { companycode: (req.query.companycode || '').trim(), departmentcode: (req.query.departmentcode || '').trim() };
+    /* PROMPT 4.2 — COMPANY ISOLATION: a scoped HR Admin only ever lists its own
+       companies' employees (the company filter is normalised to its scope and the rows
+       are filtered again, so a multi-company admin cannot see outside it). */
+    const scopePick = emailScopedCompanyFilter(req, req.query.companycode);
+    if (!scopePick.ok) {
+      return res.status(403).json({ success: false, code: 'COMPANY_FORBIDDEN', message: 'Select a company that is assigned to you.' });
+    }
+    const filters = { companycode: scopePick.companycode, departmentcode: (req.query.departmentcode || '').trim() };
     const rows = applyEmailFilters(recipients.filter(r => !r.email), filters)
+      .filter(r => emailInScope(req, r.companycode))
       .map(r => ({ paycode: r.paycode, employeename: r.empname, companycode: r.companycode, departmentcode: r.departmentcode, email: '' }));
     return res.json({ success: true, count: rows.length, rows });
   } catch (error) { return emailErrorResponse(res, error); }
@@ -4764,6 +5945,12 @@ app.get('/api/email/resolve', requireDbConfig, authenticate, requireRole('HR'), 
     const emp = empResult.recordset[0];
     if (!emp) return res.status(404).json({ success: false, message: `Paycode ${paycode} not found in Savior SQL employee master.` });
     const mapRow = (await pool.request().input('pc', sql.VarChar(50), paycode).query(`SELECT TOP 1 email FROM ${emailMapTable} WHERE paycode = @pc`)).recordset[0];
+    /* PROMPT 4.2 — COMPANY ISOLATION (defence in depth): the shared cross-company guard
+       already refuses an out-of-scope paycode, and this in-route check makes the
+       guarantee explicit for the single-employee resolver. */
+    if (!emailInScope(req, emp.companycode)) {
+      return res.status(403).json({ success: false, code: 'COMPANY_FORBIDDEN', message: 'Employee belongs to a company outside your access.' });
+    }
     const { email, source } = resolveEmail(emp, mapRow);
     return res.json({ success: true, employee: emp, email, emailSource: email ? source : 'No email found — import mapping required', hasEmail: !!email });
   } catch (error) { return emailErrorResponse(res, error); }
@@ -4784,6 +5971,12 @@ app.post('/api/email/send-single', requireDbConfig, authenticate, requireRole('H
     emp = empResult.recordset[0];
     if (!emp) return res.status(404).json({ success: false, message: `Paycode ${paycode} not found in Savior SQL employee master.` });
     const mapRow = (await pool.request().input('pc', sql.VarChar(50), paycode).query(`SELECT TOP 1 email FROM ${emailMapTable} WHERE paycode = @pc`)).recordset[0];
+    /* PROMPT 4.2 — COMPANY ISOLATION: this route can actually SEND mail, so a scoped
+       HR Admin must only be able to target employees in its own companies. Checked
+       before any send or log write happens. */
+    if (!emailInScope(req, emp.companycode)) {
+      return res.status(403).json({ success: false, code: 'COMPANY_FORBIDDEN', message: 'Employee belongs to a company outside your access.' });
+    }
     resolved = resolveEmail(emp, mapRow);
     if (!resolved.email) return res.status(400).json({ success: false, message: `No valid email for ${paycode} — SQL e_mail1 is empty and no HR mapping exists. Import the email first.` });
     if (!String(cfg.senderemail || '').trim()) return res.status(400).json({ success: false, message: 'Sender email not set — save Sender Email in the Provider Config tab first.' });
@@ -4809,9 +6002,15 @@ app.get('/api/email/preview', requireDbConfig, authenticate, requireRole('HR'), 
     const provider = publicProviderStatus(await getProviderSettings(pool));
     const eventType = normalizeEmailEventType(req.query.eventType);
     const eventDate = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date || '')) ? String(req.query.date) : localToday();
-    const filters = { companycode: (req.query.companycode || '').trim(), departmentcode: (req.query.departmentcode || '').trim(), paycode: (req.query.paycode || '').trim() };
+    /* PROMPT 4.2 — COMPANY ISOLATION for the recipient preview (same normalisation as
+       /api/email/missing; the target list is filtered again as defence in depth). */
+    const scopePick = emailScopedCompanyFilter(req, req.query.companycode);
+    if (!scopePick.ok) {
+      return res.status(403).json({ success: false, code: 'COMPANY_FORBIDDEN', message: 'Select a company that is assigned to you.' });
+    }
+    const filters = { companycode: scopePick.companycode, departmentcode: (req.query.departmentcode || '').trim(), paycode: (req.query.paycode || '').trim() };
     const { employees, targets } = await loadEmailTargets(pool, eventType, eventDate);
-    const filtered = applyEmailFilters(targets, filters);
+    const filtered = applyEmailFilters(targets, filters).filter(t => emailInScope(req, t.companycode));
     const mapResult = await pool.request().query(`SELECT TOP 2000 paycode, email FROM ${emailMapTable}`);
     const mapRows = new Map((mapResult.recordset || []).map(m => [String(m.paycode || '').trim(), m]));
     const sentSet = await loadSentPaycodes(pool, eventType, eventDate);
@@ -4839,8 +6038,16 @@ app.post('/api/email/send', requireDbConfig, authenticate, requireRole('HR'), as
     const pool = await getPool();
     const provider = await getProviderSettings(pool);
     if (!provider.configured) return res.status(400).json({ success: false, message: provider.hint || 'Email provider is not configured. Open the Provider Config tab.' });
+    /* PROMPT 4.2 — COMPANY ISOLATION for the BULK SENDER. This route actually sends
+       mail, so the audience cannot be filtered after the fact: the company filter must
+       be resolved to the admin's scope BEFORE the run (refused when ambiguous or out of
+       scope), which is what stops a scoped admin emailing another company's staff. */
+    const sendPick = emailScopedCompanyFilter(req, b.companycode);
+    if (!sendPick.ok) {
+      return res.status(403).json({ success: false, code: 'COMPANY_FORBIDDEN', message: 'Select a company that is assigned to you.' });
+    }
     const result = await runEmailEvent(pool, eventType, {
-      companycode: String(b.companycode || '').trim(),
+      companycode: sendPick.companycode,
       departmentcode: String(b.departmentcode || '').trim(),
       paycode: String(b.paycode || '').trim()
     }, {
@@ -4869,6 +6076,14 @@ app.post('/api/email/import', requireDbConfig, authenticate, requireRole('HR'), 
       seen.add(paycode);
       const emp = known.get(paycode);
       if (!emp) notFound++;
+      /* PROMPT 4.2 — a company-scoped HR Admin may only import email addresses for
+         employees in its own companies; an out-of-scope row is rejected with a clear
+         reason and NOTHING is written for it. */
+      if (req.hrCompanyScope && !emailInScope(req, String(row.companycode || (emp && emp.companycode) || ''))) {
+        invalid++;
+        if (invalidRows.length < 20) invalidRows.push({ paycode, reason: 'Employee belongs to a company outside your access' });
+        continue;
+      }
       const up = await pool.request()
         .input('paycode', sql.VarChar(50), paycode).input('email', sql.VarChar(150), email)
         .input('companycode', sql.VarChar(30), String(row.companycode || (emp && emp.companycode) || '').trim() || null)
@@ -4889,7 +6104,15 @@ app.get('/api/email/log', requireDbConfig, authenticate, requireRole('HR'), asyn
     await ensureEmailTables(pool);
     const limit = Math.min(Number(req.query.limit || 100), 500);
     const result = await pool.request().query(`SELECT TOP ${limit} id, paycode, employeename, companycode, departmentcode, eventtype, CONVERT(varchar(10), eventdate, 23) AS eventdate, recipientemail, status, providermessageid, errormessage, CONVERT(varchar(19), sentat, 120) AS sentat FROM ${emailLogTable} ORDER BY sentat DESC, id DESC`);
-    return res.json({ success: true, rows: result.recordset });
+    /* PROMPT 4.2 — the send log carries employee identity + email + company, so a
+       company-scoped HR Admin only receives entries for its own companies. */
+    if (req.hrCompanyScope && req.hrCompanyScope.length === 0) {
+      return res.status(403).json({ success: false, message: 'No company assigned to this HR admin.' });
+    }
+    const rows = req.hrCompanyScope
+      ? result.recordset.filter((r) => emailInScope(req, r.companycode))
+      : result.recordset;
+    return res.json({ success: true, rows });
   } catch (error) { return emailErrorResponse(res, error); }
 });
 // EADDRINUSE ko crash ki jagah clear message banao: user ko exact fix command batao.

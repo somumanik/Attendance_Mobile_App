@@ -11,3 +11,4 @@ export { RootNavigator } from './RootNavigator';
 export { AuthNavigator } from './AuthNavigator';
 export { EmployeeNavigator } from './EmployeeNavigator';
 export { HRNavigator } from './HRNavigator';
+export { SuperAdminNavigator } from './SuperAdminNavigator';

@@ -33,6 +33,8 @@ export const RoleSelectionScreen = () => {
   const handleRoleSelect = (role) => {
     if (role === 'HR') {
       navigation.navigate('HRLogin');
+    } else if (role === 'SUPERADMIN') {
+      navigation.navigate('SuperAdminLogin');
     } else {
       navigation.navigate('EmployeeLogin');
     }
@@ -46,7 +48,7 @@ export const RoleSelectionScreen = () => {
           <View style={[styles.logoCircle, { backgroundColor: theme.primary }]}>
             <Text style={styles.logoIcon}>📊</Text>
           </View>
-          <Text style={[styles.appTitle, { color: theme.textPrimary }]}>Savior Attendance</Text>
+          <Text style={[styles.appTitle, { color: theme.textPrimary }]}>Mohani Attendance</Text>
           <Text style={[styles.appSubtitle, { color: theme.textSecondary }]}>Mobile Portal</Text>
         </View>
 
@@ -89,6 +91,29 @@ export const RoleSelectionScreen = () => {
               <View style={styles.roleTextContent}>
                 <Text style={[styles.roleTitle, { color: theme.textPrimary }]}>Employee</Text>
                 <Text style={[styles.roleDesc, { color: theme.textSecondary }]}>My Attendance, Leave, Profile</Text>
+              </View>
+              <View style={styles.arrowContainer}>
+                <Text style={styles.arrowText}>→</Text>
+              </View>
+            </View>
+          </Card>
+
+          {/* SuperAdmin Card — additive third option. The HR Admin and Employee
+              cards above are byte-for-byte unchanged. */}
+          <Card
+            elevation="raised"
+            clickable
+            onPress={() => handleRoleSelect('SUPERADMIN')}
+            bordered
+            style={styles.roleCard}
+          >
+            <View style={styles.cardContent}>
+              <View style={[styles.roleIconContainer, { backgroundColor: '#EEF2FF' }]}>
+                <Text style={styles.roleIcon}>⚙️</Text>
+              </View>
+              <View style={styles.roleTextContent}>
+                <Text style={[styles.roleTitle, { color: theme.textPrimary }]}>SuperAdmin</Text>
+                <Text style={[styles.roleDesc, { color: theme.textSecondary }]}>Management console · Leave, Credentials, Holidays, Salary</Text>
               </View>
               <View style={styles.arrowContainer}>
                 <Text style={styles.arrowText}>→</Text>

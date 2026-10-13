@@ -1,0 +1,30 @@
+PASS :: HR login unchanged :: status=200
+PASS :: /hr/audit renders (200) :: status=200
+PASS :: CSS: calendar classes present :: 
+PASS :: CSS: status colours green/red/amber/yellow/purple :: 
+PASS :: CSS: prior styling intact (white values + helpers + punch + dropdown) :: 
+PASS :: Bundle: calendar component wired :: 
+PASS :: Bundle: Phase 1 Company label + mapping fields :: 
+PASS :: Bundle: punch log table removed :: 
+PASS :: Active list + real names for Phase 1 :: total=296 dept=HUMAN RESOURCE company=MOHANI TEA OFFICE
+INFO :: default employee display labels :: paycode=0328 designation=SENIOR EXECUTIVE dept=HUMAN RESOURCE (003) company=MOHANI TEA OFFICE (001)
+PASS :: Audit month response: attendance + holidays arrays :: days=31 holidays=1
+PASS :: Attendance rows carry detail fields :: {"inTime":null,"outTime":null,"hrs":0,"st":"Absent","isLate":false}
+PASS :: Holiday rows carry ISO date + name + active :: [{"id":10,"holidaydate":"2026-10-02","holidayname":"Gandhi Jaynti","category":"All Employees","description":null,"companycode":"001","active":true,"isHalfDay":false,"halfdaypart":null,"companies":["001","002","004","003"],"categories":["001","004","002","003"],"companyCategoryPairs":[{"companycode":"001","categorycode":"001"},{"companycode":"001","categorycode":"004"},{"companycode":"002","categorycode":"001"},{"companycode":"002","categorycode":"002"},{"companycode":"002","categorycode":"004"},{"companycode":"003","categorycode":"001"},{"companycode":"003","categorycode":"002"},{"companycode":"003","categorycode":"003"},{"companycode":"003","categorycode":"004"},{"companycode":"004","categorycode":"001"},{"companycode":"004","categorycode":"002"},{"companycode":"004","categorycode":"003"},{"companycode":"004","categorycode":"004"}]}]
+PASS :: Past month fetch works (2026-09) :: days=30 holidays=0
+PASS :: Future year-boundary month fetch works (2027-01) :: days=0
+PASS :: Tab /hr (200) :: 
+PASS :: Tab /hr/employees (200) :: 
+PASS :: Tab /hr/analytics (200) :: 
+PASS :: Tab /hr/celebrations (200) :: 
+PASS :: Tab /hr/leave (200) :: 
+PASS :: Tab /hr/salary (200) :: 
+PASS :: Tab /hr/holidays (200) :: 
+PASS :: Login /login (200) :: 
+PASS :: Login /login/hr (200) :: 
+PASS :: Login /login/employee (200) :: 
+PASS :: Login /login/superadmin (200) :: 
+PASS :: Employee login unchanged :: status=200
+PASS :: Executive Overview styles intact :: 
+
+27/27 checks passed

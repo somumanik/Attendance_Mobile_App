@@ -1,0 +1,21 @@
+(node:3976) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///E:/Attendance_Web_App/Attendence_Mobile_App%20-%20Copy/Attendenc_New_Perfect_Mobile/web-next/components/hr/monthGrid.js is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to E:\Attendance_Web_App\Attendence_Mobile_App - Copy\Attendenc_New_Perfect_Mobile\web-next\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+PASS :: Feb 2026 = 28 days :: 28
+PASS :: Feb 2024 (leap) = 29 days :: 29
+PASS :: Apr 2026 = 30 days :: 
+PASS :: Jan 2026 = 31 days :: 
+PASS :: 2026-02 leading blanks = 6 (Sun start, Mon-first) :: leading=6
+PASS :: 2026-02 cells contain exactly 28 in-month dates :: 
+PASS :: 2026-02 first date is 2026-02-01 :: 2026-02-01
+PASS :: 2026-01 leading = 3 (Thu start) :: leading=3
+PASS :: 2024-02 (leap) = 29 dates + correct lead :: 
+PASS :: All months: only own-month dates, exact day counts :: 
+PASS :: Grid rows are full 7-day weeks :: 
+PASS :: Next x4 from 2026-11 crosses year: 2027-03 via 2027-01 :: 2026-12 -> 2027-01 -> 2027-02 -> 2027-03
+PASS :: Prev x4 returns 2026-10 (repeat-safe) :: 2026-10
+PASS :: Today key format YYYY-MM :: 2026-10
+PASS :: shiftMonth is inverse-stable (Dec->Jan->Dec) :: 
+
+15/15 unit checks passed

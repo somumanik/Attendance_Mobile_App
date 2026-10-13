@@ -1,0 +1,84 @@
+﻿
+ProcessId Name                ParentProcessId Cmd                                    
+--------- ----                --------------- ---                                    
+     4908 copilot-runtime.exe            9000 "c:\Users\manikc\AppData\Local\Programs
+                                              \Microsoft VS Code\2a59476c9b\resources
+                                              \app\node_modules.asar.unpacked\@github
+                                              \copilot-sdk-                          
+    18732 Code.exe                      16760 "C:\Users\manikc\AppData\Local\Programs
+                                              \Microsoft VS Code\Code.exe"           
+                                              --max-old-space-size=3072              
+                                              "c:\Users\manikc\AppData\Local\Progr   
+    20672 Code.exe                      16760 "C:\Users\manikc\AppData\Local\Programs
+                                              \Microsoft VS Code\Code.exe"           
+                                              --max-old-space-size=3072              
+                                              "c:\Users\manikc\AppData\Local\Progr   
+    20392 Code.exe                      20672 "C:\Users\manikc\AppData\Local\Programs
+                                              \Microsoft VS Code\Code.exe" "c:/Users/
+                                              manikc/AppData/Local/Programs/Microsoft
+                                               VS Code/2a59                          
+    17272 Code.exe                      16760 "C:\Users\manikc\AppData\Local\Programs
+                                              \Microsoft VS Code\Code.exe" c:\Users\m
+                                              anikc\.vscode\extensions\mongodb.mongod
+                                              b-vscode-1.18                          
+    23340 Code.exe                      16760 "C:\Users\manikc\AppData\Local\Programs
+                                              \Microsoft VS Code\Code.exe" "c:\Users\
+                                              manikc\AppData\Local\Programs\Microsoft
+                                               VS Code\2a59                          
+     7692 Code.exe                      16760 "C:\Users\manikc\AppData\Local\Programs
+                                              \Microsoft VS Code\Code.exe" c:\Users\m
+                                              anikc\.vscode\extensions\bradlc.vscode-
+                                              tailwindcss-0                          
+    18084 Code.exe                      16760 "C:\Users\manikc\AppData\Local\Programs
+                                              \Microsoft VS Code\Code.exe" "c:\Users\
+                                              manikc\AppData\Local\Programs\Microsoft
+                                               VS Code\2a59                          
+    16816 OpenConsole.exe               15308 "c:\Users\manikc\AppData\Local\Programs
+                                              \Microsoft VS Code\2a59476c9b\resources
+                                              \app\node_modules.asar.unpacked\node-pt
+                                              y\build\Relea                          
+    24872 OpenConsole.exe               15308 "c:\Users\manikc\AppData\Local\Programs
+                                              \Microsoft VS Code\2a59476c9b\resources
+                                              \app\node_modules.asar.unpacked\node-pt
+                                              y\build\Relea                          
+    17224 OpenConsole.exe               15308 "c:\Users\manikc\AppData\Local\Programs
+                                              \Microsoft VS Code\2a59476c9b\resources
+                                              \app\node_modules.asar.unpacked\node-pt
+                                              y\build\Relea                          
+    23116 OpenConsole.exe               15308 "c:\Users\manikc\AppData\Local\Programs
+                                              \Microsoft VS Code\2a59476c9b\resources
+                                              \app\node_modules.asar.unpacked\node-pt
+                                              y\build\Relea                          
+    15192 OpenConsole.exe               15308 "c:\Users\manikc\AppData\Local\Programs
+                                              \Microsoft VS Code\2a59476c9b\resources
+                                              \app\node_modules.asar.unpacked\node-pt
+                                              y\build\Relea                          
+    10716 node.exe                       7832 "C:\Program Files\nodejs\node.exe"     
+                                              "C:\Program Files\nodejs/node_modules/n
+                                              pm/bin/npx-cli.js" eas-cli build       
+                                              --platform android --pr                
+    23816 node.exe                       1912 "node"   "C:\Users\manikc\AppData\Local
+                                              \npm-cache\_npx\e25a38a8cc65d08e\node_m
+                                              odules\.bin\\..\eas-cli\bin\run" build 
+                                              --platform an                          
+    24012 node.exe                      10156 "C:\Program Files\nodejs\node.exe"     
+                                              "C:\Program Files\nodejs/node_modules/n
+                                              pm/bin/npm-cli.js" run dev             
+    22456 cmd.exe                       24012 C:\WINDOWS\system32\cmd.exe /d /s /c   
+                                              next dev                               
+    16080 node.exe                      22456 "node"   "E:\Attendance_Web_App\Attende
+                                              nce_Mobile_App - Copy\Attendenc_New_Per
+                                              fect_Mobile\web-next\node_modules\.bin\
+                                              \..\next\dist                          
+    24188 node.exe                      16080 "C:\Program Files\nodejs\node.exe" "E:\
+                                              Attendance_Web_App\Attendence_Mobile_Ap
+                                              p - Copy\Attendenc_New_Perfect_Mobile\w
+                                              eb-next\node_                          
+    21212 node.exe                      17572 "C:\Program Files\nodejs\node.exe"     
+                                              "C:\Program Files\nodejs/node_modules/n
+                                              pm/bin/npm-cli.js" start               
+    15760 cmd.exe                       21212 C:\WINDOWS\system32\cmd.exe /d /s /c   
+                                              node scripts/start-server.mjs          
+    26328 node.exe                      15760 node  scripts/start-server.mjs         
+
+

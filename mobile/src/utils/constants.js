@@ -25,9 +25,12 @@ export const STORAGE_KEYS = {
 };
 
 // User Roles
+// SUPERADMIN is a SEPARATE management role. It is intentionally kept out of the
+// HR and Employee definitions so neither of those flows is affected by it.
 export const USER_ROLES = {
   HR: 'HR',
   EMPLOYEE: 'EMPLOYEE',
+  SUPERADMIN: 'SUPERADMIN',
   NONE: 'NONE',
 };
 
@@ -35,6 +38,7 @@ export const USER_ROLES = {
 export const API_ENDPOINTS = {
   // Authentication
   HR_LOGIN: '/auth/hr/login',
+  SUPERADMIN_LOGIN: '/auth/superadmin/login',
   EMPLOYEE_LOGIN: '/auth/employee/login',
   EMPLOYEE_FIRST_TIME_SETUP_STATUS: '/auth/employee/first-time-setup/status',
   EMPLOYEE_FIRST_TIME_SETUP: '/auth/employee/first-time-setup',
@@ -89,6 +93,10 @@ export const API_ENDPOINTS = {
   EMPLOYEE_WEEKLY: '/employee/weekly',
   EMPLOYEE_MONTHLY: '/employee/monthly',
   EMPLOYEE_DASHBOARD: '/employee/dashboard',
+  // PHASE 6 — employee ki CURRENT authoritative Savior shift (code/name + timings).
+  // Non-cached backend lookup, taaki Savior portal par shift badalne ke baad
+  // app turant nayi shift dikhaye.
+  EMPLOYEE_SHIFT: '/employee/shift',
   
   // HR APIs
   HR_DASHBOARD: '/hr/dashboard',
@@ -107,6 +115,17 @@ export const API_ENDPOINTS = {
   
   // Health Check
   HEALTH: '/health',
+
+  // SuperAdmin console (SUPERADMIN role required; enforced server-side)
+  SUPERADMIN_CATALOG: '/superadmin/catalog',
+  SUPERADMIN_HR_ADMINS: '/superadmin/hr-admins',
+  SUPERADMIN_USERS: '/superadmin/super-admins',
+
+  // Email Management (SuperAdmin + permitted HR Admins)
+  EMAIL_CONFIG: '/email/config',
+  EMAIL_PROVIDER: '/email/provider',
+  EMAIL_HEALTH: '/email/health',
+  EMAIL_TEST: '/email/test',
 };
 
 // Default Request Timeout (milliseconds)

@@ -159,7 +159,11 @@ export const Input = forwardRef((
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                 accessibilityLabel={showPassword ? 'Hide password' : 'Show password'}
               >
-                {showPassword ? '👁️' : '🔒'}
+                {/* Raw emoji/text is NOT a valid child of a View on web
+                    ("Unexpected text node: 🔒 ... cannot be a child of a
+                    <View>"). Wrap it in Text, exactly like every other glyph
+                    in this project. */}
+                <Text style={styles.toggleIcon}>{showPassword ? '👁️' : '🔒'}</Text>
               </TouchableOpacity>
             ) : (
               rightIcon
@@ -218,6 +222,9 @@ const styles = StyleSheet.create({
     paddingRight: 8,
     fontSize: 15,
     minHeight: 48,
+  },
+  toggleIcon: {
+    fontSize: 16,
   },
   messageContainer: {
     flexDirection: 'row',

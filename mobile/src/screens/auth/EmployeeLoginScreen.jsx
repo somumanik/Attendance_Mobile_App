@@ -1,30 +1,34 @@
 // ============================================================================
 // FILE: mobile/src/screens/auth/EmployeeLoginScreen.jsx
-// PURPOSE: Employee login screen - placeholder for Phase 2
+// PURPOSE: Employee login - password (primary) or 4-digit PIN (Phase I)
 // ============================================================================
 
 /**
  * Ye screen Employee login ke liye hai.
- * 
- * Phase 1: Placeholder UI only - actual login Phase 2 mein implement hoga.
- * Backend API: POST /api/auth/employee/login (already exists)
- * 
- * AUDIT FINDING: Employee password verification production-secure NAHI hai.
- * Phase 2 mein fix hoga - separate authentication phase.
- * 
+ *
+ * Backend API: POST /api/auth/employee/login
+ *
+ * Do credentials supported hain (Phase I section 5):
+ *   - PASSWORD : primary credential, hamesha available
+ *   - PIN      : 4-digit, alternative; password login iska fallback bana rehta hai
+ *
+ * Employee Login ID = PAYCODE (real dbo.tblemployee.paycode).
+ *
  * Navigation Flow:
  * RoleSelectionScreen → EmployeeLoginScreen
- *   ↓ (Login successful - Phase 2)
+ *   ↓ (login OK)
  * RootNavigator → EmployeeNavigator
- * 
- * Data Flow (Phase 2):
- * Form Input (paycode + password) → Auth Service (loginEmployee) → API Service → Backend
- * Backend → JWT Token → Storage → Auth Store (setAuth) → Navigation
- * 
+ *   ├── mustChangePassword = true → ChangePasswordScreen (Phase I gate)
+ *   └── normal                  → Employee tabs (Dashboard)
+ *
+ * Data Flow:
+ * Form Input → Auth Store (loginEmployee) → auth service → API client → Backend
+ * Backend → JWT → GET /api/me (role + live mustChangePassword) → Auth Store
+ *
  * IMPORTANT:
  * - Koi SQL credentials yahan NAHI hain
  * - JWT_SECRET mobile app mein NAHI hai
- * - Sirf paycode/password collect karta hai
+ * - Password/PIN sirf POST body mein jaate hain, kabhi store ya log nahi hote
  */
 
 import React, { useState } from 'react';
@@ -43,13 +47,26 @@ export const EmployeeLoginScreen = () => {
   const { loginEmployee } = useAuth();
   const [paycode, setPaycode] = useState('');
   const [password, setPassword] = useState('');
+  const [pin, setPin] = useState('');
+  // Password primary hai; PIN optional shortcut. dono available rehte hain.
+  const [usePin, setUsePin] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   // Backend batata hai ki employee ka password pehli baar banana hai ya nahi.
   const [needsFirstTimeSetup, setNeedsFirstTimeSetup] = useState(false);
 
   const handleLogin = async () => {
-    if (!paycode.trim() || !password.trim()) {
+    if (!paycode.trim()) {
+      setError('Paycode required hai');
+      return;
+    }
+    if (usePin) {
+      // Server par bhi exactly 4 digits ka rule hai; yahan pehle bata dete hain.
+      if (!/^\d{4}$/.test(pin.trim())) {
+        setError('PIN exactly 4 digits ka hona chahiye');
+        return;
+      }
+    } else if (!password.trim()) {
       setError('Paycode aur password required hain');
       return;
     }
@@ -61,7 +78,9 @@ export const EmployeeLoginScreen = () => {
       // Employee credentials existing backend API par jaate hain.
       // Backend JWT return karega, phir /api/me se EMPLOYEE role verify hoga.
       // Auth state update hone par RootNavigator Employee portal kholta hai.
-      await loginEmployee(paycode.trim(), password);
+      // mustChangePassword = true ho to EmployeeNavigator sirf
+      // "Set New Password" screen dikhayega, Dashboard nahi.
+      await loginEmployee(paycode.trim(), password, usePin ? pin.trim() : '');
     } catch (err) {
       // Backend ne bataya ki is employee ka password abhi set nahi hai.
       // Tab user ko first-time password setup screen par bhejte hain.
@@ -120,27 +139,49 @@ export const EmployeeLoginScreen = () => {
               autoFocus={true}
             />
 
-            <Input
-              label="Password"
-              placeholder="••••••••"
-              value={password}
-              onChangeText={setPassword}
-              secureTextEntry={true}
-              autoComplete="password"
-              returnKeyType="go"
-              onSubmitEditing={handleLogin}
-            />
+            {/* Password ya PIN - dono supported, dono available (Phase I section 5) */}
+            {usePin ? (
+              <Input
+                label="4-Digit PIN"
+                placeholder="••••"
+                value={pin}
+                onChangeText={(v) => setPin(v.replace(/\D/g, '').slice(0, 4))}
+                secureTextEntry={true}
+                keyboardType="number-pad"
+                maxLength={4}
+                autoComplete="off"
+                returnKeyType="go"
+                onSubmitEditing={handleLogin}
+              />
+            ) : (
+              <Input
+                label="Password"
+                placeholder="••••••••"
+                value={password}
+                onChangeText={setPassword}
+                secureTextEntry={true}
+                autoComplete="password"
+                returnKeyType="go"
+                onSubmitEditing={handleLogin}
+              />
+            )}
+
+            {/* Password / PIN switch. Password hamesha fallback ban kar available hai. */}
+            <TouchableOpacity
+              style={styles.switchLink}
+              onPress={() => { setUsePin((v) => !v); setError(''); }}
+              hitSlop={{ top: 10, left: 10, bottom: 10, right: 10 }}
+            >
+              <Text style={[styles.switchText, { color: theme.primary }]}>
+                {usePin ? '🔑 Login with Password instead' : '🔢 Login with 4-digit PIN'}
+              </Text>
+            </TouchableOpacity>
 
             {error ? (
               <View style={styles.errorContainer}>
                 <Text style={styles.errorText}>⚠️ {error}</Text>
               </View>
             ) : null}
-
-            {/* Audit Notice */}
-            <View style={styles.auditNotice}>
-              <Text style={styles.auditNoticeText}>⚠️ Employee password verification backend hardening abhi separate task hai.</Text>
-            </View>
 
             {/* Phase 2 Notice */}
             <View style={styles.phaseNotice}>
@@ -188,6 +229,8 @@ export const EmployeeLoginScreen = () => {
 const styles = StyleSheet.create({
   forgotLink: { alignItems: 'center', paddingVertical: 4 },
   forgotText: { fontSize: 13, fontWeight: '600' },
+  switchLink: { alignItems: 'center', paddingVertical: 4 },
+  switchText: { fontSize: 12.5, fontWeight: '600' },
   container: {
     flex: 1,
   },
@@ -254,17 +297,6 @@ const styles = StyleSheet.create({
   errorText: {
     fontSize: 12,
     fontWeight: '500',
-    textAlign: 'center',
-  },
-  auditNotice: {
-    padding: 12,
-    backgroundColor: '#FEF3C7',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#FDE68A',
-  },
-  auditNoticeText: {
-    fontSize: 12,
     textAlign: 'center',
   },
   phaseNotice: {

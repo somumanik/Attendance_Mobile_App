@@ -129,8 +129,6 @@ export const getHrFullFinal = async (paycode, { leavingdate, noticeServedDays, n
   return api.get(`${API_ENDPOINTS.HR_SALARY_FULLFINAL}/${encodeURIComponent(clean(paycode))}`, params);
 };
 
-  const response = await api.post(`${API_ENDPOINTS.HR_SALARY_ELEMENTS}/import`, { rows });
-
 /* ============================== SHARED HELPERS =========================== */
 
 /** The exact header rows the Excel imports expect, in order. */

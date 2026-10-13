@@ -373,7 +373,8 @@ export async function findActiveEmployee(pool, paycode) {
     .input('paycode', sql.NVarChar(50), clean(paycode))
     .query(`SELECT TOP 1 LTRIM(RTRIM(paycode)) AS paycode,
                     LTRIM(RTRIM(empname)) AS empname,
-                    LTRIM(RTRIM(presentcardno)) AS presentcardno
+                    LTRIM(RTRIM(presentcardno)) AS presentcardno,
+                    LTRIM(RTRIM(companycode)) AS companycode
              FROM dbo.tblemployee
              WHERE LTRIM(RTRIM(paycode)) = @paycode AND ISNULL(active, 'Y') <> 'N'`);
   return r.recordset?.[0] || null;
@@ -519,7 +520,24 @@ export async function getLeaveBalance(pool, { paycode, leaveyear }) {
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
 /** HR view: balances for many employees at once (used by the HR leave screen). */
-export async function listEmployeeBalances(pool, { leaveyear, search, limit = 100 }) {
+/**
+ * PROMPT 4.2 — COMPANY ISOLATION helper for the leave service.
+ *
+ * Builds a " AND LTRIM(RTRIM(<alias>.companycode)) IN ('001', '002')" fragment from an
+ * HR Admin's assigned companies. `scope` null/undefined => unrestricted (the bootstrap
+ * HR account and the SuperAdmin console path), so those callers are byte-for-byte
+ * unchanged. An EMPTY array means "no company assigned" and must be treated as DENY
+ * (fail closed) by every caller, never as "no restriction".
+ */
+function companyScopeFragment(alias, scope) {
+  if (scope === null || scope === undefined) return { fragment: '', denied: false };
+  const list = (Array.isArray(scope) ? scope : []).map((c) => String(c || '').trim()).filter(Boolean);
+  if (!list.length) return { fragment: '', denied: true };
+  const inList = list.map((c) => `'${c.replace(/'/g, "''")}'`).join(', ');
+  return { fragment: ` AND LTRIM(RTRIM(${alias}.companycode)) IN (${inList})`, denied: false };
+}
+
+export async function listEmployeeBalances(pool, { leaveyear, search, limit = 100, companyScope }) {
   await ensureLeaveTables(pool);
   const year = Number(leaveyear) || yearOf(todayIso());
   const like = clean(search);
@@ -527,6 +545,10 @@ export async function listEmployeeBalances(pool, { leaveyear, search, limit = 10
     .input('year', sql.Int, year)
     .input('limit', sql.Int, Math.min(Number(limit) || 100, 500));
   let where = `WHERE ISNULL(e.active, 'Y') <> 'N' AND b.leaveyear = @year`;
+  /* PROMPT 4.2 — a scoped HR Admin only sees balances of employees in its companies. */
+  const scope = companyScopeFragment('e', companyScope);
+  if (scope.denied) return { leaveyear: year, employees: [] };
+  where += scope.fragment;
   if (like) {
     where += ` AND (e.paycode LIKE @like OR e.empname LIKE @like)`;
     request.input('like', sql.NVarChar(60), `%${like}%`);
@@ -610,10 +632,16 @@ export async function listLeaveRequests(pool, { paycode, leaveyear, status }) {
 }
 
 /** HR view across employees, with the same filters plus search. */
-export async function listAllLeaveRequests(pool, { leaveyear, status, search, limit = 200 }) {
+export async function listAllLeaveRequests(pool, { leaveyear, status, search, limit = 200, companyScope }) {
   await ensureLeaveTables(pool);
+  /* PROMPT 4.2 — HR-wide request list is company data. The REQUEST_SELECT joins
+     dbo.tblemployee as `e`, so a scoped admin only receives its own companies'
+     requests; a request whose employee cannot be resolved is excluded (fail closed). */
+  const scope = companyScopeFragment('e', companyScope);
+  if (scope.denied) return [];
   const request = pool.request().input('limit', sql.Int, Math.min(Number(limit) || 200, 1000));
   let where = 'WHERE 1 = 1';
+  where += scope.fragment;
   if (leaveyear) { where += ` AND r.leaveyear = @year`; request.input('year', sql.Int, Number(leaveyear)); }
   if (status) { where += ` AND LTRIM(RTRIM(r.status)) = @status`; request.input('status', sql.NVarChar(20), clean(status)); }
   if (clean(search)) {
@@ -736,7 +764,7 @@ export async function cancelLeaveRequest(pool, { paycode, id }) {
  * Approving re-checks the balance at decision time, so two HR users approving
  * concurrently can never over-commit the same balance.
  */
-export async function decideLeaveRequest(pool, { id, decision, note, actor }) {
+export async function decideLeaveRequest(pool, { id, decision, note, actor, companyScope }) {
   await ensureLeaveTables(pool);
   // Compare against the UPPERCASE mirror: a caller may send "approved",
   // "Approved" or "APPROVED" and all must behave identically.
@@ -750,6 +778,20 @@ export async function decideLeaveRequest(pool, { id, decision, note, actor }) {
             FROM ${LEAVE_REQUEST_TABLE} WHERE id = @id`);
   const current = row.recordset?.[0];
   if (!current) return { ok: false, status: 404, code: 'NOT_FOUND', message: 'Leave request not found.' };
+  /* PROMPT 4.2 — COMPANY ISOLATION: a company-scoped HR Admin may only decide requests
+     belonging to employees in its own companies. This runs BEFORE any UPDATE, so a
+     denied decision can never change a request's status. Empty scope ⇒ deny. */
+  const scope = companyScopeFragment('e', companyScope);
+  if (scope.denied) {
+    return { ok: false, status: 403, code: 'COMPANY_FORBIDDEN', message: 'You are not authorized for this request.' };
+  }
+  if (scope.fragment) {
+    const chk = await pool.request().input('paycode', sql.NVarChar(50), clean(current.paycode))
+      .query(`SELECT TOP 1 1 AS ok FROM dbo.tblemployee e WHERE LTRIM(RTRIM(e.paycode)) = @paycode${scope.fragment}`);
+    if (!chk.recordset?.[0]) {
+      return { ok: false, status: 403, code: 'COMPANY_FORBIDDEN', message: 'This request belongs to a company outside your access.' };
+    }
+  }
   if (clean(current.status) !== LEAVE_STATUS.PENDING) {
     return { ok: false, status: 409, code: 'ALREADY_DECIDED', message: `This request is already ${clean(current.status)}.` };
   }
@@ -873,8 +915,15 @@ const num = (v) => {
  *
  * Returns { imported, updated, skipped, failed, errors[], rows[] }.
  */
-export async function importLeaveBalances(pool, { rows, actor }) {
+export async function importLeaveBalances(pool, { rows, actor, companyScope }) {
   await ensureLeaveTables(pool);
+  /* PROMPT 4.2 — a company-scoped HR Admin may only import opening balances for its own
+     companies. Computed once, then enforced per row below (each out-of-scope row is
+     reported as Failed, exactly like an unmatched employee, so nothing is written).
+     An EMPTY scope denies every row (fail closed). */
+  const scopeList = (companyScope === null || companyScope === undefined)
+    ? null
+    : (Array.isArray(companyScope) ? companyScope.map((c) => String(c || '').trim().toUpperCase()).filter(Boolean) : []);
   const summary = { imported: 0, updated: 0, skipped: 0, failed: 0, errors: [], results: [] };
   const list = Array.isArray(rows) ? rows : [];
 
@@ -914,6 +963,12 @@ export async function importLeaveBalances(pool, { rows, actor }) {
     const employee = await findActiveEmployee(pool, code);
     if (!employee) {
       fail(`EmployeeCode "${code}" was not found among active employees. Nothing was imported for this row.`);
+      continue;
+    }
+    /* PROMPT 4.2 — the row's employee must belong to a company assigned to this HR
+       Admin. Reported as Failed, so an out-of-scope row is never written. */
+    if (scopeList && (!scopeList.length || !scopeList.includes(clean(employee.companycode).toUpperCase()))) {
+      fail(`EmployeeCode "${code}" belongs to a company outside your access.`);
       continue;
     }
     if (biometric && employee.presentcardno && clean(biometric).toUpperCase() !== clean(employee.presentcardno).toUpperCase()) {

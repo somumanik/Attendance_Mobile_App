@@ -1,0 +1,32 @@
+PASS :: Reconcile 0328 2026-10: cards == server stats except holiday-absent :: client={"present":0,"absent":26,"miss":0,"late":0,"holidaySkipped":1} server={"present":0,"absent":27,"miss":0,"late":0,"hours":0,"attendancePercentage":0}
+PASS :: Reconcile 0328 2026-09: cards == server stats except holiday-absent :: client={"present":1,"absent":23,"miss":2,"late":2,"holidaySkipped":0} server={"present":1,"absent":23,"miss":2,"late":2,"hours":551,"attendancePercentage":3.8}
+PASS :: Reconcile AW00247 2026-10: cards == server stats except holiday-absent :: client={"present":0,"absent":26,"miss":0,"late":0,"holidaySkipped":1} server={"present":0,"absent":27,"miss":0,"late":0,"hours":0,"attendancePercentage":0}
+PASS :: Reconcile AW00247 2026-09: cards == server stats except holiday-absent :: client={"present":12,"absent":12,"miss":1,"late":0,"holidaySkipped":1} server={"present":12,"absent":13,"miss":1,"late":0,"hours":6150,"attendancePercentage":46.2}
+PASS :: Reconcile 0341 2026-10: cards == server stats except holiday-absent :: client={"present":9,"absent":17,"miss":0,"late":0,"holidaySkipped":1} server={"present":9,"absent":18,"miss":0,"late":0,"hours":4380,"attendancePercentage":33.3}
+PASS :: Reconcile 0341 2026-09: cards == server stats except holiday-absent :: client={"present":23,"absent":1,"miss":2,"late":0,"holidaySkipped":0} server={"present":23,"absent":1,"miss":2,"late":0,"hours":12385,"attendancePercentage":88.5}
+PASS :: Reconcile W00399 2026-10: cards == server stats except holiday-absent :: client={"present":8,"absent":18,"miss":0,"late":3,"holidaySkipped":1} server={"present":8,"absent":19,"miss":0,"late":3,"hours":4185,"attendancePercentage":29.6}
+PASS :: Reconcile W00399 2026-09: cards == server stats except holiday-absent :: client={"present":24,"absent":0,"miss":1,"late":4,"holidaySkipped":1} server={"present":24,"absent":1,"miss":1,"late":4,"hours":12817,"attendancePercentage":92.3}
+PASS :: Holiday-no-punch skipped as non-Absent in real data :: 
+PASS :: Grace-covered late arrivals exist and are excluded from Late Marks :: 
+PASS :: Month-to-month summary values differ (cards must change) :: 
+PASS :: Late Marks == isFinalLate count == stats.late (grace case) :: lateDetails=4 final=0 stats.late=0 graceUsed=["30min","30min","1hr","2hr"]
+PASS :: Bundle: month-keyed audit fetch (month=) :: 
+PASS :: Bundle: Late Marks derives from isFinalLate :: 
+PASS :: Bundle: loading indicators wired :: 
+PASS :: Bundle: no leftover dual-fetch (calAudit) :: 
+PASS :: Tab /hr (200) :: 
+PASS :: Tab /hr/employees (200) :: 
+PASS :: Tab /hr/audit (200) :: 
+PASS :: Tab /hr/analytics (200) :: 
+PASS :: Tab /hr/celebrations (200) :: 
+PASS :: Tab /hr/leave (200) :: 
+PASS :: Tab /hr/salary (200) :: 
+PASS :: Tab /hr/holidays (200) :: 
+PASS :: Login /login (200) :: 
+PASS :: Login /login/hr (200) :: 
+PASS :: Login /login/employee (200) :: 
+PASS :: Login /login/superadmin (200) :: 
+PASS :: CSS: calendar + exec styles intact :: 
+PASS :: Employee login unchanged :: 
+
+30/30 checks passed

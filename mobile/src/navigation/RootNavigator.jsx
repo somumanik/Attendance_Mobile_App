@@ -31,6 +31,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AuthNavigator } from './AuthNavigator';
 import { EmployeeNavigator } from './EmployeeNavigator';
 import { HRNavigator } from './HRNavigator';
+import { SuperAdminNavigator } from './SuperAdminNavigator';
 import { authStore } from '../store/authStore';
 import { LoadingScreen } from '../screens/LoadingScreen';
 import { RoleGuard } from './RoleGuard';
@@ -67,7 +68,13 @@ export const RootNavigator = () => {
         {isAuthenticated ? (
           // RoleGuard role verify karta hai; wrong portal access redirect hota hai.
           <RoleGuard requiredRole={userRole}>
-            {userRole === 'HR' ? <HRNavigator /> : <EmployeeNavigator />}
+            {/* HR and Employee branches are exactly as before; SuperAdmin is an
+                ADDITIVE third branch for the separate management role. */}
+            {userRole === 'HR'
+              ? <HRNavigator />
+              : userRole === 'SUPERADMIN'
+                ? <SuperAdminNavigator />
+                : <EmployeeNavigator />}
           </RoleGuard>
         ) : (
           <AuthNavigator />

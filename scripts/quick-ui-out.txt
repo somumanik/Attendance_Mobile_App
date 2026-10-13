@@ -1,0 +1,32 @@
+PASS :: HR login unchanged :: status=200
+PASS :: /hr/audit renders (200) :: status=200
+PASS :: CSS: primary values royal white #ffffff :: 
+PASS :: CSS: helper pink #ff79c6 (age/birthday) :: 
+PASS :: CSS: helper amber #ffd166 (service duration) :: 
+PASS :: CSS: helper cyan #45d6e8 (marital helper) :: 
+PASS :: CSS: helper violet #b69cff (anniversary helper) :: 
+PASS :: CSS: no leftover coloured value classes :: 
+PASS :: CSS: IN #00d6a0 / OUT #ff667d intact :: 
+PASS :: CSS: dropdown styling intact :: 
+PASS :: CSS: shared badges + exec overview intact :: 
+PASS :: Bundle: audit-val + 4 helper classes wired :: 
+PASS :: Bundle: labels still muted class-free styling :: 
+PASS :: Bundle: no leftover valueClass props :: 
+PASS :: Active employee list unchanged :: total=296
+PASS :: Audit data unchanged (stats + rows) :: {"present":0,"absent":27,"miss":0,"late":0,"hours":0,"attendancePercentage":0}
+INFO :: profile keys :: paycode,empname,presentcardno,companycode,departmentcode,designation,dateofbirth,dateofjoin,sex,cat,ismarried,active,departmentname,shiftCode,shiftName,shiftStart,shiftEnd,shiftResolved,shiftUnavailableReason,shift
+INFO :: real detail values :: DOB=1991-08-01T00:00:00.000Z DOJ=2015-04-26T00:00:00.000Z married=Y qual=undefined exp=undefined contact=undefined email=undefined
+PASS :: Tab /hr (200) :: status=200
+PASS :: Tab /hr/employees (200) :: status=200
+PASS :: Tab /hr/analytics (200) :: status=200
+PASS :: Tab /hr/celebrations (200) :: status=200
+PASS :: Tab /hr/leave (200) :: status=200
+PASS :: Tab /hr/salary (200) :: status=200
+PASS :: Tab /hr/holidays (200) :: status=200
+PASS :: Login /login (200) :: 
+PASS :: Login /login/hr (200) :: 
+PASS :: Login /login/employee (200) :: 
+PASS :: Login /login/superadmin (200) :: 
+PASS :: Employee login unchanged :: status=200
+
+28/28 checks passed

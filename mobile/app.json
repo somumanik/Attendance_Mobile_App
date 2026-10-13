@@ -1,7 +1,8 @@
 {
   "expo": {
-    "name": "Savior Attendance Mobile",
-    "slug": "savior-attendance-mobile",
+    "name": "Mohani Attendance",
+    "slug": "mohani-attendance-mobile",
+    "icon": "./assets/images/icon.png",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
@@ -16,12 +17,20 @@
       "supportsTablet": true
     },
     "android": {
+      "package": "com.mohani.attendance",
       "adaptiveIcon": {
+        "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#FFFFFF"
       }
     },
     "plugins": [
       "expo-secure-store"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "80f06ede-3346-423c-90f6-d7ba2a8c2891"
+      }
+    },
+    "owner": "maniksomu"
   }
 }

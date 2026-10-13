@@ -1,0 +1,39 @@
+PASS :: HR login unchanged :: status=200
+PASS :: /hr/audit renders (200) :: status=200
+PASS :: CSS: IN bright emerald #00d6a0 + OUT coral #ff667d :: 
+PASS :: CSS: dash stays muted (no fake times) :: 
+PASS :: CSS: summary name/accent/meta :: 
+PASS :: CSS: detail value tones (green/teal/pink/violet) :: 
+PASS :: CSS: dropdown dark navy + violet border/focus :: 
+PASS :: CSS: dropdown dark options + highlighted checked :: 
+PASS :: CSS: shared badges untouched (other tabs) :: 
+PASS :: CSS: executive overview styles untouched :: 
+PASS :: Bundle: audit-tab scope + select class present :: 
+PASS :: Bundle: punch values use scoped classes :: 
+PASS :: Bundle: summary + details classes present :: 
+PASS :: Bundle: KPI labels + badge mapping intact :: 
+PASS :: Bundle: selection + fetch logic unchanged (active=Y, /hr/audit/) :: 
+PASS :: Active employee list unchanged (total from SQL) :: total=296
+PASS :: Default selection target still first real employee :: 0328 - Abhilasha Yadav
+PASS :: Audit stats unchanged (real values) :: {"present":0,"absent":27,"miss":0,"late":0,"hours":0,"attendancePercentage":0}
+PASS :: Punch log rows unchanged (31 days) :: days=31
+INFO :: real punch rows :: inTime present on 0/31 (rest render muted dash)
+PASS :: Tab /hr (200) :: status=200
+PASS :: Tab /hr/employees (200) :: status=200
+PASS :: Tab /hr/analytics (200) :: status=200
+PASS :: Tab /hr/daily (200) :: status=200
+PASS :: Tab /hr/celebrations (200) :: status=200
+PASS :: Tab /hr/marriage (200) :: status=200
+PASS :: Tab /hr/email (200) :: status=200
+PASS :: Tab /hr/leave (200) :: status=200
+PASS :: Tab /hr/salary (200) :: status=200
+PASS :: Tab /hr/holidays (200) :: status=200
+PASS :: Login /login (200) :: 
+PASS :: Login /login/hr (200) :: 
+PASS :: Login /login/employee (200) :: 
+PASS :: Login /login/superadmin (200) :: 
+PASS :: Employee login unchanged :: status=200
+PASS :: Employee still blocked from /hr/audit (redirect) :: status=307
+PASS :: Anonymous /hr/audit still redirects :: status=307
+
+36/36 checks passed

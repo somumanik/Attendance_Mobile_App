@@ -314,7 +314,7 @@ export async function getSalaryConfig(pool) {
  * Identity is validated against the REAL active roster. Every invalid row is
  * reported as Failed with a reason - never silently dropped.
  */
-export async function importSalaryMaster(pool, { rows, actor }) {
+export async function importSalaryMaster(pool, { rows, actor, companyScope }) {
   await ensureSalaryTables(pool);
   const summary = { imported: 0, updated: 0, skipped: 0, failed: 0, errors: [], results: [] };
   const list = Array.isArray(rows) ? rows : [];
@@ -354,6 +354,13 @@ export async function importSalaryMaster(pool, { rows, actor }) {
     const employee = await findActiveEmployee(pool, code);
     if (!employee) {
       fail(`EmployeeCode "${code}" was not found among active employees. Nothing was imported for this row.`);
+      continue;
+    }
+    /* PROMPT 4.2 — the row's employee must belong to a company assigned to this HR
+       Admin, otherwise the row is reported Failed and nothing is written. */
+    const masterScope = await paycodeCompanyAllowed(pool, employee.paycode, companyScope);
+    if (!masterScope.allowed) {
+      fail(`EmployeeCode "${code}" belongs to a company outside your access.`);
       continue;
     }
     if (biometric && employee.presentcardno && clean(biometric).toUpperCase() !== clean(employee.presentcardno).toUpperCase()) {
@@ -459,7 +466,7 @@ async function upsertMasterRow(pool, summary, record, v) {
  * type, amount/percentage and percentage base must all agree. Invalid rows are
  * reported as Failed - never silently dropped.
  */
-export async function importSalaryElements(pool, { rows, actor }) {
+export async function importSalaryElements(pool, { rows, actor, companyScope }) {
   await ensureSalaryTables(pool);
   const summary = { imported: 0, updated: 0, skipped: 0, failed: 0, errors: [], results: [] };
   const list = Array.isArray(rows) ? rows : [];
@@ -510,6 +517,15 @@ export async function importSalaryElements(pool, { rows, actor }) {
     const employee = await findActiveEmployee(pool, code);
     if (!employee) {
       fail(`EmployeeCode "${code}" was not found among active employees. Nothing was imported for this row.`);
+      continue;
+    }
+
+    /* PROMPT 4.2 — the row's employee must belong to a company assigned to this HR
+       Admin. Runs AFTER the existing validation chain (so genuine data errors keep their
+       own message) and BEFORE any insert/update, so an out-of-scope row writes nothing. */
+    const elementScope = await paycodeCompanyAllowed(pool, employee.paycode, companyScope);
+    if (!elementScope.allowed) {
+      fail(`EmployeeCode "${code}" belongs to a company outside your access.`);
       continue;
     }
 
@@ -579,11 +595,45 @@ async function upsertElementRow(pool, summary, record, { actor }) {
 }
 
 /** HR list of salary master rows (latest effective date per employee first). */
-export async function listSalaryMaster(pool, { search, limit = 200 } = {}) {
+/**
+ * PROMPT 4.2 — COMPANY ISOLATION helpers for the salary service.
+ *
+ * `companyScopeFragment` builds a " AND LTRIM(RTRIM(<alias>.companycode)) IN ('001')"
+ * fragment for list queries that already join dbo.tblemployee. `paycodeCompanyAllowed`
+ * is the paycode-keyed equivalent for single-employee operations.
+ *
+ * Semantics (identical to leave-service): null/undefined scope => unrestricted (the
+ * bootstrap HR account and the SuperAdmin console path, unchanged); an EMPTY array
+ * means "no company assigned" and DENIES everything (fail closed).
+ */
+function companyScopeFragment(alias, scope) {
+  if (scope === null || scope === undefined) return { fragment: '', denied: false };
+  const list = (Array.isArray(scope) ? scope : []).map((c) => String(c || '').trim()).filter(Boolean);
+  if (!list.length) return { fragment: '', denied: true };
+  const inList = list.map((c) => `'${c.replace(/'/g, "''")}'`).join(', ');
+  return { fragment: ` AND LTRIM(RTRIM(${alias}.companycode)) IN (${inList})`, denied: false };
+}
+
+async function paycodeCompanyAllowed(pool, paycode, scope) {
+  if (scope === null || scope === undefined) return { allowed: true, companycode: '' };
+  const list = (Array.isArray(scope) ? scope : []).map((c) => String(c || '').trim().toUpperCase()).filter(Boolean);
+  if (!list.length) return { allowed: false, companycode: '' };
+  const r = await pool.request().input('paycode', sql.NVarChar(50), clean(paycode))
+    .query('SELECT TOP 1 LTRIM(RTRIM(companycode)) AS companycode FROM dbo.tblemployee WHERE LTRIM(RTRIM(paycode)) = @paycode');
+  const comp = String(r.recordset?.[0]?.companycode || '').trim().toUpperCase();
+  return { allowed: Boolean(comp) && list.includes(comp), companycode: comp };
+}
+
+export async function listSalaryMaster(pool, { search, limit = 200, companyScope } = {}) {
   await ensureSalaryTables(pool);
   const like = clean(search);
+  /* PROMPT 4.2 — salary master rows are company data (the query already joins
+     dbo.tblemployee as `e`). */
+  const scope = companyScopeFragment('e', companyScope);
+  if (scope.denied) return [];
   const request = pool.request().input('limit', sql.Int, Math.min(Number(limit) || 200, 1000));
   let where = 'WHERE 1 = 1';
+  where += scope.fragment;
   if (like) {
     where += ' AND (m.paycode LIKE @like OR e.empname LIKE @like)';
     request.input('like', sql.NVarChar(60), `%${like}%`);
@@ -607,11 +657,15 @@ export async function listSalaryMaster(pool, { search, limit = 200 } = {}) {
 
 
 /** HR list of pay elements. */
-export async function listSalaryElements(pool, { paycode, search, limit = 300 } = {}) {
+export async function listSalaryElements(pool, { paycode, search, limit = 300, companyScope } = {}) {
   await ensureSalaryTables(pool);
   const like = clean(search);
+  /* PROMPT 4.2 — pay-element rows are company data (joins dbo.tblemployee as `e`). */
+  const scope = companyScopeFragment('e', companyScope);
+  if (scope.denied) return [];
   const request = pool.request().input('limit', sql.Int, Math.min(Number(limit) || 300, 1000));
   let where = 'WHERE 1 = 1';
+  where += scope.fragment;
   if (clean(paycode)) {
     where += ' AND LTRIM(RTRIM(x.paycode)) = @paycode';
     request.input('paycode', sql.NVarChar(50), clean(paycode));
@@ -660,10 +714,14 @@ const DUE_SELECT = `SELECT d.id, LTRIM(RTRIM(d.paycode)) AS paycode, LTRIM(RTRIM
 FROM ${SALARY_DUES_TABLE} d
 LEFT JOIN dbo.tblemployee e ON LTRIM(RTRIM(e.paycode)) = LTRIM(RTRIM(d.paycode))`;
 
-export async function listSalaryDues(pool, { paycode, status, search, limit = 200 } = {}) {
+export async function listSalaryDues(pool, { paycode, status, search, limit = 200, companyScope } = {}) {
   await ensureSalaryTables(pool);
+  /* PROMPT 4.2 — dues/recoveries are company data (DUE_SELECT joins tblemployee as `e`). */
+  const scope = companyScopeFragment('e', companyScope);
+  if (scope.denied) return [];
   const request = pool.request().input('limit', sql.Int, Math.min(Number(limit) || 200, 1000));
   let where = 'WHERE 1 = 1';
+  where += scope.fragment;
   if (clean(paycode)) { where += ' AND LTRIM(RTRIM(d.paycode)) = @paycode'; request.input('paycode', sql.NVarChar(50), clean(paycode)); }
   if (clean(status)) { where += ' AND LTRIM(RTRIM(d.status)) = @status'; request.input('status', sql.NVarChar(20), clean(status)); }
   if (clean(search)) {
@@ -674,7 +732,7 @@ export async function listSalaryDues(pool, { paycode, status, search, limit = 20
   return (r.recordset || []).map((x) => ({ ...mapDue(x), empname: clean(x.empname) }));
 }
 
-export async function createSalaryDue(pool, { paycode, category, kind, description, amount, actor }) {
+export async function createSalaryDue(pool, { paycode, category, kind, description, amount, actor, companyScope }) {
   await ensureSalaryTables(pool);
   const code = clean(paycode);
   const cat = upper(category);
@@ -701,15 +759,21 @@ export async function createSalaryDue(pool, { paycode, category, kind, descripti
   return { ok: true, due: mapDue(created.recordset[0]) };
 }
 
-export async function decideSalaryDue(pool, { id, decision, note, actor }) {
+export async function decideSalaryDue(pool, { id, decision, note, actor, companyScope }) {
   await ensureSalaryTables(pool);
   const status = upper(decision) === 'APPROVED' ? DUES_STATUS.APPROVED
     : upper(decision) === 'REJECTED' ? DUES_STATUS.REJECTED : null;
   if (!status) return { ok: false, status: 400, code: 'INVALID_DECISION', message: 'Decision must be Approved or Rejected.' };
 
   const current = await pool.request().input('id', sql.Int, Number(id))
-    .query(`SELECT TOP 1 LTRIM(RTRIM(status)) AS status FROM ${SALARY_DUES_TABLE} WHERE id = @id`);
+    .query(`SELECT TOP 1 LTRIM(RTRIM(status)) AS status, LTRIM(RTRIM(paycode)) AS paycode FROM ${SALARY_DUES_TABLE} WHERE id = @id`);
   if (!current.recordset?.[0]) return { ok: false, status: 404, code: 'NOT_FOUND', message: 'Dues entry not found.' };
+  /* PROMPT 4.2 — COMPANY ISOLATION: runs BEFORE the UPDATE, so a company-scoped HR
+     Admin can never change another company's dues entry. Empty scope ⇒ deny. */
+  const verdict = await paycodeCompanyAllowed(pool, current.recordset[0].paycode, companyScope);
+  if (!verdict.allowed) {
+    return { ok: false, status: 403, code: 'COMPANY_FORBIDDEN', message: 'This dues entry belongs to a company outside your access.' };
+  }
   if (clean(current.recordset[0].status) !== DUES_STATUS.PENDING) {
     return { ok: false, status: 409, code: 'ALREADY_DECIDED', message: `This entry is already ${clean(current.recordset[0].status)}.` };
   }
@@ -915,8 +979,7 @@ function buildRules(cfg) {
   };
 }
 
-export async function computeFullFinal(pool, { paycode, leavingdate, noticeServedDays, noticeWaived }) {
-  await ensureSalaryTables(pool);
+export async function computeFullFinal(pool, { paycode, leavingdate, noticeServedDays, noticeWaived, companyScope }) {
   await ensureLeaveTables(pool); // leave encashment reads real leave balances
 
   const er = await pool.request().input('paycode', sql.NVarChar(50), clean(paycode)).query(`
@@ -927,6 +990,15 @@ export async function computeFullFinal(pool, { paycode, leavingdate, noticeServe
     FROM dbo.tblemployee WHERE LTRIM(RTRIM(paycode)) = @paycode`);
   const e = er.recordset?.[0];
   if (!e) return { ok: false, status: 404, code: 'EMPLOYEE_NOT_FOUND', message: 'Employee not found.' };
+  /* PROMPT 4.2 — COMPANY ISOLATION: Full & Final exposes the WHOLE salary picture
+     (master, elements, dues, gratuity, leave encashment) for one paycode, so a scoped
+     HR Admin must only be able to compute it for its own companies. */
+  {
+    const verdict = await paycodeCompanyAllowed(pool, e.paycode, companyScope);
+    if (!verdict.allowed) {
+      return { ok: false, status: 403, code: 'COMPANY_FORBIDDEN', message: 'Employee belongs to a company outside your access.' };
+    }
+  }
 
   const dateofjoin = toIsoDate(e.dateofjoin);
   const officialLeaving = toIsoDate(e.leavingdate);

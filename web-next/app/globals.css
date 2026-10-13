@@ -1,0 +1,1205 @@
+@import "tailwindcss";
+
+/* ===========================================================================
+   ORIGINAL WEBSITE CUSTOM CLASSES  (index.html <style> block, preserved verbatim)
+   These are the exact glass/gradient/sidebar styles from the original portal.
+   =========================================================================== */
+* { font-family: 'Plus Jakarta Sans', sans-serif; }
+.glass { background: var(--surface); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border: 1px solid var(--border); }
+.glass-card { background: var(--surface); backdrop-filter: blur(16px); border: 1px solid var(--border); }
+.gradient-bg { background: radial-gradient(circle at 10% 20%, var(--bg-1) 0%, var(--bg-2) 90.2%); }
+.card-gradient-1 { background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%); }
+.card-gradient-2 { background: linear-gradient(135deg,#e11d48 0%,#f43f5e 100%); }
+.sidebar-item { transition: all .2s cubic-bezier(.4,0,.2,1); border-left: 4px solid transparent; color: var(--muted); }
+.sidebar-item:hover, .sidebar-item.active { background: color-mix(in srgb, var(--accent) 18%, transparent); border-left: 4px solid var(--accent); color: var(--text); }
+.portal-sidebar { background: color-mix(in srgb, var(--surface-solid) 82%, transparent); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border-right: 1px solid var(--border); }
+.portal-header { background: color-mix(in srgb, var(--surface-solid) 70%, transparent); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border-bottom: 1px solid var(--border); }
+.portal-mobile-nav { background: color-mix(in srgb, var(--surface-solid) 95%, transparent); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border-top: 1px solid var(--border); }
+.fade-in { animation: fadeIn .35s ease-out forwards; }
+@keyframes fadeIn { from { opacity:0; transform: translateY(8px);} to {opacity:1; transform: translateY(0);} }
+.pulse-dot { animation: pulseGlow 2s infinite; }
+@keyframes pulseGlow { 0%,100%{opacity:1;transform:scale(1);} 50%{opacity:.4;transform:scale(1.15);} }
+.stat-card { transition: transform .25s ease, box-shadow .25s ease; }
+.stat-card:hover { transform: translateY(-4px); box-shadow: 0 16px 30px rgba(0,0,0,.35); }
+.table-row:hover { background: rgba(99,102,241,.08); }
+.login-bg { background: radial-gradient(circle at 50% 0%, #2e266d 0%, #0b091a 65%, #05050b 100%); }
+.input-focus:focus { box-shadow: 0 0 0 3px rgba(99,102,241,.35); border-color: rgba(129,140,248,.8); }
+::-webkit-scrollbar { width:6px; height:6px; }
+::-webkit-scrollbar-track { background:#0b091a; }
+::-webkit-scrollbar-thumb { background:#4f46e5; border-radius:4px; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.chip { display:inline-flex; align-items:center; gap:.35rem; padding:.25rem .6rem; border-radius:.6rem; font-size:10px; font-weight:800; }
+.tabbtn { transition: all .2s ease; color: var(--muted); }
+.tabbtn.active { background: var(--accent); color: var(--on-accent, #fff); box-shadow: 0 6px 16px var(--focus-ring); }
+
+/* ===========================================================================
+   Portal section content (tables / badges / lists) — kept so every existing
+   section keeps rendering real data inside the new left-sidebar shell.
+   =========================================================================== */
+.portal-table { width: 100%; text-align: left; font-size: 12px; border-collapse: collapse; }
+.portal-table thead th { padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,.1); color: #94a3b8; text-transform: uppercase; font-size: 10px; letter-spacing: .04em; }
+.portal-table tbody td { padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,.05); color: #e2e8f0; }
+.portal-table tbody tr:hover { background: rgba(99,102,241,.08); }
+.badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 999px; font-size: 10px; font-weight: 700; }
+.badge--present { background: rgba(16,185,129,.15); color: #34d399; border: 1px solid rgba(16,185,129,.3); }
+.badge--absent { background: rgba(244,63,94,.15); color: #fb7185; border: 1px solid rgba(244,63,94,.3); }
+.badge--miss { background: rgba(245,158,11,.15); color: #fbbf24; border: 1px solid rgba(245,158,11,.3); }
+.badge--leave { background: rgba(59,130,246,.15); color: #93c5fd; border: 1px solid rgba(59,130,246,.3); }
+.badge--weekoff { background: rgba(168,85,247,.15); color: #d8b4fe; border: 1px solid rgba(168,85,247,.3); }
+.badge--late { background: rgba(99,102,241,.15); color: #a5b4fc; border: 1px solid rgba(99,102,241,.3); }
+.badge--neutral { background: rgba(148,163,184,.12); color: #cbd5e1; border: 1px solid rgba(148,163,184,.25); }
+.pill { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; font-size: 10px; font-weight: 700; }
+
+:root,
+[data-theme='purple'] {
+  --bg-1: #1a163a;
+  --bg-2: #0c0a1f;
+  --surface: rgba(30, 32, 54, 0.6);
+  --surface-solid: #1e2036;
+  --border: rgba(255, 255, 255, 0.08);
+  --text: #e2e8f0;
+  --muted: #94a3b8;
+  --accent: #6366f1;
+  --accent-2: #7c3aed;
+  --accent-soft: #c7d2fe;
+  --accent-border: rgba(99, 102, 241, 0.5);
+  --focus-ring: rgba(99, 102, 241, 0.25);
+  --input-bg: rgba(15, 18, 35, 0.7);
+  --ok: #059669;
+  --err: #dc2626;
+  --warn: #eab308;
+  --err-soft-bg: rgba(220, 38, 38, 0.1);
+  --err-soft-text: #fca5a5;
+  --warn-soft-bg: rgba(234, 179, 8, 0.1);
+  --warn-soft-text: #fde68a;
+  --on-accent: #ffffff;
+}
+
+[data-theme='light'] {
+  --bg-1: #f8fafc;
+  --bg-2: #e9eef5;
+  --surface: rgba(255, 255, 255, 0.85);
+  --surface-solid: #ffffff;
+  --border: rgba(15, 23, 42, 0.12);
+  --text: #0f172a;
+  --muted: #475569;
+  --accent: #4f46e5;
+  --accent-2: #6366f1;
+  --accent-soft: #4338ca;
+  --accent-border: rgba(79, 70, 229, 0.4);
+  --focus-ring: rgba(79, 70, 229, 0.18);
+  --input-bg: #ffffff;
+  --ok: #047857;
+  --err: #b91c1c;
+  --warn: #b45309;
+  --err-soft-bg: rgba(185, 28, 28, 0.08);
+  --err-soft-text: #b91c1c;
+  --warn-soft-bg: rgba(180, 83, 9, 0.1);
+  --warn-soft-text: #92400e;
+  --on-accent: #ffffff;
+}
+
+[data-theme='blue'] {
+  --bg-1: #0b2037;
+  --bg-2: #060d1f;
+  --surface: rgba(15, 32, 56, 0.6);
+  --surface-solid: #10233f;
+  --border: rgba(255, 255, 255, 0.09);
+  --text: #e2e8f0;
+  --muted: #94a3b8;
+  --accent: #3b82f6;
+  --accent-2: #2563eb;
+  --accent-soft: #bfdbfe;
+  --accent-border: rgba(59, 130, 246, 0.5);
+  --focus-ring: rgba(59, 130, 246, 0.25);
+  --input-bg: rgba(8, 20, 40, 0.7);
+  --ok: #10b981;
+  --err: #ef4444;
+  --warn: #eab308;
+  --err-soft-bg: rgba(239, 68, 68, 0.12);
+  --err-soft-text: #fca5a5;
+  --warn-soft-bg: rgba(250, 204, 21, 0.12);
+  --warn-soft-text: #fde047;
+  --on-accent: #ffffff;
+}
+
+[data-theme='emerald'] {
+  --bg-1: #06231c;
+  --bg-2: #02100c;
+  --surface: rgba(8, 40, 34, 0.6);
+  --surface-solid: #0b2f28;
+  --border: rgba(255, 255, 255, 0.09);
+  --text: #e7f5ef;
+  --muted: #94b3a8;
+  --accent: #10b981;
+  --accent-2: #059669;
+  --accent-soft: #a7f3d0;
+  --accent-border: rgba(16, 185, 129, 0.5);
+  --focus-ring: rgba(16, 185, 129, 0.25);
+  --input-bg: rgba(4, 22, 18, 0.7);
+  --ok: #34d399;
+  --err: #f87171;
+  --warn: #eab308;
+  --err-soft-bg: rgba(248, 113, 113, 0.12);
+  --err-soft-text: #fca5a5;
+  --warn-soft-bg: rgba(253, 224, 71, 0.12);
+  --warn-soft-text: #fde68a;
+  --on-accent: #052e22;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+  background: radial-gradient(circle at 10% 20%, var(--bg-1) 0%, var(--bg-2) 90.2%);
+  color: var(--text);
+  font-family: 'Plus Jakarta Sans', system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+}
+
+.page {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 36px 20px 44px;
+}
+
+.hero {
+  margin-bottom: 26px;
+}
+
+.hero__title {
+  font-size: 1.75rem;
+  font-weight: 800;
+  margin: 0 0 10px;
+  letter-spacing: -0.01em;
+}
+
+.hero__sub {
+  color: var(--muted);
+  margin: 0;
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 20px;
+  margin-bottom: 20px;
+}
+
+.panel h2 {
+  margin: 0 0 6px;
+  font-size: 1rem;
+}
+
+.hint {
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin: 0 0 16px;
+  line-height: 1.5;
+}
+
+.hint code {
+  color: var(--accent-soft);
+}
+
+.foot {
+  color: var(--muted);
+  font-size: 0.8rem;
+  text-align: center;
+  margin-top: 28px;
+}
+
+/* ---------- Loading state ---------- */
+.load {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.load--full {
+  min-height: 160px;
+  justify-content: center;
+}
+
+.load--compact {
+  min-height: 48px;
+}
+
+.load__spinner {
+  width: 22px;
+  height: 22px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.load__text {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.load__hint {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---------- Error state ---------- */
+.error {
+  border: 1px solid var(--err-soft-text);
+  background: var(--err-soft-bg);
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.error__icon {
+  font-size: 1.1rem;
+}
+
+.error__text {
+  color: var(--err-soft-text);
+  margin: 8px 0 12px;
+  font-size: 0.9rem;
+}
+
+.error__retry,
+.health__again {
+  background: var(--accent);
+  color: var(--on-accent);
+  border: 0;
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.error__retry:hover,
+.health__again:hover {
+  filter: brightness(1.1);
+}
+
+/* ---------- Health / success state ---------- */
+.health {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 0.9rem;
+}
+
+.health__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 0 4px rgba(5, 150, 105, 0.18);
+}
+
+.health__again {
+  margin-left: auto;
+  background: var(--focus-ring);
+  border: 1px solid var(--accent-border);
+  color: var(--accent-soft);
+}
+
+@media (max-width: 520px) {
+  .hero__title {
+    font-size: 1.4rem;
+  }
+}
+
+/* ============================================================================
+   PHASE 2 — Login / auth / protected-shell styles
+   ========================================================================== */
+
+.auth {
+  max-width: 420px;
+  margin: 0 auto;
+}
+
+.auth__brand {
+  text-align: center;
+  margin-bottom: 20px;
+}
+
+.auth__brand h1 {
+  font-size: 1.5rem;
+  font-weight: 800;
+  margin: 0 0 6px;
+}
+
+.auth__brand p {
+  color: var(--muted);
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.auth__back {
+  display: inline-block;
+  color: var(--accent-soft);
+  text-decoration: none;
+  font-size: 0.85rem;
+  margin-bottom: 16px;
+}
+
+.auth__back:hover {
+  text-decoration: underline;
+}
+
+.auth__error {
+  border: 1px solid var(--err-soft-text);
+  background: var(--err-soft-bg);
+  color: var(--err-soft-text);
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 0.85rem;
+  margin-bottom: 14px;
+}
+
+.field {
+  margin-bottom: 14px;
+}
+
+.field__label {
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--muted);
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.field__input {
+  width: 100%;
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  color: var(--text);
+  font-size: 0.95rem;
+  outline: none;
+}
+
+.field__input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 10px;
+  padding: 12px 16px;
+  font-size: 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.btn--primary {
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%);
+  color: var(--on-accent);
+}
+
+.btn--ghost {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.btn--block {
+  width: 100%;
+}
+
+.btn:hover {
+  filter: brightness(1.08);
+}
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Login shell + role cards (3 role selection) */
+.login-shell {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 44px 20px 40px;
+}
+
+/* Portal branding (old Attendance Portal header) */
+.brand {
+  text-align: center;
+  margin-bottom: 24px;
+}
+
+.brand__logo {
+  width: 58px;
+  height: 58px;
+  margin: 0 auto 12px;
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--on-accent);
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%);
+  box-shadow: 0 10px 24px var(--focus-ring);
+}
+
+.brand__logo svg {
+  width: 32px;
+  height: 32px;
+}
+
+.brand__title {
+  font-size: 1.8rem;
+  font-weight: 800;
+  margin: 0 0 4px;
+  letter-spacing: -0.01em;
+}
+
+.brand__subtitle {
+  color: var(--muted);
+  margin: 0 0 14px;
+  font-size: 0.88rem;
+}
+
+/* DB connection status badge */
+.dbstatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 13px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-solid);
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.dbstatus__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.dbstatus--checking .dbstatus__dot {
+  background: var(--accent);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.dbstatus--connected {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+
+.dbstatus--connected .dbstatus__dot {
+  background: var(--ok);
+}
+
+.dbstatus--disconnected {
+  color: var(--err-soft-text);
+  border-color: var(--err-soft-text);
+}
+
+.dbstatus--disconnected .dbstatus__dot {
+  background: var(--err);
+}
+
+.dbstatus--unavailable {
+  color: var(--warn-soft-text);
+  border-color: var(--warn-soft-text);
+}
+
+.dbstatus--unavailable .dbstatus__dot {
+  background: var(--warn);
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+/* Role-specific heading on login form pages */
+.auth__role {
+  text-align: center;
+  font-size: 1.15rem;
+  font-weight: 800;
+  margin: 0 0 16px;
+}
+
+/* Input field with leading icon */
+.field__wrap--icon .field__input {
+  padding-left: 40px;
+}
+
+.field__icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--muted);
+  display: flex;
+  pointer-events: none;
+}
+
+.field__icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+/* ============================================================================
+   PHASE 4 — Employee portal (shell, nav, stats, tables, cards)
+   ========================================================================== */
+
+.emp-shell {
+  min-height: 100vh;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 20px 16px 44px;
+}
+
+.emp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.emp-header__id {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.emp-header__name {
+  font-size: 1.1rem;
+  font-weight: 800;
+}
+
+.emp-header__code {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.emp-nav {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 10px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.emp-nav__link {
+  flex: 0 0 auto;
+  padding: 8px 14px;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--muted);
+  text-decoration: none;
+  border: 1px solid transparent;
+}
+
+.emp-nav__link:hover {
+  color: var(--text);
+}
+
+.emp-nav__link--active {
+  color: var(--accent-soft);
+  background: var(--focus-ring);
+  border-color: var(--accent-border);
+}
+
+.emp-content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* Text helpers */
+.text-ok { color: var(--ok); }
+.text-err { color: var(--err-soft-text); }
+.text-warn { color: var(--warn-soft-text); }
+.text-accent { color: var(--accent-soft); }
+.muted { color: var(--muted); }
+
+/* Stat cards */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+@media (max-width: 640px) {
+  .stat-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
+.stat {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 12px;
+  text-align: center;
+}
+
+.stat__value {
+  display: block;
+  font-size: 1.5rem;
+  font-weight: 800;
+}
+
+.stat__label {
+  display: block;
+  font-size: 0.72rem;
+  color: var(--muted);
+  margin-top: 2px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+/* Card */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 16px;
+}
+
+.card__title {
+  font-size: 1rem;
+  font-weight: 800;
+  margin: 0 0 10px;
+}
+
+.card__text {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+/* Table */
+.table-wrap { overflow-x: auto; }
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.table th,
+.table td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.table th {
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  font-weight: 700;
+}
+
+.table td { color: var(--text); }
+
+/* Badges */
+.badge {
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.badge.status--present { color: var(--ok); border-color: var(--ok); }
+.badge.status--absent { color: var(--err-soft-text); border-color: var(--err-soft-text); }
+.badge.status--miss { color: var(--warn-soft-text); border-color: var(--warn-soft-text); }
+.badge.status--weekoff { color: var(--muted); border-color: var(--border); }
+.badge.status--leave { color: var(--accent-soft); border-color: var(--accent-border); }
+
+/* Empty */
+.empty {
+  color: var(--muted);
+  font-size: 0.88rem;
+  text-align: center;
+  padding: 14px 0;
+}
+
+/* List */
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.list__item {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.9rem;
+}
+
+/* Month nav */
+.month-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.month-nav__label {
+  font-weight: 800;
+  font-size: 1rem;
+}
+
+/* Key-value list */
+.kv { margin: 0; }
+
+.kv__row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.9rem;
+}
+
+.kv__row:last-child { border-bottom: 0; }
+
+.kv__row dt { color: var(--muted); }
+
+.kv__row dd {
+  margin: 0;
+  font-weight: 600;
+  text-align: right;
+}
+
+/* Celebrations buckets */
+.cel-bucket { margin-bottom: 12px; }
+
+.cel-bucket__label {
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin: 0 0 4px;
+}
+
+.role-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 18px;
+  margin-bottom: 28px;
+}
+
+.role-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 24px 20px;
+  color: var(--text);
+  text-decoration: none;
+  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.role-card:hover {
+  border-color: var(--accent-border);
+  transform: translateY(-3px);
+  box-shadow: 0 14px 30px var(--focus-ring);
+}
+
+.role-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.role-card__icon {
+  width: 46px;
+  height: 46px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--on-accent);
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%);
+}
+
+.role-card__icon svg {
+  width: 24px;
+  height: 24px;
+}
+
+.role-card__title {
+  font-size: 1.05rem;
+  font-weight: 800;
+  margin: 0;
+}
+
+.role-card__desc {
+  color: var(--muted);
+  font-size: 0.85rem;
+  line-height: 1.5;
+  margin: 0;
+  flex: 1;
+}
+
+.role-card__cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 700;
+  font-size: 0.88rem;
+  color: var(--accent-soft);
+}
+
+/* Theme picker */
+.theme-picker {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 16px;
+  border-radius: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.theme-picker__label {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-right: 4px;
+}
+
+.theme-picker__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 13px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-solid);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.theme-picker__btn[aria-pressed='true'] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
+.theme-picker__swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+/* Password field with show/hide toggle */
+.field__wrap {
+  position: relative;
+}
+
+.field__wrap .field__input {
+  padding-right: 44px;
+}
+
+.field__toggle {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 6px;
+  display: flex;
+}
+
+.field__toggle:hover {
+  color: var(--text);
+}
+
+.field__toggle svg {
+  width: 20px;
+  height: 20px;
+}
+
+/* Setup-pending notice (SuperAdmin website flow) */
+.pending {
+  text-align: center;
+  padding: 26px 20px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface);
+}
+
+.pending__icon {
+  font-size: 2rem;
+  margin-bottom: 10px;
+}
+
+.pending__title {
+  font-size: 1.1rem;
+  font-weight: 800;
+  margin: 0 0 8px;
+}
+
+.pending__text {
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.55;
+  margin: 0 0 16px;
+}
+
+/* Responsive role grid */
+@media (max-width: 860px) {
+  .role-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 560px) {
+  .role-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Protected shell */
+.shell__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 22px;
+}
+
+/* Blocking gate (password-change / PIN-setup) */
+.gate {
+  border: 1px solid var(--warn-soft-text);
+  background: var(--warn-soft-bg);
+  border-radius: 12px;
+  padding: 18px;
+}
+
+.gate__title {
+  font-weight: 800;
+  font-size: 0.95rem;
+  margin: 0 0 6px;
+  color: var(--warn-soft-text);
+}
+
+.gate__text {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--warn-soft-text);
+}
+
+/* ============================================================================
+   PHASE 1D.2 — Executive Overview scoped styling (.exec-view)
+   Original React website parity (index.html) + colourful status badges.
+   EVERY rule below is scoped under .exec-view (Executive Overview section and
+   its Audit / Late Employees modals). Shared rules, other tabs and the
+   login-selected themes above are intentionally NOT modified.
+   ========================================================================== */
+
+/* --- Punch-time colours (original: IN text-emerald-300 / OUT text-rose-300) --- */
+.exec-view .punch-in { color: #6ee7b7; font-weight: 600; }
+.exec-view .punch-out { color: #fda4af; font-weight: 600; }
+/* Missing punch = neutral muted placeholder, never painted as a real time. */
+.exec-view .punch-missing { color: var(--muted); font-weight: 500; }
+
+/* --- Status badges: original badge shell (px-2 py-1 rounded-lg text-[10px]
+       font-bold) with clearly visible, distinguishable semantic colours. --- */
+.exec-view .badge {
+  padding: 4px 8px;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+.exec-view .badge--present { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.35); }
+.exec-view .badge--absent { background: rgba(244, 63, 94, 0.15); color: #fb7185; border: 1px solid rgba(244, 63, 94, 0.35); }
+.exec-view .badge--miss { background: rgba(245, 158, 11, 0.16); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.4); }
+.exec-view .badge--late { background: rgba(249, 115, 22, 0.16); color: #f97316; border: 1px solid rgba(249, 115, 22, 0.42); }
+.exec-view .badge--weekoff { background: rgba(250, 204, 21, 0.14); color: #facc15; border: 1px solid rgba(250, 204, 21, 0.38); }
+.exec-view .badge--holiday { background: rgba(168, 85, 247, 0.15); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.35); }
+.exec-view .badge--leave { background: rgba(59, 130, 246, 0.15); color: #93c5fd; border: 1px solid rgba(59, 130, 246, 0.35); }
+.exec-view .badge--neutral { background: rgba(148, 163, 184, 0.12); color: #cbd5e1; border: 1px solid rgba(148, 163, 184, 0.25); }
+
+/* --- Audit action link in the Live Biometric table (original text-link style) --- */
+.exec-view .exec-audit-link {
+  color: #818cf8;
+  font-weight: 600;
+  font-size: 11px;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+.exec-view .exec-audit-link:hover { color: #a5b4fc; }
+.exec-view .exec-audit-link:focus-visible { outline: 2px solid #6366f1; outline-offset: 2px; border-radius: 4px; }
+
+/* --- Executive Overview title / subtitle (original header typography) --- */
+.exec-view .exec-title { font-size: 1rem; font-weight: 700; color: var(--text); margin: 0; }
+.exec-view .exec-subtitle { font-size: 0.75rem; color: var(--muted); margin: 2px 0 0; }
+
+/* --- Light theme: deeper tones so text keeps accessible contrast on white. --- */
+[data-theme='light'] .exec-view .punch-in { color: #047857; }
+[data-theme='light'] .exec-view .punch-out { color: #be123c; }
+[data-theme='light'] .exec-view .badge--present { background: rgba(16, 185, 129, 0.12); color: #047857; border-color: rgba(5, 150, 105, 0.35); }
+[data-theme='light'] .exec-view .badge--absent { background: rgba(244, 63, 94, 0.1); color: #be123c; border-color: rgba(190, 24, 60, 0.35); }
+[data-theme='light'] .exec-view .badge--miss { background: rgba(245, 158, 11, 0.12); color: #b45309; border-color: rgba(180, 83, 9, 0.35); }
+[data-theme='light'] .exec-view .badge--late { background: rgba(249, 115, 22, 0.12); color: #c2410c; border-color: rgba(194, 65, 12, 0.35); }
+[data-theme='light'] .exec-view .badge--weekoff { background: rgba(250, 204, 21, 0.14); color: #a16207; border-color: rgba(161, 98, 7, 0.35); }
+[data-theme='light'] .exec-view .badge--holiday { background: rgba(168, 85, 247, 0.12); color: #7e22ce; border-color: rgba(126, 34, 206, 0.35); }
+[data-theme='light'] .exec-view .badge--leave { background: rgba(59, 130, 246, 0.1); color: #1d4ed8; border-color: rgba(29, 78, 216, 0.35); }
+[data-theme='light'] .exec-view .badge--neutral { background: rgba(148, 163, 184, 0.14); color: #475569; border-color: rgba(71, 85, 105, 0.3); }
+[data-theme='light'] .exec-view .exec-audit-link { color: #4f46e5; }
+[data-theme='light'] .exec-view .exec-audit-link:hover { color: #4338ca; }
+
+/* ============================================================================
+   PHASE 1D.5 — Single Employee Audit (/hr/audit) scoped presentation styles.
+   Everything below is scoped under .audit-tab / .audit-select, so Executive
+   Overview, All Employees Roster, other tabs and login-selected themes remain
+   untouched. Palette follows the original React reference screenshots:
+   IN = bright emerald, OUT = bright coral, violet/blue accents, readable meta.
+   ========================================================================== */
+
+/* Punch times — Daily Punch Log + late-details (same semantic styling) */
+.audit-tab .audit-in { color: #00d6a0; font-weight: 600; }
+.audit-tab .audit-out { color: #ff667d; font-weight: 600; }
+.audit-tab .audit-dash { color: var(--muted); font-weight: 500; }
+
+/* Employee summary card */
+.audit-tab .audit-name { color: #ffffff; font-weight: 800; letter-spacing: -0.01em; }
+.audit-tab .audit-accent { color: #818cf8; font-weight: 600; }
+.audit-tab .audit-meta { color: #a6b4c7; }
+.audit-tab .audit-pct { font-size: 2.15rem; line-height: 1.15; font-weight: 800; letter-spacing: -0.02em; }
+
+/* KPI labels + employee-details values (royal white primary, coloured helpers) */
+.audit-tab .audit-kpi-label { color: #aab7c9; }
+.audit-tab .audit-val { color: #ffffff; }           /* primary values: royal white */
+.audit-tab .audit-help--pink { color: #ff79c6; }    /* age / next birthday */
+.audit-tab .audit-help--amber { color: #ffd166; }   /* service duration */
+.audit-tab .audit-help--cyan { color: #45d6e8; }    /* marital-status helper */
+.audit-tab .audit-help--violet { color: #b69cff; }  /* marriage-anniversary helper */
+
+/* Employee dropdown — dark navy + violet border/focus (port of the original
+   React select styling, index.html L53–58: dark options, highlighted choice) */
+.audit-select {
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid rgba(129, 140, 248, 0.35);
+  color: #f8fafc;
+  color-scheme: dark;
+  font-weight: 700;
+  padding: 8px 14px;
+}
+.audit-select:focus {
+  border-color: #6366f1;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.35);
+}
+.audit-select option {
+  background: #111827;
+  color: #e2e8f0;
+  padding: 6px 10px;
+}
+.audit-select option:checked {
+  background: #3730a3;
+  color: #ffffff;
+}
+
+/* Monthly attendance calendar (Single Employee Audit, scoped) */
+.audit-tab .cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+.audit-tab .cal-grid--head { margin-bottom: 4px; }
+.audit-tab .cal-head { text-align: center; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); padding: 4px 0; }
+.audit-tab .cal-cell { position: relative; min-height: 76px; border-radius: 12px; border: 1px solid var(--border); background: rgba(255, 255, 255, 0.04); padding: 6px 8px; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; cursor: pointer; text-align: left; transition: border-color 0.15s ease, background 0.15s ease; }
+.audit-tab .cal-cell:hover { border-color: rgba(129, 140, 248, 0.55); background: rgba(129, 140, 248, 0.08); }
+.audit-tab .cal-cell--empty { cursor: default; background: rgba(255, 255, 255, 0.015); border-color: transparent; }
+.audit-tab .cal-num { font-size: 12px; font-weight: 800; color: #ffffff; }
+.audit-tab .cal-status { font-size: 9px; font-weight: 700; padding: 2px 6px; border-radius: 999px; }
+.audit-tab .cal-cell--present .cal-status { color: #34d399; background: rgba(16, 185, 129, 0.15); }
+.audit-tab .cal-cell--absent .cal-status { color: #fb7185; background: rgba(244, 63, 94, 0.15); }
+.audit-tab .cal-cell--miss .cal-status { color: #fbbf24; background: rgba(245, 158, 11, 0.16); }
+.audit-tab .cal-cell--weekoff .cal-status { color: #facc15; background: rgba(250, 204, 21, 0.14); }
+.audit-tab .cal-cell--holiday .cal-status { color: #c084fc; background: rgba(168, 85, 247, 0.15); }
+.audit-tab .cal-cell--today { border-color: rgba(129, 140, 248, 0.8); }
+.audit-tab .cal-cell--selected { box-shadow: 0 0 0 2px #818cf8 inset; }
+.audit-tab .cal-late { position: absolute; top: 6px; right: 6px; font-size: 9px; font-weight: 800; color: #ff667d; background: rgba(244, 63, 94, 0.18); border-radius: 6px; padding: 1px 5px; }
+.audit-tab .cal-late--legend { position: static; }
+.audit-tab .cal-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; font-size: 10px; font-weight: 600; color: var(--muted); }
+.audit-tab .cal-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.audit-tab .cal-dot { width: 10px; height: 10px; border-radius: 999px; display: inline-block; }
+.audit-tab .cal-dot.cal-cell--present { background: #34d399; }
+.audit-tab .cal-dot.cal-cell--absent { background: #fb7185; }
+.audit-tab .cal-dot.cal-cell--miss { background: #fbbf24; }
+.audit-tab .cal-dot.cal-cell--weekoff { background: #facc15; }
+.audit-tab .cal-dot.cal-cell--holiday { background: #c084fc; }
+.audit-tab .cal-btn { display: inline-flex; align-items: center; justify-content: center; min-width: 30px; height: 30px; padding: 0 10px; border-radius: 9px; border: 1px solid rgba(129, 140, 248, 0.35); background: rgba(15, 23, 42, 0.6); color: #e2e8f0; font-size: 11px; font-weight: 700; cursor: pointer; transition: background 0.15s ease, border-color 0.15s ease; }
+.audit-tab .cal-btn:hover { border-color: #6366f1; background: rgba(99, 102, 241, 0.15); }
+.audit-tab .cal-btn--today { color: #c7d2fe; }
+
+/* Light theme: keep the calendar readable */
+[data-theme='light'] .audit-tab .cal-cell { background: rgba(15, 23, 42, 0.04); }
+[data-theme='light'] .audit-tab .cal-num { color: #0f172a; }
+[data-theme='light'] .audit-tab .cal-cell--present .cal-status { color: #047857; }
+[data-theme='light'] .audit-tab .cal-cell--absent .cal-status { color: #be123c; }
+[data-theme='light'] .audit-tab .cal-cell--miss .cal-status { color: #b45309; }
+[data-theme='light'] .audit-tab .cal-cell--weekoff .cal-status { color: #a16207; }
+[data-theme='light'] .audit-tab .cal-cell--holiday .cal-status { color: #7e22ce; }
+
+/* Light theme keeps readable contrast for the same scoped elements */
+[data-theme='light'] .audit-tab .audit-in { color: #047857; }
+[data-theme='light'] .audit-tab .audit-out { color: #be123c; }
+[data-theme='light'] .audit-tab .audit-name { color: #0f172a; }
+[data-theme='light'] .audit-tab .audit-accent { color: #4338ca; }
+[data-theme='light'] .audit-tab .audit-meta { color: #475569; }
+[data-theme='light'] .audit-tab .audit-val { color: #0f172a; }
+[data-theme='light'] .audit-tab .audit-help--pink { color: #be185d; }
+[data-theme='light'] .audit-tab .audit-help--amber { color: #b45309; }
+[data-theme='light'] .audit-tab .audit-help--cyan { color: #0e7490; }
+[data-theme='light'] .audit-tab .audit-help--violet { color: #6d28d9; }
+[data-theme='light'] .audit-tab .audit-kpi-label { color: #475569; }

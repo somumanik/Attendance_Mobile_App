@@ -1,0 +1,40 @@
+0328 OCT stats: {"present":0,"absent":27,"miss":0,"late":0,"hours":0,"attendancePercentage":0} holidays: ["2026-10-02"]
+  2026-10-25 -> status=WO     computed=Week Off label=Week Off
+  2026-10-18 -> status=WO     computed=Week Off label=Week Off
+  2026-10-11 -> status=WO     computed=Week Off label=Week Off
+  2026-10-04 -> status=WO     computed=Week Off label=Week Off
+  2026-10-02 -> status=A      computed=Absent label=Absent
+  recomputed buckets from rows: {"P":0,"A":27,"M":0,"skip":4} (compare with stats)
+LATE 0341 2026-09: stats.late=0 lateDetails=4 isFinalLate=0 grace(30/1/2)=2/1/1 graceRemaining={"grace30min":0,"grace1hr":0,"grace2hr":0}
+   2026-09-01 late=3m graceUsed=30min final=false
+   2026-09-02 late=1m graceUsed=30min final=false
+   2026-09-19 late=1m graceUsed=1hr final=false
+   2026-09-23 late=1m graceUsed=2hr final=false
+LATE W00399 2026-10: stats.late=3 lateDetails=3 isFinalLate=3 grace(30/1/2)=0/0/0 graceRemaining={"grace30min":0,"grace1hr":0,"grace2hr":0}
+   2026-10-06 late=1m graceUsed=null final=true
+   2026-10-07 late=1m graceUsed=null final=true
+   2026-10-09 late=5m graceUsed=null final=true
+LATE W00372 2026-09: stats.late=5 lateDetails=5 isFinalLate=5 grace(30/1/2)=0/0/0 graceRemaining={"grace30min":0,"grace1hr":0,"grace2hr":0}
+   2026-09-08 late=1m graceUsed=null final=true
+   2026-09-09 late=2m graceUsed=null final=true
+   2026-09-17 late=23m graceUsed=null final=true
+   2026-09-18 late=1m graceUsed=null final=true
+   2026-09-29 late=2m graceUsed=null final=true
+LATE AW00221 2026-08: stats.late=5 lateDetails=5 isFinalLate=5 grace(30/1/2)=0/0/0 graceRemaining={"grace30min":0,"grace1hr":0,"grace2hr":0}
+   2026-08-06 late=2m graceUsed=null final=true
+   2026-08-14 late=1m graceUsed=null final=true
+   2026-08-17 late=3m graceUsed=null final=true
+   2026-08-22 late=3m graceUsed=null final=true
+   2026-08-25 late=2m graceUsed=null final=true
+LATE W00162 2026-09: stats.late=5 lateDetails=5 isFinalLate=5 grace(30/1/2)=0/0/0 graceRemaining={"grace30min":0,"grace1hr":0,"grace2hr":0}
+   2026-09-02 late=20m graceUsed=null final=true
+   2026-09-05 late=4m graceUsed=null final=true
+   2026-09-07 late=17m graceUsed=null final=true
+   2026-09-11 late=195m graceUsed=null final=true
+   2026-09-12 late=7m graceUsed=null final=true
+LATE AW00051 2026-08: stats.late=4 lateDetails=4 isFinalLate=4 grace(30/1/2)=0/0/0 graceRemaining={"grace30min":0,"grace1hr":0,"grace2hr":0}
+   2026-08-03 late=5m graceUsed=null final=true
+   2026-08-05 late=3m graceUsed=null final=true
+   2026-08-17 late=4m graceUsed=null final=true
+   2026-08-25 late=1m graceUsed=null final=true
+0328 SEP stats: {"present":1,"absent":23,"miss":2,"late":2,"hours":551,"attendancePercentage":3.8} vs OCT stats: {"present":0,"absent":27,"miss":0,"late":0,"hours":0,"attendancePercentage":0}

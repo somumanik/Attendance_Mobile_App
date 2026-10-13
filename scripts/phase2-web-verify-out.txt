@@ -1,0 +1,36 @@
+=== PHASE 2 WEBSITE LOGIN VERIFICATION ===
+base=http://localhost:3000
+PASS :: GET / redirects to /login :: status=307 loc=/login
+PASS :: GET /login 200 :: 
+PASS :: GET /login/hr 200 :: 
+PASS :: GET /login/employee 200 :: 
+PASS :: GET /health 200 :: 
+PASS :: GET /employee (no auth) → /login :: status=307
+PASS :: GET /hr (no auth) → /login :: status=307
+PASS :: HR login VALID → 200 + cookie + NO token in body :: status=200 role=HR cookie=true
+PASS :: HR login INVALID → 401 :: status=401
+PASS :: GET /hr (HR session) 200 :: 
+PASS :: HR cannot access /employee → /hr :: status=307 loc=/hr
+PASS :: Employee login VALID → 200 + cookie + NO token in body :: status=200 role=EMPLOYEE cookie=true
+PASS :: Employee login INVALID → 401 :: status=401
+PASS :: GET /employee (employee session) 200 :: 
+PASS :: Employee cannot access /hr → /employee :: status=307 loc=/employee
+PASS :: Logout clears auth_token cookie :: status=200
+
+=== SUMMARY: 16 PASS / 0 FAIL / 0 SKIP (of 16) ===
+PASS | GET / redirects to /login | status=307 loc=/login
+PASS | GET /login 200 | 
+PASS | GET /login/hr 200 | 
+PASS | GET /login/employee 200 | 
+PASS | GET /health 200 | 
+PASS | GET /employee (no auth) → /login | status=307
+PASS | GET /hr (no auth) → /login | status=307
+PASS | HR login VALID → 200 + cookie + NO token in body | status=200 role=HR cookie=true
+PASS | HR login INVALID → 401 | status=401
+PASS | GET /hr (HR session) 200 | 
+PASS | HR cannot access /employee → /hr | status=307 loc=/hr
+PASS | Employee login VALID → 200 + cookie + NO token in body | status=200 role=EMPLOYEE cookie=true
+PASS | Employee login INVALID → 401 | status=401
+PASS | GET /employee (employee session) 200 | 
+PASS | Employee cannot access /hr → /employee | status=307 loc=/employee
+PASS | Logout clears auth_token cookie | status=200

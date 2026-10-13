@@ -1,0 +1,3 @@
+badge--late: ".badge--late {\n  background: rgba(99,102,241,.15);\n  color: #a5b4fc;\n  border: 1px solid rgba(99,102,241,.3);\n}\n.badge--"
+badge--weekoff: ".badge--weekoff {\n  background: rgba(168,85,247,.15);\n  color: #d8b4fe;\n  border: 1px solid rgba(168,85,247,.3);\n}\n.badg"
+badge--present: ".badge--present {\n  background: rgba(16,185,129,.15);\n  color: #34d399;\n  border: 1px solid rgba(16,185,129,.3);\n}\n.badg"

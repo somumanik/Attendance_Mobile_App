@@ -32,17 +32,24 @@
  */
 
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, Alert, Keyboard } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { View, Text, StyleSheet, Alert, Keyboard, TouchableOpacity } from 'react-native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import { useTheme } from '../../theme';
+import { useAuth } from '../../hooks/useAuth';
 import { setupPin } from '../../services/auth';
 import { Button, Input, Card } from '../../components';
 
 const PIN_LENGTH = 4;
 
-export const PinSetupScreen = () => {
+export const PinSetupScreen = ({ forced = false }) => {
   const navigation = useNavigation();
+  const route = useRoute();
   const { theme } = useTheme();
+  const { clearPinSetupRequired, logout } = useAuth();
+  // Registered as a Stack.Screen the component receives navigation/route
+  // PROPS only - the `forced` flag therefore also travels via route params
+  // (initialParams), so the gate screen keeps its forced behaviour.
+  const isForced = forced === true || route?.params?.forced === true;
 
   const [pin, setPin] = useState('');
   const [confirmPin, setConfirmPin] = useState('');
@@ -73,6 +80,11 @@ export const PinSetupScreen = () => {
       await setupPin({ pin, confirmPin });
       setPin('');
       setConfirmPin('');
+      // Forced gate (Phase I section 2): EmployeeNavigator pinSetupRequired
+      // dekh raha hai, isliye success par flag clear karna zaroori hai.
+      // Voluntary flow (Profile se) mein clearPinSetupRequired harmless hai.
+      clearPinSetupRequired();
+      if (isForced) return; // navigator khud tabs par switch karega
       Alert.alert('PIN created', 'Aapka 4-digit PIN set ho gaya hai.', [
         { text: 'OK', onPress: () => navigation.goBack() },
       ]);
@@ -95,6 +107,13 @@ export const PinSetupScreen = () => {
           <Text style={[styles.subtitle, { color: theme.textSecondary }]}>
             PIN aapka additional security step hai
           </Text>
+          {isForced ? (
+            <View style={[styles.forcedBox, { backgroundColor: `${theme.warning || '#F59E0B'}15`, borderColor: `${theme.warning || '#F59E0B'}30` }]}>
+              <Text style={[styles.forcedText, { color: theme.warning || '#B45309' }]}>
+                Dashboard kholne se pehle apna 4-digit PIN banana zaroori hai.
+              </Text>
+            </View>
+          ) : null}
         </View>
 
         <Card>
@@ -141,6 +160,16 @@ export const PinSetupScreen = () => {
               fullWidth
               size="large"
             />
+
+            {isForced ? (
+              <TouchableOpacity
+                style={styles.logoutLink}
+                onPress={() => { void logout(); }}
+                hitSlop={{ top: 10, left: 10, bottom: 10, right: 10 }}
+              >
+                <Text style={[styles.logoutText, { color: theme.textSecondary }]}>Logout</Text>
+              </TouchableOpacity>
+            ) : null}
           </View>
         </Card>
       </View>
@@ -163,11 +192,15 @@ const styles = StyleSheet.create({
   icon: { fontSize: 32 },
   title: { fontSize: 20, fontWeight: '700', textAlign: 'center', marginBottom: 6 },
   subtitle: { fontSize: 13, textAlign: 'center' },
+  forcedBox: { marginTop: 12, padding: 12, borderRadius: 8, borderWidth: 1 },
+  forcedText: { fontSize: 12, fontWeight: '600', textAlign: 'center' },
   form: { gap: 16 },
   noteBox: { padding: 12, borderRadius: 8, borderWidth: 1 },
   noteText: { fontSize: 12, textAlign: 'center' },
   errorBox: { padding: 12, borderRadius: 8, borderWidth: 1 },
   errorText: { fontSize: 12, fontWeight: '500', textAlign: 'center' },
+  logoutLink: { alignItems: 'center', paddingVertical: 4 },
+  logoutText: { fontSize: 13, fontWeight: '600' },
 });
 
 export default PinSetupScreen;

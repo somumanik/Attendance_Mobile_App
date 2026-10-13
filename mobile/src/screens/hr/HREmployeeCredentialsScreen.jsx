@@ -48,8 +48,10 @@ import {
   getHrEmployeeCredentials,
   hrResetEmployeePassword,
   hrResetEmployeePin,
+  hrRequireEmployeePinSetup,
+  hrForcePasswordChange,
 } from '../../services/auth';
-import { Button, Input, Card } from '../../components';
+import { Button, Input, Card, Can } from '../../components';
 
 export const HREmployeeCredentialsScreen = () => {
   const navigation = useNavigation();
@@ -67,6 +69,8 @@ export const HREmployeeCredentialsScreen = () => {
 
   const [pwBusy, setPwBusy] = useState(false);
   const [pinBusy, setPinBusy] = useState(false);
+  const [forceBusy, setForceBusy] = useState(false);
+  const [requirePinBusy, setRequirePinBusy] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
@@ -114,8 +118,9 @@ export const HREmployeeCredentialsScreen = () => {
     }
   };
 
-  const handlePasswordReset = async () => {
+  const handlePasswordReset = async (mustChange) => {
     if (!selected) return;
+    if (!password.trim()) { setError('Naya password likhein.'); return; }
     if (password !== confirmPassword) {
       setError('Password aur confirmation match nahi kar rahe.');
       return;
@@ -128,11 +133,22 @@ export const HREmployeeCredentialsScreen = () => {
         paycode: selected.paycode,
         password,
         confirmPassword,
+        mustChange,
       });
-      setSuccess(res?.message || 'Employee password updated.');
+      const madeTemporary = res?.mustChangePassword === true || mustChange === true;
+      setSuccess(
+        madeTemporary
+          ? 'Temporary password set. Employee ko next login par naya password aur 4-digit PIN banana hoga.'
+          : (res?.message || 'Employee password updated.'),
+      );
       setPassword('');
       setConfirmPassword('');
-      setStatus((prev) => (prev ? { ...prev, passwordSet: true, locked: false } : prev));
+      setStatus((prev) => (prev ? {
+        ...prev,
+        passwordSet: true,
+        locked: false,
+        mustChangePassword: madeTemporary ? true : prev.mustChangePassword,
+      } : prev));
     } catch (err) {
       setError(err.message || 'Password reset failed.');
     } finally {
@@ -158,12 +174,38 @@ export const HREmployeeCredentialsScreen = () => {
       setSuccess(res?.message || 'Employee PIN updated.');
       setPin('');
       setConfirmPin('');
-      setStatus((prev) => (prev ? { ...prev, pinSet: true } : prev));
+      setStatus((prev) => (prev ? { ...prev, pinSet: true, pinSetupRequired: false } : prev));
     } catch (err) {
       setError(err.message || 'PIN reset failed.');
     } finally {
       setPinBusy(false);
     }
+  };
+
+  // HR ek password change force karta hai (password replace kiye bina).
+  const handleForcePasswordChange = async () => {
+    if (!selected) return;
+    setForceBusy(true); setError(''); setSuccess('');
+    try {
+      await hrForcePasswordChange(selected.paycode);
+      setSuccess('Employee ko next login par naya password banana hoga.');
+      setStatus((prev) => (prev ? { ...prev, mustChangePassword: true } : prev));
+    } catch (err) {
+      setError(err.message || 'Force password change failed.');
+    } finally { setForceBusy(false); }
+  };
+
+  // HR one-time 4-digit PIN setup dobara require karta hai (Phase I sec 4).
+  const handleRequirePinSetup = async () => {
+    if (!selected) return;
+    setRequirePinBusy(true); setError(''); setSuccess('');
+    try {
+      await hrRequireEmployeePinSetup(selected.paycode);
+      setSuccess('Employee ko dashboard se pehle 4-digit PIN banana hoga.');
+      setStatus((prev) => (prev ? { ...prev, pinSetupRequired: true } : prev));
+    } catch (err) {
+      setError(err.message || 'Require PIN setup failed.');
+    } finally { setRequirePinBusy(false); }
   };
 
   return (
@@ -245,6 +287,20 @@ export const HREmployeeCredentialsScreen = () => {
                       PIN: {status.pinSet ? 'Set' : 'Not set'}
                     </Text>
                   </View>
+                  {status.mustChangePassword === true && (
+                    <View style={[styles.badge, { backgroundColor: `${COLORS.warning}20` }]}>
+                      <Text style={[styles.badgeText, { color: COLORS.warning }]}>
+                        Must change password
+                      </Text>
+                    </View>
+                  )}
+                  {status.pinSetupRequired === true && (
+                    <View style={[styles.badge, { backgroundColor: `${COLORS.warning}20` }]}>
+                      <Text style={[styles.badgeText, { color: COLORS.warning }]}>
+                        Must setup PIN
+                      </Text>
+                    </View>
+                  )}
                   {status.locked && (
                     <View style={[styles.badge, { backgroundColor: `${COLORS.error}20` }]}>
                       <Text style={[styles.badgeText, { color: COLORS.error }]}>Locked</Text>
@@ -278,14 +334,34 @@ export const HREmployeeCredentialsScreen = () => {
                 type="password"
                 autoComplete="new-password"
               />
-              <Button
-                title={pwBusy ? 'Updating...' : 'Reset Password'}
-                onPress={handlePasswordReset}
-                loading={pwBusy}
-                disabled={pwBusy}
-                fullWidth
-                size="medium"
-              />
+              <Can module="credentials" action="edit">
+                <Button
+                  title={pwBusy ? 'Updating...' : 'Reset Password'}
+                  onPress={() => handlePasswordReset(false)}
+                  loading={pwBusy}
+                  disabled={pwBusy}
+                  fullWidth
+                  size="medium"
+                />
+                <Button
+                  title={pwBusy ? 'Updating...' : 'Set Temporary Password'}
+                  onPress={() => handlePasswordReset(true)}
+                  loading={pwBusy}
+                  disabled={pwBusy}
+                  fullWidth
+                  size="medium"
+                  variant="outline"
+                />
+                <Button
+                  title={forceBusy ? 'Forcing...' : 'Force Password Change'}
+                  onPress={handleForcePasswordChange}
+                  loading={forceBusy}
+                  disabled={forceBusy}
+                  fullWidth
+                  size="medium"
+                  variant="outline"
+                />
+              </Can>
             </View>
           </Card>
         )}
@@ -314,15 +390,26 @@ export const HREmployeeCredentialsScreen = () => {
                 keyboardType="number-pad"
                 maxLength={4}
               />
-              <Button
-                title={pinBusy ? 'Updating...' : 'Reset PIN'}
-                onPress={handlePinReset}
-                loading={pinBusy}
-                disabled={pinBusy}
-                fullWidth
-                size="medium"
-                variant="secondary"
-              />
+              <Can module="credentials" action="edit">
+                <Button
+                  title={pinBusy ? 'Updating...' : 'Reset PIN'}
+                  onPress={handlePinReset}
+                  loading={pinBusy}
+                  disabled={pinBusy}
+                  fullWidth
+                  size="medium"
+                  variant="secondary"
+                />
+                <Button
+                  title={requirePinBusy ? 'Requiring...' : 'Require PIN Setup Again'}
+                  onPress={handleRequirePinSetup}
+                  loading={requirePinBusy}
+                  disabled={requirePinBusy}
+                  fullWidth
+                  size="medium"
+                  variant="outline"
+                />
+              </Can>
             </View>
           </Card>
         )}

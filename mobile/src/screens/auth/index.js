@@ -5,6 +5,7 @@
 
 export { RoleSelectionScreen } from './RoleSelectionScreen';
 export { HRLoginScreen } from './HRLoginScreen';
+export { SuperAdminLoginScreen } from './SuperAdminLoginScreen';
 export { EmployeeLoginScreen } from './EmployeeLoginScreen';
 export { FirstTimeSetupScreen } from './FirstTimeSetupScreen';
 export { ForgotPasswordScreen } from './ForgotPasswordScreen';

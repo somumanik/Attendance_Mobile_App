@@ -22,6 +22,7 @@ import { useAuth } from '../hooks/useAuth';
 import { AuthNavigator } from './AuthNavigator';
 import { EmployeeNavigator } from './EmployeeNavigator';
 import { HRNavigator } from './HRNavigator';
+import { SuperAdminNavigator } from './SuperAdminNavigator';
 import { LoadingScreen } from '../screens/LoadingScreen';
 import { USER_ROLES } from '../utils/constants';
 
@@ -32,8 +33,12 @@ export const RoleGuard = ({ requiredRole, children }) => {
   if (!isAuthenticated) return <AuthNavigator />;
 
   // Wrong portal manually open karne ki koshish yahan deny/redirect hoti hai.
+  // Har role apne HI portal par bheja jata hai; unknown role login par.
   if (userRole !== requiredRole) {
-    return userRole === USER_ROLES.HR ? <HRNavigator /> : <EmployeeNavigator />;
+    if (userRole === USER_ROLES.HR) return <HRNavigator />;
+    if (userRole === USER_ROLES.SUPERADMIN) return <SuperAdminNavigator />;
+    if (userRole === USER_ROLES.EMPLOYEE) return <EmployeeNavigator />;
+    return <AuthNavigator />;
   }
 
   return children;

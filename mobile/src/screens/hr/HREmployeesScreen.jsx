@@ -156,12 +156,23 @@ export const HREmployeesScreen = () => {
 
   const openDetail = async (employee) => {
     setDetailLoading(true);
-    setDetail({ paycode: clean(employee.paycode) });
+    // PHASE 6.1 — roster row me already resolved shift fields hain; unhe turant seed karte
+    // hain taaki detail fetch complete hone se pehle (ya fail hone par) kabhi bhi
+    // 'Shift: Not available (UNRESOLVED)' na dikhe.
+    setDetail({
+      paycode: clean(employee.paycode),
+      shiftCode: employee.shiftCode ?? null,
+      shiftName: employee.shiftName ?? null,
+      shiftStart: employee.shiftStart ?? null,
+      shiftEnd: employee.shiftEnd ?? null,
+      shiftResolved: employee.shiftResolved === true,
+      shiftUnavailableReason: employee.shiftUnavailableReason ?? null,
+    });
     try {
       const data = await api.get(`/employees/${encodeURIComponent(clean(employee.paycode))}`);
       setDetail(data);
     } catch (err) {
-      setDetail(null);
+      // Detail fetch fail par bhi roster ka real shift data dikha rehta hai; error alag dikhate hain.
       setError(err?.message || 'Employee details load nahi ho paye.');
     } finally {
       setDetailLoading(false);
@@ -406,6 +417,20 @@ export const HREmployeesScreen = () => {
                   <Text style={styles.detailLine}>Marital: {clean(detail.ismarried) === 'Y' ? 'Married' : 'Single'}</Text>
                   <Text style={styles.detailLine}>Active: {clean(detail.active) === 'Y' ? 'Yes' : 'No'}</Text>
                   <Text style={styles.detailLine}>Date of Join: {String(detail.dateofjoin || '').slice(0, 10)}</Text>
+                  {/* PHASE 6 — employee ki CURRENT authoritative Savior shift. Sirf real,
+                      resolvable fields dikhate hain; warna saaf 'Not available' + reason. */}
+                  {detail.shiftResolved ? (
+                    <>
+                      <Text style={styles.detailLine}>Shift Name: {clean(detail.shiftName) || '—'}</Text>
+                      <Text style={styles.detailLine}>Shift Code: {clean(detail.shiftCode) || '—'}</Text>
+                      <Text style={styles.detailLine}>Shift Start: {clean(detail.shiftStart) || '—'}</Text>
+                      <Text style={styles.detailLine}>Shift End: {clean(detail.shiftEnd) || '—'}</Text>
+                    </>
+                  ) : detail.shiftResolved === false ? (
+                    <Text style={styles.detailLine}>
+                      Shift: Not available ({clean(detail.shiftUnavailableReason) || 'UNRESOLVED'})
+                    </Text>
+                  ) : null}
                 </View>
               ) : null}
             </View>
@@ -442,6 +467,20 @@ export const HREmployeesScreen = () => {
                   <Text style={styles.detailLine}>Marital: {clean(detail.ismarried) === 'Y' ? 'Married' : 'Single'}</Text>
                   <Text style={styles.detailLine}>Active: {clean(detail.active) === 'Y' ? 'Yes' : 'No'}</Text>
                   <Text style={styles.detailLine}>Date of Join: {String(detail.dateofjoin || '').slice(0, 10)}</Text>
+                  {/* PHASE 6 — HR Admin "All Employees → View" ka shift block.
+                      Backend ke authoritative lookup se aata hai (non-cached). */}
+                  {detail.shiftResolved ? (
+                    <>
+                      <Text style={styles.detailLine}>Shift Name: {clean(detail.shiftName) || '—'}</Text>
+                      <Text style={styles.detailLine}>Shift Code: {clean(detail.shiftCode) || '—'}</Text>
+                      <Text style={styles.detailLine}>Shift Start: {clean(detail.shiftStart) || '—'}</Text>
+                      <Text style={styles.detailLine}>Shift End: {clean(detail.shiftEnd) || '—'}</Text>
+                    </>
+                  ) : detail.shiftResolved === false ? (
+                    <Text style={styles.detailLine}>
+                      Shift: Not available ({clean(detail.shiftUnavailableReason) || 'UNRESOLVED'})
+                    </Text>
+                  ) : null}
                 </View>
               ) : null}
             </ScrollView>

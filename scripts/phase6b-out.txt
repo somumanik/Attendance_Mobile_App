@@ -1,0 +1,47 @@
+## tblemployeeshiftmaster indexes (PK/unique)
+  PK__tblemplo__FB896A363863FD99 pk=true uniq=true col=paycode
+  tbl_tblemployeeshiftmaster_cardno pk=false uniq=false col=cardno
+  ind_RTC pk=false uniq=false col=isroundtheclockwork
+
+## duplicate paycode rows in tblemployeeshiftmaster (paycode with >1 row)
+  dup paycodes: NONE
+
+## S00069 mapping rows
+  {"paycode":"S00069","cardno":"S00069","shift":"GEM","shifttype":"F","shiftremaindays":7}
+
+## S00069 employee row
+  {"paycode":"S00069","empname":"Mohit Kumar","companycode":"002","cat":"001","active":"Y"}
+
+## tblshiftmaster rows for shift GEM
+  {"shift":"GEM","companycode":"002","starttime":"1900-01-01T10:00:00.000Z","endtime":"1900-01-01T19:00:00.000Z"}
+
+## shift master row counts per shift code (to see multi-company shifts)
+  {"shift":"GEN","n":4}
+  {"shift":"WK","n":3}
+  {"shift":"GNN","n":2}
+  {"shift":"NGT","n":2}
+  {"shift":"GAU","n":2}
+  {"shift":"GEE","n":1}
+  {"shift":"GEF","n":1}
+  {"shift":"GEM","n":1}
+  {"shift":"WK_","n":1}
+
+## distinct company codes in tblshiftmaster
+  ["001","002","003","004"]
+
+## sample employees with different shifts (non-GEN)
+  {"paycode":"1116","companycode":"002","shift":"GAU"}
+  {"paycode":"RCA001","companycode":"003","shift":"GAU"}
+  {"paycode":"SG00102","companycode":"003","shift":"GAU"}
+  {"paycode":"W00315","companycode":"002","shift":"GAU"}
+  {"paycode":"W00446","companycode":"002","shift":"GAU"}
+  {"paycode":"DCA003","companycode":"001","shift":"GEE"}
+  {"paycode":"DCA016","companycode":"001","shift":"GEE"}
+  {"paycode":"RCA002","companycode":"001","shift":"GEE"}
+  {"paycode":"1043","companycode":"001","shift":"GEF"}
+  {"paycode":"1114","companycode":"001","shift":"GEF"}
+  {"paycode":"115","companycode":"001","shift":"GEF"}
+  {"paycode":"EMP/0747","companycode":"001","shift":"GEF"}
+  {"paycode":"S00069","companycode":"002","shift":"GEM"}
+  {"paycode":"0400","companycode":"002","shift":"GNN"}
+  {"paycode":"AS00093","companycode":"003","shift":"GNN"}

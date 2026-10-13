@@ -30,6 +30,14 @@
  * Sirf navigation logic aur theme initialization hai.
  */
 
+/**
+ * MUST be the very first import (order matters):
+ * `react-native-gesture-handler` installs the native gesture root view that
+ * @react-navigation/stack uses on Android. Without it the stack cannot attach
+ * its gesture system in a release APK (swipe-back / back animation).
+ */
+import 'react-native-gesture-handler';
+
 import React from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { ThemeProvider, useTheme } from './src/theme';

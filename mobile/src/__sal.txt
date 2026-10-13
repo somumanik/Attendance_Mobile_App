@@ -1,0 +1,15 @@
+﻿export const getMyFullFinal = async ({ leavingdate, noticeServedDays, noticeWaived } = {}) => {
+export const getHrSalaryMaster = async ({ search, limit } = {}) => {
+export const importHrSalaryMaster = async (rows) => {
+export const getHrSalaryElements = async ({ paycode, search, limit } = {}) => {
+export const importHrSalaryElements = async (rows) => {
+export const getHrSalaryConfig = async () => {
+export const saveHrSalaryConfig = async (patch) => {
+export const getHrSalaryDues = async ({ paycode, status, search, limit } = {}) => {
+export const createHrSalaryDue = async ({ paycode, category, kind, description, amount }) => {
+export const decideHrSalaryDue = async (id, decision, note) => {
+export const getHrFullFinal = async (paycode, { leavingdate, noticeServedDays, noticeWaived } = {}) => {
+export const SALARY_MASTER_COLUMNS = [
+export const SALARY_ELEMENT_COLUMNS = [
+export const normaliseSalaryMasterRow = (row) => {
+export const normaliseSalaryElementRow = (row) => {

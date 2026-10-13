@@ -149,6 +149,10 @@ export const EmployeeAttendanceScreen = () => {
   const [holidays, setHolidays] = useState([]);
   // Real APPROVED leave for this employee in the displayed month (Phase J).
   const [leaveDates, setLeaveDates] = useState([]);
+  // PHASE 6 — logged-in employee ki CURRENT authoritative Savior shift (code/naam +
+  // start/end). Ye alag endpoint se aata hai (backend par non-cached) taaki Savior
+  // portal par shift badalne ke baad app turant nayi shift dikhaye, purani nahi.
+  const [shiftInfo, setShiftInfo] = useState(null);
   // Tracks which month is currently being displayed so a slow response for an
   // older month can never overwrite the one the user is looking at.
   const shownMonth = useRef(currentMonthKey());
@@ -213,9 +217,23 @@ export const EmployeeAttendanceScreen = () => {
     }
   }, []);
 
+  // PHASE 6 — current shift load. Shift ka na milna attendance rows ko block nahi karta
+  // (safe degrade): calendar/summary apne real data se hi render hote rehte hain.
+  const loadShift = useCallback(async () => {
+    try {
+      const res = await api.get(API_ENDPOINTS.EMPLOYEE_SHIFT);
+      setShiftInfo(res && res.resolved ? res : null);
+    } catch (_) {
+      setShiftInfo(null);
+    }
+  }, []);
+
   useEffect(() => { load(false, month); }, [month]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { loadHolidays(month); }, [month, loadHolidays]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { loadLeave(month); }, [month, loadLeave]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Har month load par shift bhi refresh hoti hai — Savior me shift update hone par
+  // app dobara khulte hi (ya month badalte hi) latest shift dikhata hai.
+  useEffect(() => { loadShift(); }, [month, loadShift]);
 
   // Rows oldest -> newest (the attendance tab is always ascending).
   const rows = useMemo(() => {
@@ -367,7 +385,8 @@ export const EmployeeAttendanceScreen = () => {
           key: `${key}-${i}`,
           date: l.date,
           inTime: clean(row?.inTime) || PLACEHOLDER,
-          shift: clean(row?.shift) || PLACEHOLDER,
+      lateListShift: clean(row?.currentShift || row?.shift) || PLACEHOLDER,
+      shift: clean(row?.currentShift || row?.shift) || PLACEHOLDER,
           lateMinutes: Number(l.lateMinutes || 0),
           graceUsed: clean(l.graceUsed),
           covered: l.isFinalLate === false,
@@ -472,6 +491,30 @@ export const EmployeeAttendanceScreen = () => {
 
         {!isLoading && !error && data ? (
           <>
+            {/* ---------- Current Shift (Savior LIVE sync, PHASE 6) ----------
+                Employee ki latest assigned Savior shift dikhate hain. Isi shift se
+                poore selected month ka Late Coming recalculate hota hai (purane
+                register shift se nahi). */}
+            {shiftInfo ? (
+              <Card style={styles.card}>
+                <View style={styles.cardHeader}>
+                  <Text style={[styles.cardTitle, { color: theme.textPrimary }]}>Current Shift</Text>
+                  <Text style={[styles.cardSub, { color: theme.textSecondary }]}>
+                    {`${clean(shiftInfo.startTime) || PLACEHOLDER} - ${clean(shiftInfo.endTime) || PLACEHOLDER}`}
+                  </Text>
+                </View>
+                <View style={styles.shiftRow}>
+                  <Ionicons name="time-outline" size={18} color={theme.primary} />
+                  <Text style={[styles.shiftCode, { color: theme.textPrimary }]}>
+                    {clean(shiftInfo.shiftName || shiftInfo.shiftCode) || PLACEHOLDER}
+                  </Text>
+                  <Text style={[styles.shiftMeta, { color: theme.textSecondary }]}>
+                    {clean(shiftInfo.companycode) ? `Company ${clean(shiftInfo.companycode)}` : ''}
+                  </Text>
+                </View>
+              </Card>
+            ) : null}
+
             {/* ---------- Monthly summary ---------- */}
             <Card style={styles.card}>
               <View style={styles.cardHeader}>
@@ -785,12 +828,23 @@ export const EmployeeAttendanceScreen = () => {
                     <Text style={[styles.sheetKey, { color: theme.textSecondary }]}>Hours</Text>
                     <Text style={[styles.sheetVal, { color: theme.primary }]}>{hoursText(r?.hoursworked)}</Text>
                   </View>
-                  {r?.shift ? (
-                    <View style={styles.sheetRow}>
-                      <Text style={[styles.sheetKey, { color: theme.textSecondary }]}>Shift</Text>
-                      <Text style={[styles.sheetVal, { color: theme.textPrimary }]}>{clean(r.shift)}</Text>
-                    </View>
-                  ) : null}
+                  {(() => {
+                    // PHASE 6 — day sheet me resolved (CURRENT) shift dikhate hain; register
+                    // ka purana code `r.shift`/`registerShift` ke roop me fallback rehta hai.
+                    const rowShiftCode = clean(r?.currentShift || r?.shift);
+                    const rowShiftTime = clean(r?.shiftStart) && clean(r?.shiftEnd)
+                      ? `${clean(r.shiftStart)} - ${clean(r.shiftEnd)}`
+                      : '';
+                    if (!rowShiftCode && !rowShiftTime) return null;
+                    return (
+                      <View style={styles.sheetRow}>
+                        <Text style={[styles.sheetKey, { color: theme.textSecondary }]}>Shift</Text>
+                        <Text style={[styles.sheetVal, { color: theme.textPrimary }]}>
+                          {rowShiftCode ? `${rowShiftCode}${rowShiftTime ? ` · ${rowShiftTime}` : ''}` : rowShiftTime}
+                        </Text>
+                      </View>
+                    );
+                  })()}
                   <View style={styles.sheetRow}>
                     <Text style={[styles.sheetKey, { color: theme.textSecondary }]}>Status</Text>
                     <Text style={[styles.sheetVal, { color }]}>{label}</Text>
@@ -945,6 +999,10 @@ const styles = StyleSheet.create({
   sheetRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 4 },
   sheetKey: { fontSize: 12 },
   sheetVal: { fontSize: 12.5, fontWeight: '700' },
+  // PHASE 6 — Current Shift banner (Savior LIVE sync).
+  shiftRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 },
+  shiftCode: { fontSize: 14, fontWeight: '800' },
+  shiftMeta: { fontSize: 11.5 },
 });
 
 export default EmployeeAttendanceScreen;

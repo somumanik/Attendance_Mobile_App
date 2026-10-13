@@ -28,7 +28,10 @@
 import React from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
-import { Ionicons } from '@expo/vector-icons';
+import { GradientIcon } from '../components/GradientIcon';
+import { getNavIcon } from '../utils/navigationIcons';
+import { useAuth } from '../hooks/useAuth';
+import { HRMoreScreen } from '../screens/hr/HRMoreScreen';
 import { HRDashboardScreen } from '../screens/hr/HRDashboardScreen';
 import { HREmployeesScreen } from '../screens/hr/HREmployeesScreen';
 import { HRAuditScreen } from '../screens/hr/HRAuditScreen';
@@ -46,31 +49,57 @@ const Tab = createBottomTabNavigator();
 // HR-only credential management screen (Phase 3A.10) ke liye inner stack.
 const Stack = createStackNavigator();
 
-/** Per-tab accent colors so each bottom-nav icon is visually distinct. */
-const TAB_ICON_COLORS = {
-  Dashboard: '#2563EB',
-  Employees: '#0D9488',
-  Audit: '#7C3AED',
-  Analytics: '#DB2777',
-  DailyMaster: '#EA580C',
-  Celebrations: '#CA8A04',
-  Marriage: '#DC2626',
-  LeaveMgmt: '#059669',
-  Salary: '#B45309',
-  Holidays: '#4F46E5',
+/**
+ * PHASE L - COLOURFUL GRADIENT ICON SYSTEM (presentation only).
+ *
+ * Per-tab gradient identity ab ek hi jagah (`utils/navigationIcons.js` ->
+ * NAV_ICON_GRADIENTS) define hai, keyed by TAB ROUTE name. Har HR tab ek chhota
+ * gradient "app icon" tile banata hai (GradientIcon) jiske upar white glyph hota
+ * hai. Isse sirf ICON ka LOOK badalta hai:
+ *   - koi route / screen / API / navigation behaviour nahi badla
+ *   - tabBarLabel, size, touch area aur active/inactive state same
+ *   - Phase G (Holiday) / Phase I (Credentials) / Phase J (Leave) /
+ *     Phase K (Salary) ki logic bilkul untouched
+ *
+ * Active tab full-strength gradient + soft lift dikhata hai (filled glyph +
+ * coloured bold label); inactive tab wahi tile thoda fade karke (55%) outline
+ * glyph aur neutral label ke saath dikhata hai.
+ */
+
+/** Unselected tile opacity (kept readable, clearly secondary vs the active tab). */
+const INACTIVE_TILE_OPACITY = 0.55;
+
+/** Gradient tile renderer for a bottom-nav tab. */
+const tabIcon = (name, focused, active, outline, size) => {
+  const { from, to } = getNavIcon(name);
+  return (
+    <GradientIcon
+      from={from}
+      to={to}
+      // Same glyph the app already used - only its presentation changed.
+      name={focused ? active : outline}
+      size={Math.round(size * 1.16)}
+      active={focused}
+      opacity={focused ? 1 : INACTIVE_TILE_OPACITY}
+    />
+  );
 };
 
-/** Selected icons use the full color; unselected icons use a muted version. */
-const muted = (hex) => hex + '99';
-
-const tabIcon = (name, focused, active, outline, size) => (
-  <Ionicons name={focused ? active : outline} size={size} color={focused ? TAB_ICON_COLORS[name] : muted(TAB_ICON_COLORS[name])} />
-);
-
-const HRTabs = () => (
+const HRTabs = () => {
+  // Server-side authorization is authoritative; this only hides what is not
+  // permitted so an HR Admin never sees a module they cannot use.
+  const { can, modulePlacement, isVisible } = useAuth();
+  /* Phase 4.4 — ONE rule for every section:
+       showTab = Visible (not explicitly Hidden) AND View permitted;
+       inBar   = shown here in the bottom bar (i.e. not placed in the More menu).
+     A Hidden section is excluded from BOTH surfaces, and the server denies its data
+     too, so it cannot be reached by entering its URL. */
+  const showTab = (m) => can(m, 'view') && isVisible(m);
+  const inBar = (m) => showTab(m) && modulePlacement(m) !== 'more';
+  return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
-        tabBarActiveTintColor: TAB_ICON_COLORS[route.name] || COLORS.primary,
+        tabBarActiveTintColor: getNavIcon(route.name).tint,
         tabBarInactiveTintColor: COLORS.textTertiary,
         tabBarStyle: {
           backgroundColor: COLORS.surface,
@@ -86,94 +115,135 @@ const HRTabs = () => (
         headerShown: false,
       })}
     >
-      <Tab.Screen
-        name="Dashboard"
-        component={HRDashboardScreen}
-        options={{
-          tabBarLabel: 'Dashboard',
-          tabBarIcon: ({ focused, size }) => tabIcon('Dashboard', focused, 'speedometer', 'speedometer-outline', size),
-        }}
-      />
-      <Tab.Screen
-        name="Employees"
-        component={HREmployeesScreen}
-        options={{
-          tabBarLabel: 'Employees',
-          tabBarIcon: ({ focused, size }) => tabIcon('Employees', focused, 'people', 'people-outline', size),
-        }}
-      />
-      <Tab.Screen
-        name="Audit"
-        component={HRAuditScreen}
-        options={{
-          tabBarLabel: 'Audit',
-          tabBarIcon: ({ focused, size }) => tabIcon('Audit', focused, 'search', 'search-outline', size),
-        }}
-      />
-      <Tab.Screen
-        name="Analytics"
-        component={HRAnalyticsScreen}
-        options={{
-          tabBarLabel: 'Analytics',
-          tabBarIcon: ({ focused, size }) => tabIcon('Analytics', focused, 'analytics', 'analytics-outline', size),
-        }}
-      />
-      <Tab.Screen
-        name="DailyMaster"
-        component={HRDailyMasterScreen}
-        options={{
-          tabBarLabel: 'Daily Master',
-          tabBarIcon: ({ focused, size }) => tabIcon('DailyMaster', focused, 'document-text', 'document-text-outline', size),
-        }}
-      />
-      <Tab.Screen
-        name="Celebrations"
-        component={HRCelebrationsScreen}
-        options={{
-          tabBarLabel: 'Celebrations',
-          tabBarIcon: ({ focused, size }) => tabIcon('Celebrations', focused, 'gift', 'gift-outline', size),
-        }}
-      />
-      <Tab.Screen
-        name="Marriage"
-        component={HRMarriageScreen}
-        options={{
-          tabBarLabel: 'Marriage',
-          tabBarIcon: ({ focused, size }) => tabIcon('Marriage', focused, 'heart', 'heart-outline', size),
-        }}
-      />
+      {inBar('dashboard') ? (
+        <Tab.Screen
+          name="Dashboard"
+          component={HRDashboardScreen}
+          options={{
+            tabBarLabel: 'Dashboard',
+            tabBarIcon: ({ focused, size }) => tabIcon('Dashboard', focused, 'speedometer', 'speedometer-outline', size),
+          }}
+        />
+      ) : null}
+      {/* Employee Management (module: employees) — hidden when not permitted, and
+          moved into the More menu when the SuperAdmin placed it there. A module
+          with no placement (NULL) keeps its historical spot in the bar. */}
+      {inBar('employees') ? (
+        <Tab.Screen
+          name="Employees"
+          component={HREmployeesScreen}
+          options={{
+            tabBarLabel: 'Employees',
+            tabBarIcon: ({ focused, size }) => tabIcon('Employees', focused, 'people', 'people-outline', size),
+          }}
+        />
+      ) : null}
+      {inBar('audit') ? (
+        <Tab.Screen
+          name="Audit"
+          component={HRAuditScreen}
+          options={{
+            tabBarLabel: 'Audit',
+            tabBarIcon: ({ focused, size }) => tabIcon('Audit', focused, 'search', 'search-outline', size),
+          }}
+        />
+      ) : null}
+      {inBar('analytics') ? (
+        <Tab.Screen
+          name="Analytics"
+          component={HRAnalyticsScreen}
+          options={{
+            tabBarLabel: 'Analytics',
+            tabBarIcon: ({ focused, size }) => tabIcon('Analytics', focused, 'analytics', 'analytics-outline', size),
+          }}
+        />
+      ) : null}
+      {inBar('dailymaster') ? (
+        <Tab.Screen
+          name="DailyMaster"
+          component={HRDailyMasterScreen}
+          options={{
+            tabBarLabel: 'Daily Master',
+            tabBarIcon: ({ focused, size }) => tabIcon('DailyMaster', focused, 'document-text', 'document-text-outline', size),
+          }}
+        />
+      ) : null}
+      {inBar('celebrations') ? (
+        <Tab.Screen
+          name="Celebrations"
+          component={HRCelebrationsScreen}
+          options={{
+            tabBarLabel: 'Celebrations',
+            tabBarIcon: ({ focused, size }) => tabIcon('Celebrations', focused, 'gift', 'gift-outline', size),
+          }}
+        />
+      ) : null}
+      {inBar('marriage') ? (
+        <Tab.Screen
+          name="Marriage"
+          component={HRMarriageScreen}
+          options={{
+            tabBarLabel: 'Marriage',
+            tabBarIcon: ({ focused, size }) => tabIcon('Marriage', focused, 'heart', 'heart-outline', size),
+          }}
+        />
+      ) : null}
       {/* Leave Management (Phase J): now backed by REAL application leave data, so
           this tab is registered again. It was hidden in Phase 6 only because leave
           was not implemented. Nothing else about the screen or its backend changed
           beyond Phase J. */}
-      <Tab.Screen
-        name="LeaveMgmt"
-        component={HRLeaveManagementScreen}
-        options={{
-          tabBarLabel: 'Leave Mgmt',
-          tabBarIcon: ({ focused, size }) => tabIcon('LeaveMgmt', focused, 'calendar', 'calendar-outline', size),
-        }}
-      />
+      {/* Leave Management (module: leave) — hidden when not permitted / moved to More. */}
+      {inBar('leave') ? (
+        <Tab.Screen
+          name="LeaveMgmt"
+          component={HRLeaveManagementScreen}
+          options={{
+            tabBarLabel: 'Leave Mgmt',
+            tabBarIcon: ({ focused, size }) => tabIcon('LeaveMgmt', focused, 'calendar', 'calendar-outline', size),
+          }}
+        />
+      ) : null}
       {/* Salary / Settlement management (Phase K): app-owned HR_Salary* data. */}
-      <Tab.Screen
-        name="Salary"
-        component={HRSalaryManagementScreen}
-        options={{
-          tabBarLabel: 'Salary',
-          tabBarIcon: ({ focused, size }) => tabIcon('Salary', focused, 'cash', 'cash-outline', size),
-        }}
-      />
+      {/* Salary Management (module: salary) — hidden when not permitted / moved to More. */}
+      {inBar('salary') ? (
+        <Tab.Screen
+          name="Salary"
+          component={HRSalaryManagementScreen}
+          options={{
+            tabBarLabel: 'Salary',
+            tabBarIcon: ({ focused, size }) => tabIcon('Salary', focused, 'cash', 'cash-outline', size),
+          }}
+        />
+      ) : null}
       {/* Holiday Management (Phase G): the only NEW HR tab in this phase. */}
-      <Tab.Screen
-        name="Holidays"
-        component={HRHolidayManagementScreen}
-        options={{
-          tabBarLabel: 'Holidays',
-          tabBarIcon: ({ focused, size }) => tabIcon('Holidays', focused, 'flag', 'flag-outline', size),
-        }}
-      />
+      {/* Holiday Management (module: holidays) — hidden when not permitted / moved to More. */}
+      {inBar('holidays') ? (
+        <Tab.Screen
+          name="Holidays"
+          component={HRHolidayManagementScreen}
+          options={{
+            tabBarLabel: 'Holidays',
+            tabBarIcon: ({ focused, size }) => tabIcon('Holidays', focused, 'flag', 'flag-outline', size),
+          }}
+        />
+      ) : null}
+      {/* Prompt 3: overflow modules (placement = 'more'). Registered ONLY when at
+          least one PERMITTED module is placed there, so an empty More tab is
+          never created and a non-permitted module can never appear inside it. */}
+      {['dashboard', 'employees', 'audit', 'analytics', 'dailymaster', 'celebrations', 'marriage', 'leave', 'salary', 'holidays']
+        .some((m) => showTab(m) && modulePlacement(m) === 'more') ? (
+        <Tab.Screen
+          name="More"
+          component={HRMoreScreen}
+          options={{
+            tabBarLabel: 'More',
+            tabBarIcon: ({ focused, size }) => tabIcon('More', focused, 'ellipsis-horizontal', 'ellipsis-horizontal-outline', size),
+          }}
+        />
+      ) : null}
     </Tab.Navigator>
-);
+  );
+};
 
 /**
  * HR Navigator — bottom tabs + HR-only credential management screen (Phase 3A.10).

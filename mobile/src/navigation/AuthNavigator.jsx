@@ -29,6 +29,7 @@ import React from 'react';
 import { createStackNavigator } from '@react-navigation/stack';
 import { RoleSelectionScreen } from '../screens/auth/RoleSelectionScreen';
 import { HRLoginScreen } from '../screens/auth/HRLoginScreen';
+import { SuperAdminLoginScreen } from '../screens/auth/SuperAdminLoginScreen';
 import { EmployeeLoginScreen } from '../screens/auth/EmployeeLoginScreen';
 import { FirstTimeSetupScreen } from '../screens/auth/FirstTimeSetupScreen';
 import { ForgotPasswordScreen } from '../screens/auth/ForgotPasswordScreen';
@@ -62,6 +63,13 @@ export const AuthNavigator = () => {
         options={{ title: 'HR Admin Login' }}
       />
       
+      {/* SuperAdmin Login Screen — separate management-role stack entry. */}
+      <Stack.Screen
+        name="SuperAdminLogin"
+        component={SuperAdminLoginScreen}
+        options={{ title: 'SuperAdmin Login' }}
+      />
+
       {/* Employee Login Screen */}
       <Stack.Screen
         name="EmployeeLogin"
