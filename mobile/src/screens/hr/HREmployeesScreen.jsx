@@ -21,7 +21,7 @@
  * No demo/mock data: loading failure shows a retry state instead of fake rows.
  */
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { View, Text, ScrollView, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator, Modal } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, TYPOGRAPHY, SPACING, SHADOWS } from '../../utils/colors';
@@ -154,7 +154,19 @@ export const HREmployeesScreen = () => {
     setExported(lines.join('\n'));
   };
 
+  /* PHASE 6.2B — detail fetch guard: agar user ne View band kar diya ya doosra
+     employee khol liya, to purane request ka late response modal ko dobara na
+     khole aur galat employee ka data na dikhaye. */
+  const detailFetchRef = useRef(0);
+  const closeDetail = () => {
+    detailFetchRef.current += 1; // in-flight fetch invalidate
+    setDetailLoading(false);
+    setDetail(null);
+  };
+
   const openDetail = async (employee) => {
+    const requestId = detailFetchRef.current + 1;
+    detailFetchRef.current = requestId;
     setDetailLoading(true);
     // PHASE 6.1 — roster row me already resolved shift fields hain; unhe turant seed karte
     // hain taaki detail fetch complete hone se pehle (ya fail hone par) kabhi bhi
@@ -170,13 +182,50 @@ export const HREmployeesScreen = () => {
     });
     try {
       const data = await api.get(`/employees/${encodeURIComponent(clean(employee.paycode))}`);
+      if (detailFetchRef.current !== requestId) return; // stale response — ignore
       setDetail(data);
     } catch (err) {
+      if (detailFetchRef.current !== requestId) return;
       // Detail fetch fail par bhi roster ka real shift data dikha rehta hai; error alag dikhate hain.
       setError(err?.message || 'Employee details load nahi ho paye.');
     } finally {
-      setDetailLoading(false);
+      if (detailFetchRef.current === requestId) setDetailLoading(false);
     }
+  };
+
+  /* PHASE 6.2B — shift block ek hi jagah se render hota hai (inline card + View modal),
+     duplicate logic nahi. Teen alag states honestly alag dikhti hain:
+     1) shiftResolved=true  -> real Shift Code/Name/Start/End (+ applicable shift company).
+     2) shiftResolved=false -> genuinely unassigned/unresolvable + reason
+        (NO_SHIFT_MAPPING / SHIFT_NOT_IN_MASTER / LOOKUP_ERROR). Koi fabricated
+        default shift nahi dikhte.
+     3) shiftResolved missing -> backend ne shift info bheji hi nahi (purana API
+        contract / stale backend); ise silently chhupate nahi. */
+  const renderShiftBlock = (info) => {
+    if (!info) return null;
+    if (info.shiftResolved === true) {
+      return (
+        <>
+          {/* PHASE 6.2B — popup me sirf Shift Code / Start / End dikhate hain.
+              Shift Name aur Shift Company intentionally nahi dikhaye jaate. */}
+          <Text style={styles.detailLine}>Shift Code: {clean(info.shiftCode) || '—'}</Text>
+          <Text style={styles.detailLine}>Shift Start: {clean(info.shiftStart) || '—'}</Text>
+          <Text style={styles.detailLine}>Shift End: {clean(info.shiftEnd) || '—'}</Text>
+        </>
+      );
+    }
+    if (info.shiftResolved === false) {
+      return (
+        <Text style={styles.detailLine}>
+          Shift: Not available ({clean(info.shiftUnavailableReason) || 'UNRESOLVED'})
+        </Text>
+      );
+    }
+    return (
+      <Text style={styles.detailLine}>
+        Shift: unavailable (server response me shift info missing hai)
+      </Text>
+    );
   };
 
   // Real filter options loaded from /hr/filters (same source as the desktop roster).
@@ -417,20 +466,9 @@ export const HREmployeesScreen = () => {
                   <Text style={styles.detailLine}>Marital: {clean(detail.ismarried) === 'Y' ? 'Married' : 'Single'}</Text>
                   <Text style={styles.detailLine}>Active: {clean(detail.active) === 'Y' ? 'Yes' : 'No'}</Text>
                   <Text style={styles.detailLine}>Date of Join: {String(detail.dateofjoin || '').slice(0, 10)}</Text>
-                  {/* PHASE 6 — employee ki CURRENT authoritative Savior shift. Sirf real,
-                      resolvable fields dikhate hain; warna saaf 'Not available' + reason. */}
-                  {detail.shiftResolved ? (
-                    <>
-                      <Text style={styles.detailLine}>Shift Name: {clean(detail.shiftName) || '—'}</Text>
-                      <Text style={styles.detailLine}>Shift Code: {clean(detail.shiftCode) || '—'}</Text>
-                      <Text style={styles.detailLine}>Shift Start: {clean(detail.shiftStart) || '—'}</Text>
-                      <Text style={styles.detailLine}>Shift End: {clean(detail.shiftEnd) || '—'}</Text>
-                    </>
-                  ) : detail.shiftResolved === false ? (
-                    <Text style={styles.detailLine}>
-                      Shift: Not available ({clean(detail.shiftUnavailableReason) || 'UNRESOLVED'})
-                    </Text>
-                  ) : null}
+                  {/* PHASE 6.2B — shared shift block (renderShiftBlock): resolved /
+                      unassigned / API-missing states honestly alag. */}
+                  {renderShiftBlock(detail)}
                 </View>
               ) : null}
             </View>
@@ -439,12 +477,12 @@ export const HREmployeesScreen = () => {
       )}
 
       {/* Employee View opens a real modal overlay above the roster */}
-      <Modal visible={!!detail || detailLoading} transparent animationType="fade" onRequestClose={() => { setDetail(null); }}>
+      <Modal visible={!!detail || detailLoading} transparent animationType="fade" onRequestClose={closeDetail}>
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Employee Details</Text>
-              <TouchableOpacity onPress={() => setDetail(null)} hitSlop={{ top: 12, left: 12, bottom: 12, right: 12 }}>
+              <TouchableOpacity onPress={closeDetail} hitSlop={{ top: 12, left: 12, bottom: 12, right: 12 }}>
                 <Text style={styles.modalClose}>✕</Text>
               </TouchableOpacity>
             </View>
@@ -467,20 +505,10 @@ export const HREmployeesScreen = () => {
                   <Text style={styles.detailLine}>Marital: {clean(detail.ismarried) === 'Y' ? 'Married' : 'Single'}</Text>
                   <Text style={styles.detailLine}>Active: {clean(detail.active) === 'Y' ? 'Yes' : 'No'}</Text>
                   <Text style={styles.detailLine}>Date of Join: {String(detail.dateofjoin || '').slice(0, 10)}</Text>
-                  {/* PHASE 6 — HR Admin "All Employees → View" ka shift block.
-                      Backend ke authoritative lookup se aata hai (non-cached). */}
-                  {detail.shiftResolved ? (
-                    <>
-                      <Text style={styles.detailLine}>Shift Name: {clean(detail.shiftName) || '—'}</Text>
-                      <Text style={styles.detailLine}>Shift Code: {clean(detail.shiftCode) || '—'}</Text>
-                      <Text style={styles.detailLine}>Shift Start: {clean(detail.shiftStart) || '—'}</Text>
-                      <Text style={styles.detailLine}>Shift End: {clean(detail.shiftEnd) || '—'}</Text>
-                    </>
-                  ) : detail.shiftResolved === false ? (
-                    <Text style={styles.detailLine}>
-                      Shift: Not available ({clean(detail.shiftUnavailableReason) || 'UNRESOLVED'})
-                    </Text>
-                  ) : null}
+                  {/* PHASE 6.2B — HR Admin "All Employees → View" ka shift block,
+                      same shared renderShiftBlock se (backend ka authoritative,
+                      non-cached lookup). */}
+                  {renderShiftBlock(detail)}
                 </View>
               ) : null}
             </ScrollView>

@@ -1,0 +1,20 @@
+PASS | Next.js site up on :3100 | 
+PASS | HR login form filled (hydrated) | 
+PASS | HR Admin login (web-next) works | 
+PASS | Audit loads 1053 profile | 
+PASS | FIX B - header shows real shift code + timings (GEN | 10:00 AM - 07:00 PM) | 
+PASS | FIX A - grace section VISIBLE for STAFF with zero usage (was hidden before) | 
+PASS | FIX A - empty late list shows honest empty-state (not silently hidden) | 
+PASS | FIX A - Monthly Staff Grace Used shows actual used/limit 0/2, 0/1, 0/1 | "Monthly Staff Grace Used\n\n30-min grace (2 per month)\n0/2\n1-hr grace (1 per month)\n0/1\n2-hr grace (1 per month)\n0/1\n\nUsed/Total. Universal 5-min grace 
+PASS | Month change refetches - Sep late rows appear with grace coverage | 
+PASS | Sep row covered by 1-hr grace shown (chronological consumption) | 
+PASS | Sep Monthly Staff Grace Used = 2/2, 1/1, 0/1 (actual used/limit) | "Monthly Staff Grace Used\n\n30-min grace (2 per month)\n2/2\n1-hr grace (1 per month)\n1/1\n2-hr grace (1 per month)\n0/1\n\nUsed/Total. Universal 5-min grace 
+PASS | Non-STAFF late rows render as FINAL LATE | 
+PASS | FIX A - non-STAFF: Monthly Staff Grace Used marked NOT APPLICABLE | 
+PASS | FIX A - non-STAFF: no misleading staff-grace used table | 
+PASS | Shift resolves per employee/company (AS00093 => GNN 09:30-18:30) | 
+PASS | AS00093 (STAFF, company 003) grace consumption rows shown | 
+PASS | HR Overview tab still works (regression) | 
+PASS | No browser console/JS exceptions during the audit flows | 
+
+=== SUMMARY: 18 PASS / 0 FAIL (of 18) ===

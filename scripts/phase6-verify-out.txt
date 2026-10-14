@@ -1,25 +1,25 @@
 === PHASE 6 SHIFT SYNC VERIFICATION ===
-base=http://127.0.0.1:4127/api paycode=S00069
+base=http://127.0.0.1:4000/api paycode=S00069
 PASS :: HR Admin login still works :: status=200
 GET /employees/S00069 => {"paycode":"S00069","shiftCode":"GEM","shiftName":"GEM","shiftStart":"10:00 AM","shiftEnd":"07:00 PM","shiftResolved":true,"reason":null}
 PASS :: HR employee detail exposes resolved shift :: code=GEM start=10:00 AM end=07:00 PM
 GET /employees?search=S00069 status=200 rows=1 => {"paycode":"S00069","shiftCode":"GEM","shiftStart":"10:00 AM","shiftEnd":"07:00 PM","shiftResolved":true}
 PASS :: Roster batch shift matches detail :: roster=GEM/10:00 AM detail=GEM/10:00 AM
 GET /hr/audit shift => {"paycode":"S00069","resolved":true,"shiftCode":"GEM","shiftName":"GEM","startTime":"10:00 AM","endTime":"07:00 PM","startMinutes":600,"endMinutes":1140,"companycode":"002","source":"tblemployeeshiftmaster+tblshiftmaster","reason":null}
-audit attendance sample => {"date":"2026-10-09","shift":"GEM","registerShift":"GEN","currentShift":"GEM","shiftStart":"10:00 AM","shiftEnd":"07:00 PM","inTime":"09:51 AM","latearrival":0,"isLate":false}
+audit attendance sample => {"date":"2026-10-14","shift":"GEM","registerShift":"GEN","currentShift":"GEM","shiftStart":"10:00 AM","shiftEnd":"07:00 PM","inTime":"09:35 AM","latearrival":0,"isLate":false}
 PASS :: Audit row uses CURRENT resolved shift (not stale register shift) :: row.currentShift=GEM registerShift=GEN expected=GEM
 PASS :: Displayed `shift` field also reflects the resolved shift (web + mobile clients) :: shift=GEM registerShift=GEN
 PASS :: Whole selected month uses the latest assigned shift (month-wide rule) :: rows=31
 GET /employee/shift => {"status":200,"paycode":"S00069","resolved":true,"shiftCode":"GEM","shiftName":"GEM","startTime":"10:00 AM","endTime":"07:00 PM","startMinutes":600,"endMinutes":1140,"companycode":"002","source":"tblemployeeshiftmaster+tblshiftmaster","reason":null}
 PASS :: Employee shift endpoint returns same resolved shift :: status=200 code=GEM
-GET /employee/monthly sample => {"date":"2026-10-09","currentShift":"GEM","shiftStart":"10:00 AM","registerShift":"GEN","inTime":"09:51 AM","latearrival":0,"isLate":false}
+GET /employee/monthly sample => {"date":"2026-10-14","currentShift":"GEM","shiftStart":"10:00 AM","registerShift":"GEN","inTime":"09:35 AM","latearrival":0,"isLate":false}
 PASS :: Employee attendance rows carry the resolved shift + timings :: rows=28 status=200
 PASS :: Employee identity isolation intact (cross-paycode request denied) :: status=403
-PASS :: Late Coming now recalculates from the RESOLVED shift start (would be late under stale shift) :: date=2026-10-09 in=09:51 AM lateMinutes=0 (old 09:05 vs new 10:05)
+PASS :: Late Coming now recalculates from the RESOLVED shift start (would be late under stale shift) :: date=2026-10-14 in=09:35 AM lateMinutes=0 (old 09:05 vs new 10:05)
 (no active employee without a shift mapping found - skipping missing-mapping test)
 Savior truth => {"tblemployeeshiftmaster":"GEM","tblshiftmaster":{"shift":"GEM","companycode":"002","starttime":"1900-01-01T10:00:00.000Z","endtime":"1900-01-01T19:00:00.000Z"}}
 PASS :: API shift matches Savior tblemployeeshiftmaster :: db=GEM api=GEM
-tbltimeregister (recent) shift values => [{"shift":"GEN","cnt":110},{"shift":"OFF","cnt":18}]
+tbltimeregister (recent) shift values => [{"shift":"GEN","cnt":106},{"shift":"OFF","cnt":18}]
 PASS :: Root cause demonstrated: register carries a DIFFERENT (older) shift than the employee is assigned now :: register=["GEN","OFF"] current=GEM
 PASS :: Other employee 1116 resolves shift GAU :: code=GAU start=08:00 AM end=08:00 PM
 PASS :: No cross-company shift for 1116 :: shiftCompany=002 empCompany=002
@@ -41,8 +41,8 @@ other employees verified: 8
 PASS :: Company 001 GEN timing = 10:00 AM :: start=10:00 AM
 PASS :: Company 002 GEN timing = 09:00 AM :: start=09:00 AM
 PASS :: Cross-company timing differs (001 vs 002) :: 001=10:00 AM 002=09:00 AM
-PASS :: HR dashboard summary still works :: status=200 totalstaff=295 late=0
-PASS :: Grace state still reported and intact (not reset by shift refresh) :: graceRemaining={"grace30min":2,"grace1hr":1,"grace2hr":1} lateDetails=0
+PASS :: HR dashboard summary still works :: status=200 totalstaff=296 late=20
+PASS :: Grace state still reported and intact (not reset by shift refresh) :: graceRemaining={"grace30min":2,"grace1hr":1,"grace2hr":1} lateDetails=1
 PASS :: Employee holidays endpoint unaffected :: status=200
 PASS :: Legacy /attendance endpoint unaffected (200) :: status=200 rows=28
 PASS :: Employee login flow unaffected (dev fallback account) :: status=200
@@ -58,7 +58,7 @@ PASS | Whole selected month uses the latest assigned shift (month-wide rule) | r
 PASS | Employee shift endpoint returns same resolved shift | status=200 code=GEM
 PASS | Employee attendance rows carry the resolved shift + timings | rows=28 status=200
 PASS | Employee identity isolation intact (cross-paycode request denied) | status=403
-PASS | Late Coming now recalculates from the RESOLVED shift start (would be late under stale shift) | date=2026-10-09 in=09:51 AM lateMinutes=0 (old 09:05 vs new 10:05)
+PASS | Late Coming now recalculates from the RESOLVED shift start (would be late under stale shift) | date=2026-10-14 in=09:35 AM lateMinutes=0 (old 09:05 vs new 10:05)
 PASS | API shift matches Savior tblemployeeshiftmaster | db=GEM api=GEM
 PASS | Root cause demonstrated: register carries a DIFFERENT (older) shift than the employee is assigned now | register=["GEN","OFF"] current=GEM
 PASS | Other employee 1116 resolves shift GAU | code=GAU start=08:00 AM end=08:00 PM
@@ -80,8 +80,8 @@ PASS | No cross-company shift for RCA002 | shiftCompany=001 empCompany=001
 PASS | Company 001 GEN timing = 10:00 AM | start=10:00 AM
 PASS | Company 002 GEN timing = 09:00 AM | start=09:00 AM
 PASS | Cross-company timing differs (001 vs 002) | 001=10:00 AM 002=09:00 AM
-PASS | HR dashboard summary still works | status=200 totalstaff=295 late=0
-PASS | Grace state still reported and intact (not reset by shift refresh) | graceRemaining={"grace30min":2,"grace1hr":1,"grace2hr":1} lateDetails=0
+PASS | HR dashboard summary still works | status=200 totalstaff=296 late=20
+PASS | Grace state still reported and intact (not reset by shift refresh) | graceRemaining={"grace30min":2,"grace1hr":1,"grace2hr":1} lateDetails=1
 PASS | Employee holidays endpoint unaffected | status=200
 PASS | Legacy /attendance endpoint unaffected (200) | status=200 rows=28
 PASS | Employee login flow unaffected (dev fallback account) | status=200

@@ -1,0 +1,20 @@
+PASS | Expo web mobile app up on :8081 | 
+PASS | Mobile app loads (Role Selection visible) | 
+PASS | HR Admin login screen reachable | 
+PASS | HR login works (HR tab bar with Employees visible) | 
+PASS | All Employees tab opens (search box present) | 
+PASS | Search S00069 finds real employee (Mohit Kumar) | 
+PASS | View modal opens | 
+PASS | MOBILE VIEW shows REAL shift for S00069: Shift Code: GEM | from live Savior tblemployeeshiftmaster
+PASS | S00069 shift timings rendered (10:00 AM / 07:00 PM) | 
+PASS | S00069 popup: Shift Name REMOVED | 
+PASS | S00069 popup: Shift Company REMOVED | 
+PASS | NO stale "Not available (UNRESOLVED)" for S00069 | 
+PASS | Search 1053 finds real employee (Manik K Chaudhari) | 
+PASS | MOBILE VIEW shows REAL shift for 1053: Shift Code: GEN | 
+PASS | 1053 shift timings rendered (10:00 AM / 07:00 PM) | 
+PASS | 1053 popup: Shift Name / Shift Company REMOVED | 
+PASS | NO stale "Not available (UNRESOLVED)" for 1053 | 
+PASS | No JS exceptions during mobile flows | 
+
+=== SUMMARY: 18 PASS / 0 FAIL (of 18) ===

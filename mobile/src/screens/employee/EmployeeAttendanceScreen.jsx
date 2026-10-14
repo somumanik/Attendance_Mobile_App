@@ -464,7 +464,7 @@ export const EmployeeAttendanceScreen = () => {
   return (
     <ScreenContainer title="My Attendance" showHeader={true}>
       <ScrollView
-        refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={() => load(true, month)} colors={[theme.primary]} />}
+        refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={() => { load(true, month); loadShift(); }} colors={[theme.primary]} />}
         contentContainerStyle={styles.scroll}
         showsVerticalScrollIndicator={false}
       >

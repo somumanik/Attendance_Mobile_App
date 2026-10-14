@@ -28,7 +28,23 @@ export default function AuditModal({ paycode, onClose }) {
   const lateDetails = data?.lateDetails || [];
   const grace = data?.graceRemaining || {};
   const month = currentMonthKey();
-  const hasGrace = lateDetails.length > 0 || Number(grace.grace30min) < 2 || Number(grace.grace1hr) < 1 || Number(grace.grace2hr) < 1;
+  /* PHASE 6.2C — grace eligibility (STAFF?) aur configured limits SHARED backend se
+     aate hain (computeMonthlyLateForEmployee ka graceEligibility) — yahan category
+     rules dobara implement nahi karte (AuditSection.jsx jaisa hi single source).
+     Field na ho (legacy response) to null = unknown → purana condition. */
+  const graceElig = data?.graceEligibility && typeof data.graceEligibility === 'object' ? data.graceEligibility : null;
+  const graceLimits = (graceElig && graceElig.limits) || { grace30min: 2, grace1hr: 1, grace2hr: 1 };
+  const graceUsedOf = (key) => Math.max(0, Number(graceLimits[key] || 0) - Number(grace[key] ?? 0));
+  const staffGraceEligible = graceElig ? graceElig.isStaff === true : null;
+  // Hinglish: Eligible STAFF ke liye ye section hamesha dikhta hai (0 usage par bhi
+  // "0/2 used"). Non-STAFF par sirf real late rows ke liye, aur unpar staff-grace
+  // block kabhi nahi (unhe grace milti hi nahi). Legacy response me purana condition.
+  const hasLateRows = (lateDetails || []).length > 0;
+  const hasGrace = staffGraceEligible === true
+    ? true
+    : staffGraceEligible === false
+      ? hasLateRows
+      : (hasLateRows || Number(grace.grace30min) < 2 || Number(grace.grace1hr) < 1 || Number(grace.grace2hr) < 1);
 
   const graceLabel = (d) => {
     if (d.isFinalLate) return d.graceUsed == null ? 'No grace — FINAL LATE' : 'FINAL LATE';
@@ -106,15 +122,26 @@ export default function AuditModal({ paycode, onClose }) {
                       )) : <div className="text-[10px] text-[var(--muted)] p-2">No late occurrences this month</div>}
                     </div>
                   </div>
-                  <div>
-                    <p className="text-[10px] font-bold text-amber-300 mb-2">Monthly Staff Grace Used</p>
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between p-2 rounded bg-white/5"><span className="text-[var(--text)] text-[10px]">30-min grace (2 per month)</span><span className="text-[var(--text)] font-bold mono">{2 - Number(grace.grace30min ?? 0)}/2</span></div>
-                      <div className="flex items-center justify-between p-2 rounded bg-white/5"><span className="text-[var(--text)] text-[10px]">1-hr grace (1 per month)</span><span className="text-[var(--text)] font-bold mono">{1 - Number(grace.grace1hr ?? 0)}/1</span></div>
-                      <div className="flex items-center justify-between p-2 rounded bg-white/5"><span className="text-[var(--text)] text-[10px]">2-hr grace (1 per month)</span><span className="text-[var(--text)] font-bold mono">{1 - Number(grace.grace2hr ?? 0)}/1</span></div>
+                  {/* PHASE 6.2C — Monthly Staff Grace Used: sirf grace-eligible (STAFF)
+                      employees ke liye. Hinglish: used = configured limit - bacha hua
+                      (graceRemaining); limits shared backend se. Non-STAFF par ye block
+                      nahi dikhta. */}
+                  {staffGraceEligible !== false ? (
+                    <div>
+                      <p className="text-[10px] font-bold text-amber-300 mb-2">Monthly Staff Grace Used</p>
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between p-2 rounded bg-white/5"><span className="text-[var(--text)] text-[10px]">30-min grace ({graceLimits.grace30min} per month)</span><span className="text-[var(--text)] font-bold mono">{graceUsedOf('grace30min')}/{graceLimits.grace30min}</span></div>
+                        <div className="flex items-center justify-between p-2 rounded bg-white/5"><span className="text-[var(--text)] text-[10px]">1-hr grace ({graceLimits.grace1hr} per month)</span><span className="text-[var(--text)] font-bold mono">{graceUsedOf('grace1hr')}/{graceLimits.grace1hr}</span></div>
+                        <div className="flex items-center justify-between p-2 rounded bg-white/5"><span className="text-[var(--text)] text-[10px]">2-hr grace ({graceLimits.grace2hr} per month)</span><span className="text-[var(--text)] font-bold mono">{graceUsedOf('grace2hr')}/{graceLimits.grace2hr}</span></div>
+                      </div>
+                      <p className="text-[9px] text-[var(--muted)] mt-2">Used/Total. Universal 5-min grace applies to all categories. Staff grace consumed chronologically (smallest first).</p>
                     </div>
-                    <p className="text-[9px] text-[var(--muted)] mt-2">Used/Total. Universal 5-min grace applies to all categories. Staff grace consumed chronologically (smallest first).</p>
-                  </div>
+                  ) : (
+                    <div>
+                      <p className="text-[10px] font-bold text-amber-300 mb-2">Monthly Staff Grace Used</p>
+                      <p className="text-[10px] text-[var(--muted)] p-2">Not applicable — ye employee STAFF category ka nahi hai, isliye monthly staff grace rules apply nahi hote. Sab late occurrences FINAL LATE count hote hain.</p>
+                    </div>
+                  )}
                 </div>
               </div>
             ) : null}

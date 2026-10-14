@@ -1,0 +1,15 @@
+PASS  Next.js site up
+PASS  HR Admin login works
+PASS  Overview: Audit button clickable for STAFF AS00093
+PASS  Overview audit modal opens
+PASS  Overview modal: STAFF AS00093 grace section shown (Monthly Staff Grace Used)
+PASS  Overview modal: STAFF AS00093 grace consumption row (2-hr grace)
+PASS  Overview modal: STAFF has used/limit counts (2/2)
+PASS  Overview modal: non-STAFF "Not applicable" NOT shown for STAFF
+PASS  Overview: Audit button clickable for non-STAFF AW00035
+PASS  Overview modal: non-STAFF marked NOT APPLICABLE (no fake staff grace)
+PASS  Overview modal: non-STAFF late rows render FINAL LATE
+PASS  Overview modal: non-STAFF has no misleading "30-min grace (2 per month)" table
+PASS  No JS exceptions during overview audit flows
+
+=== SUMMARY: 13 PASS / 0 FAIL (of 13) ===

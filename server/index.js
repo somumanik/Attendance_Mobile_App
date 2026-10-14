@@ -613,13 +613,18 @@ function computeLateStatus(row, shiftMap, employeeCategory, companycode, paycode
  * - 30min grace (2/month) ? 1hr grace (1/month) ? 2hr grace (1/month)
  * - Once a grace is consumed, it's unavailable for subsequent late events in the same month
  */
+/* PHASE 6.2A — STAFF monthly grace ke configured limits ka SINGLE source.
+   UI (web-next Single Employee Audit) ko bhi yehi limits/eligibility bheji jaati
+   hai, taaki grace rules kahin dobara implement na hon. */
+const STAFF_MONTHLY_GRACE_LIMITS = Object.freeze({ grace30min: 2, grace1hr: 1, grace2hr: 1 });
+
 function computeMonthlyLateForEmployee(rows, shiftMap, employeeCategory, companycode, paycode, year, month, shiftCodeOverride = null) {
   const isStaff = isStaffCategory(employeeCategory, categoryCache);
   
   // Initialize grace allowances for this employee/month
-  let grace30minRemaining = isStaff ? 2 : 0;
-  let grace1hrRemaining = isStaff ? 1 : 0;
-  let grace2hrRemaining = isStaff ? 1 : 0;
+  let grace30minRemaining = isStaff ? STAFF_MONTHLY_GRACE_LIMITS.grace30min : 0;
+  let grace1hrRemaining = isStaff ? STAFF_MONTHLY_GRACE_LIMITS.grace1hr : 0;
+  let grace2hrRemaining = isStaff ? STAFF_MONTHLY_GRACE_LIMITS.grace2hr : 0;
   
   // Filter to only this month's records and sort chronologically
   const monthRows = (rows || [])
@@ -690,7 +695,15 @@ function computeMonthlyLateForEmployee(rows, shiftMap, employeeCategory, company
     }
   }
   
-  return { finalLateCount, lateDetails, graceRemaining: { grace30min: grace30minRemaining, grace1hr: grace1hrRemaining, grace2hr: grace2hrRemaining } };
+  return {
+    finalLateCount,
+    lateDetails,
+    graceRemaining: { grace30min: grace30minRemaining, grace1hr: grace1hrRemaining, grace2hr: grace2hrRemaining },
+    /* PHASE 6.2A — additive: UI ko eligibility + limits batana taaki woh grace
+       section ko sahi dikhaye/sakriya kare. Existing callers sirf finalLateCount /
+       lateDetails / graceRemaining padhte hain, isliye unka behaviour unchanged. */
+    graceEligibility: { isStaff, limits: { ...STAFF_MONTHLY_GRACE_LIMITS } },
+  };
 }
 
 // Backward compatibility - checks database latearrival field
@@ -3429,7 +3442,10 @@ app.get('/api/hr/audit/:paycode', authenticate, requireRole('HR'), requireDbConf
       // `attendance` Savior rows above are unchanged.
       holidays,
       lateDetails: monthlyLate.lateDetails,
-      graceRemaining: monthlyLate.graceRemaining
+      graceRemaining: monthlyLate.graceRemaining,
+      // PHASE 6.2A — additive: grace eligibility + configured limits (same shared
+      // computation). Backward compatible — purane fields unchanged.
+      graceEligibility: monthlyLate.graceEligibility
     });
   } catch (error) { sendDbError(res, error); }
 });
