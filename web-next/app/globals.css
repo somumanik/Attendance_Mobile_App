@@ -549,6 +549,75 @@ body {
   margin: 0 0 16px;
 }
 
+/* Employee login PIN/password toggle + links + hints */
+.auth__switch {
+  text-align: center;
+  margin: 0 0 14px;
+}
+.auth__switch button {
+  background: none;
+  border: 0;
+  color: var(--accent-soft);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+}
+.auth__switch button:hover {
+  text-decoration: underline;
+}
+.auth__links {
+  text-align: center;
+  margin-top: 14px;
+}
+.auth__forgot {
+  color: var(--accent-soft);
+  font-size: 0.85rem;
+  text-decoration: none;
+  font-weight: 600;
+}
+.auth__forgot:hover {
+  text-decoration: underline;
+}
+.auth__hint {
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.5;
+  margin: 0 0 14px;
+}
+.auth__success {
+  border: 1px solid var(--accent-soft);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 16px;
+  text-align: center;
+}
+.auth__success-title {
+  font-weight: 800;
+  font-size: 0.95rem;
+  margin: 0 0 6px;
+}
+.auth__success-text {
+  font-size: 0.85rem;
+  line-height: 1.5;
+  margin: 0 0 6px;
+}
+.auth__success-hint {
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.5;
+  margin: 0;
+}
+
+/* Employee profile security action links */
+.security-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+
 /* Input field with leading icon */
 .field__wrap--icon .field__input {
   padding-left: 40px;
@@ -1203,3 +1272,136 @@ body {
 [data-theme='light'] .audit-tab .audit-help--cyan { color: #0e7490; }
 [data-theme='light'] .audit-tab .audit-help--violet { color: #6d28d9; }
 [data-theme='light'] .audit-tab .audit-kpi-label { color: #475569; }
+
+/* ===========================================================================
+   Employee Attendance + Leave (Phase: Attendance & Leave parity)
+   Scoped to .att / .leave wrappers so no existing page is affected.
+   =========================================================================== */
+.att, .leave { display: flex; flex-direction: column; gap: 16px; }
+.att-head__row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.att-sub { margin: 8px 0 0; font-size: 12px; }
+.att-month-ctrl { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.att-jump { display: flex; align-items: center; gap: 6px; }
+.att-jump__label { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.att-jump__select, .att-jump select {
+  background: var(--input-bg); color: var(--text); border: 1px solid var(--border);
+  border-radius: 10px; padding: 6px 10px; font-size: 12px; outline: none;
+}
+.att-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; }
+.att-sum {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+  padding: 14px 12px; text-align: center;
+}
+.att-sum__value { font-size: 22px; font-weight: 800; line-height: 1.1; }
+.att-sum__label { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-top: 4px; }
+.att-sum__sub { font-size: 9px; color: var(--muted); opacity: .8; margin-top: 2px; }
+
+.att-grid { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+@media (max-width: 900px) { .att-grid { grid-template-columns: 1fr; } }
+
+.att-cal { padding: 16px; }
+.cal__head, .cal__grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+.cal__weekday {
+  text-align: center; font-size: 10px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .05em; color: var(--muted); padding-bottom: 8px;
+}
+.cal__cell {
+  position: relative; aspect-ratio: 1 / 0.82; min-height: 52px; border-radius: 12px;
+  border: 1px solid var(--border); background: color-mix(in srgb, var(--cell-color) 12%, var(--surface));
+  color: var(--text); cursor: pointer; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 4px; transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease;
+}
+.cal__cell:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(0,0,0,.28); border-color: var(--cell-color); }
+.cal__cell--out { opacity: .34; background: var(--surface); }
+.cal__cell--today { border-color: var(--accent); box-shadow: 0 0 0 2px var(--focus-ring) inset; }
+.cal__cell--active { border-color: var(--cell-color); background: color-mix(in srgb, var(--cell-color) 30%, var(--surface)); box-shadow: 0 10px 24px rgba(0,0,0,.35); }
+.cal__day { font-size: 13px; font-weight: 700; }
+.cal__dot { width: 8px; height: 8px; border-radius: 50%; background: var(--cell-color); box-shadow: 0 0 8px var(--cell-color); }
+.cal__late {
+  position: absolute; top: 4px; right: 5px; width: 15px; height: 15px; border-radius: 50%;
+  background: #DC2626; color: #fff; font-size: 9px; font-weight: 800; display: flex;
+  align-items: center; justify-content: center;
+}
+.cal-legend { display: flex; flex-wrap: wrap; gap: 10px 16px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+.cal-legend__item { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); }
+.cal-legend__dot { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+.cal-legend__late {
+  width: 15px; height: 15px; border-radius: 50%; background: #DC2626; color: #fff;
+  font-size: 9px; font-weight: 800; display: inline-flex; align-items: center; justify-content: center;
+}
+
+.att-detail { padding: 16px; }
+.att-detail__status { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.att-late-badge {
+  background: rgba(220,38,38,.16); color: #f87171; border: 1px solid rgba(220,38,38,.4);
+  min-width: 18px; justify-content: center;
+}
+.att-table tr { cursor: pointer; }
+.table-row--selected { background: rgba(99,102,241,.12) !important; }
+
+/* ---- Employee Leave ---- */
+.leave-form { display: flex; flex-direction: column; gap: 4px; }
+.leave-msg { padding: 10px 12px; border-radius: 10px; font-size: 12px; font-weight: 600; margin-bottom: 10px; }
+.leave-msg--ok { background: rgba(5,150,105,.14); border: 1px solid rgba(5,150,105,.35); color: #34d399; }
+.leave-msg--err { background: rgba(220,38,38,.14); border: 1px solid rgba(220,38,38,.35); color: #f87171; }
+.leave-types { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.leave-chip {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
+  padding: 8px 12px; border-radius: 12px; border: 1px solid var(--border);
+  background: var(--input-bg); color: var(--text); cursor: pointer; min-width: 96px;
+  transition: all .15s ease;
+}
+.leave-chip strong { font-size: 12px; }
+.leave-chip span { font-size: 9px; color: var(--muted); }
+.leave-chip--active { background: var(--accent); border-color: var(--accent); }
+.leave-chip--active strong, .leave-chip--active span { color: var(--on-accent, #fff); }
+.leave-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.leave-row--tight { display: flex; flex-wrap: wrap; gap: 8px; }
+.leave-toggle {
+  padding: 8px 14px; border-radius: 999px; border: 1px solid var(--border);
+  background: var(--input-bg); color: var(--muted); cursor: pointer; font-size: 12px;
+  font-weight: 600; transition: all .15s ease;
+}
+.leave-toggle--active { background: var(--accent); border-color: var(--accent); color: var(--on-accent, #fff); }
+.leave-hint { font-size: 10.5px; color: var(--muted); margin: 6px 0 0; }
+.leave-textarea { min-height: 78px; resize: vertical; }
+@media (max-width: 560px) { .leave-row { grid-template-columns: 1fr; } }
+
+.leave-req-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
+.leave-filters { display: flex; flex-wrap: wrap; gap: 6px; }
+.leave-filter {
+  display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--input-bg); color: var(--muted);
+  cursor: pointer; font-size: 11px; font-weight: 600; transition: all .15s ease;
+}
+.leave-filter--active { background: var(--accent); border-color: var(--accent); color: var(--on-accent, #fff); }
+.leave-filter__count {
+  background: rgba(255,255,255,.16); border-radius: 999px; padding: 0 6px; font-size: 9px; font-weight: 800;
+}
+.leave-req-list { display: flex; flex-direction: column; gap: 12px; }
+.leave-req {
+  border: 1px solid var(--border); border-radius: 14px; padding: 14px;
+  background: color-mix(in srgb, var(--surface-solid) 60%, transparent);
+}
+.leave-req__top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.leave-req__type { font-size: 14px; font-weight: 700; color: var(--text); }
+.leave-req__dates { font-size: 12px; margin-top: 2px; }
+.leave-req__reason { font-size: 12.5px; color: var(--text); margin: 8px 0 0; }
+.leave-req__meta { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 6px; font-size: 11px; }
+.leave-req__decision { font-size: 11.5px; color: var(--accent-soft); font-style: italic; margin: 6px 0 0; }
+.leave-req__foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border);
+}
+.leave-req__applied { font-size: 10.5px; }
+.leave-cancel {
+  padding: 6px 14px; border-radius: 8px; border: 1px solid rgba(220,38,38,.5);
+  background: transparent; color: #f87171; cursor: pointer; font-size: 11.5px; font-weight: 700;
+  transition: all .15s ease;
+}
+.leave-cancel:hover:not(:disabled) { background: rgba(220,38,38,.16); }
+.leave-cancel:disabled { opacity: .55; cursor: default; }
+
+/* Light-theme softening for the scoped attendance/leave blocks */
+[data-theme='light'] .cal__cell { background: color-mix(in srgb, var(--cell-color) 16%, #fff); }
+[data-theme='light'] .cal__cell--out { background: #f1f5f9; }

@@ -18,6 +18,7 @@
     },
     "android": {
       "package": "com.mohani.attendance",
+      "versionCode": 5,
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#FFFFFF"

@@ -2,6 +2,7 @@
 
 // web-next/components/employee/ProfileSection.jsx — authenticated employee's own profile.
 
+import Link from 'next/link';
 import useApiData from './useApiData';
 import AsyncBox from './AsyncBox';
 import { prettyDate } from '../../lib/format';
@@ -44,6 +45,14 @@ export default function ProfileSection() {
           </dl>
         </div>
       ) : null}
+
+      <div className="card" style={{ marginTop: 16 }}>
+        <h3 className="card__title">Security</h3>
+        <div className="security-links">
+          <Link className="btn btn--ghost" href="/employee/password">Change Password</Link>
+          <Link className="btn btn--ghost" href="/employee/pin">Change / Setup PIN</Link>
+        </div>
+      </div>
     </AsyncBox>
   );
 }

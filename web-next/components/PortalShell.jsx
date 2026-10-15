@@ -38,6 +38,7 @@ const CONFIG = {
       { href: '/hr/leave', label: 'Leave Management', title: 'Leave Management', short: 'Leave', icon: 'fa-clipboard-check', color: 'text-sky-400' },
       { href: '/hr/salary', label: 'Salary / Full & Final', title: 'Salary / Full & Final', short: 'Salary', icon: 'fa-money-bill-wave', color: 'text-emerald-400' },
       { href: '/hr/holidays', label: 'Holiday Management', title: 'Holiday Management', short: 'Holidays', icon: 'fa-calendar-days', color: 'text-rose-400' },
+      { href: '/hr/credentials', label: 'Employee Credential Management', title: 'Employee Credential Management', short: 'Credentials', icon: 'fa-id-badge', color: 'text-cyan-400' },
     ],
   },
 };

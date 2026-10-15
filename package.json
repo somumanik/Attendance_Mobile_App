@@ -19,13 +19,13 @@
     "chart.js": "^4.5.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
-    "expo": "^57.0.26",
+    "expo": "~57.0.29",
     "express": "^4.21.2",
     "jsonwebtoken": "^9.0.2",
     "mssql": "^11.0.1",
     "nodemailer": "^10.0.10",
-    "react": "^19.1.1",
-    "react-dom": "^19.1.1",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {

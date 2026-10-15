@@ -1,6 +1,8 @@
 import { redirect } from 'next/navigation';
 import { getCurrentUser } from '../../lib/serverAuth';
 import PortalShell from '../../components/PortalShell';
+import PasswordChangeSection from '../../components/employee/PasswordChangeSection';
+import PinSection from '../../components/employee/PinSection';
 
 // Employee portal layout — har /employee/* route ke liye server-side auth gate.
 // Identity sirf verified JWT (cookie -> /api/me) se aati hai; browser se koi paycode nahi.
@@ -20,25 +22,15 @@ export default async function EmployeeLayout({ children }) {
     </PortalShell>
   );
 
-  // Backend gates (bilkul mobile jaisa) — bypass nahi hote.
+  // Backend gates (bilkul mobile jaisa) — forced screens render inline. Employee
+  // data routes bhi backend par 403 dete hain jab tak flag clear nahi hota.
   if (user.mustChangePassword === true) {
-    return shell(
-      <div className="gate">
-        <p className="gate__title">Password change required</p>
-        <p className="gate__text">Aapko naya password set karna zaroori hai. Ye screen agle approved phase me aayegi — abhi access blocked hai (backend bhi ise enforce karta hai).</p>
-      </div>,
-    );
+    return shell(<PasswordChangeSection forced />);
   }
 
   if (user.pinSetupRequired === true) {
-    return shell(
-      <div className="gate">
-        <p className="gate__title">PIN setup required</p>
-        <p className="gate__text">Aapko 4-digit PIN banana zaroori hai. Ye screen agle approved phase me aayegi — abhi access blocked hai.</p>
-      </div>,
-    );
+    return shell(<PinSection forced />);
   }
 
   return shell(children);
 }
-

@@ -898,6 +898,11 @@ export async function getEmployeeCredentialStatus(pool, paycode) {
   if (!employee) return { ok: false, status: 404, message: 'Employee not found.' };
 
   const credential = await getEmployeeCredential(pool, employee.paycode);
+  // PIN flags live in columns added later (ensureEmployeePinColumns); the shared
+  // credential SELECT does not carry them, so read them via the dedicated PIN
+  // state helper (the SAME helper the login/dashboard gate uses) to keep the HR
+  // view and the effective gate in sync.
+  const pinState = await getEmployeePinState(pool, employee.paycode);
   const now = new Date();
   const pinConfigured = !!(credential && credential.pinhash);
   return {
@@ -910,9 +915,9 @@ export async function getEmployeeCredentialStatus(pool, paycode) {
     mustChangePassword: Number(credential?.mustchangepassword || 0) === 1,
     // Phase I section 4: true only while the employee still owes the one-time
     // 4-digit PIN setup. Never true once a PIN exists.
-    pinSetupRequired: Number(credential?.pinsetuprequired || 0) === 1 && !pinConfigured,
+    pinSetupRequired: pinState.required === true,
     locked: !!(credential && credential.lockeduntil && new Date(credential.lockeduntil) > now),
-    pinLocked: !!(credential && credential.pinlockeduntil && new Date(credential.pinlockeduntil) > now),
+    pinLocked: pinState.locked === true,
   };
 }
 
