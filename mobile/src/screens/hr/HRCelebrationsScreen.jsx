@@ -210,7 +210,7 @@ export const HRCelebrationsScreen = () => {
   const Section = ({ title, icon, tone, tint, count, emptyText, children }) => (
     <View style={styles.section}>
       <View style={[styles.sectionHeader, { backgroundColor: `${tint}14`, borderColor: `${tint}33` }]}>
-        <Text style={styles.sectionIcon}>{icon}</Text>
+        <Ionicons name={icon} size={18} color={tint} />
         <Text style={[styles.sectionTitle, { color: tone }]}>{title}</Text>
         <View style={[styles.sectionCount, { backgroundColor: tint }]}>
           <Text style={styles.sectionCountText}>{count}</Text>
@@ -292,7 +292,7 @@ export const HRCelebrationsScreen = () => {
 
         {!loading && error ? (
           <View style={styles.errorBox}>
-            <Text style={styles.errorText}>⚠️ {error}</Text>
+            <Text style={styles.errorText}><Ionicons name="alert-circle" size={13} /> {error}</Text>
             <Button title="Retry" onPress={() => load(false)} variant="outline" size="small" style={styles.retryButton} />
           </View>
         ) : null}
@@ -300,7 +300,7 @@ export const HRCelebrationsScreen = () => {
         {!loading && !error ? (
           <>
             <Section
-              title="Today's Birthdays" icon="🎂" tone="#A855F7" tint="#DB2777"
+              title="Today's Birthdays" icon="gift" tone="#A855F7" tint="#DB2777"
               count={groups.birthdaysToday.length}
               emptyText="Aaj koi birthday nahi hai."
             >
@@ -308,7 +308,7 @@ export const HRCelebrationsScreen = () => {
             </Section>
 
             <Section
-              title={`Upcoming Birthdays (${UPCOMING_BIRTHDAY_DAYS} days)`} icon="🎉" tone="#A855F7" tint="#DB2777"
+              title={`Upcoming Birthdays (${UPCOMING_BIRTHDAY_DAYS} days)`} icon="sparkles" tone="#A855F7" tint="#DB2777"
               count={groups.birthdaysUpcoming.length}
               emptyText={`Next ${UPCOMING_BIRTHDAY_DAYS} days me koi birthday nahi.`}
             >
@@ -316,7 +316,7 @@ export const HRCelebrationsScreen = () => {
             </Section>
 
             <Section
-              title="Today's Work Anniversaries" icon="🏆" tone="#F59E0B" tint="#D97706"
+              title="Today's Work Anniversaries" icon="trophy" tone="#F59E0B" tint="#D97706"
               count={groups.annivToday.length}
               emptyText="Aaj koi work anniversary nahi hai."
             >
@@ -324,7 +324,7 @@ export const HRCelebrationsScreen = () => {
             </Section>
 
             <Section
-              title={`Upcoming Work Anniversaries (${UPCOMING_ANNIVERSARY_DAYS} days)`} icon="📅" tone="#F59E0B" tint="#D97706"
+              title={`Upcoming Work Anniversaries (${UPCOMING_ANNIVERSARY_DAYS} days)`} icon="calendar" tone="#F59E0B" tint="#D97706"
               count={groups.annivUpcoming.length}
               emptyText={`Next ${UPCOMING_ANNIVERSARY_DAYS} days me koi work anniversary nahi.`}
             >
@@ -363,7 +363,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     marginBottom: SPACING.sm,
   },
-  sectionIcon: { fontSize: 15 },
   sectionTitle: { flex: 1, fontSize: 12.5, fontWeight: '800' },
   sectionCount: {
     minWidth: 24,

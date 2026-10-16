@@ -311,7 +311,7 @@ export const HRLeaveManagementScreen = () => {
         ))}
       </View>
 
-      <ScrollView
+      <ScrollView keyboardShouldPersistTaps="handled"
         refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={() => load(true)} colors={[COLORS.primary]} />}
         contentContainerStyle={styles.scroll}
         showsVerticalScrollIndicator={false}

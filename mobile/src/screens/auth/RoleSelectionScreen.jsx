@@ -19,9 +19,11 @@
 
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
+import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../../theme';
-import { Button, Card } from '../../components';
+import { Button, Card, GradientIcon, TintIcon } from '../../components';
 
 /**
  * Role Selection Screen Component
@@ -41,12 +43,19 @@ export const RoleSelectionScreen = () => {
   };
 
   return (
-    <View style={[styles.container, { backgroundColor: theme.background }]}>
+    <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]} edges={['top', 'left', 'right']}>
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         {/* Logo Area */}
         <View style={styles.logoContainer}>
           <View style={[styles.logoCircle, { backgroundColor: theme.primary }]}>
-            <Text style={styles.logoIcon}>📊</Text>
+            <GradientIcon
+              from="#2563EB"
+              to="#7C3AED"
+              name="stats-chart"
+              size={100}
+              radius={50}
+              glyphRatio={0.5}
+            />
           </View>
           <Text style={[styles.appTitle, { color: theme.textPrimary }]}>Mohani Attendance</Text>
           <Text style={[styles.appSubtitle, { color: theme.textSecondary }]}>Mobile Portal</Text>
@@ -63,15 +72,13 @@ export const RoleSelectionScreen = () => {
             style={styles.roleCard}
           >
             <View style={styles.cardContent}>
-              <View style={[styles.roleIconContainer, { backgroundColor: `${theme.primary}15` }]}>
-                <Text style={styles.roleIcon}>🛡️</Text>
-              </View>
+              <TintIcon name="shield-checkmark" color={theme.primary} size={60} iconSize={30} radius={16} />
               <View style={styles.roleTextContent}>
                 <Text style={[styles.roleTitle, { color: theme.textPrimary }]}>HR Admin</Text>
                 <Text style={[styles.roleDesc, { color: theme.textSecondary }]}>Dashboard, Reports, Employee Management</Text>
               </View>
-              <View style={styles.arrowContainer}>
-                <Text style={styles.arrowText}>→</Text>
+              <View style={[styles.arrowContainer, { backgroundColor: `${theme.primary}12` }]}>
+                <Ionicons name="chevron-forward" size={20} color={theme.primary} />
               </View>
             </View>
           </Card>
@@ -85,15 +92,13 @@ export const RoleSelectionScreen = () => {
             style={styles.roleCard}
           >
             <View style={styles.cardContent}>
-              <View style={[styles.roleIconContainer, { backgroundColor: `${theme.secondary}15` }]}>
-                <Text style={styles.roleIcon}>👤</Text>
-              </View>
+              <TintIcon name="person" color={theme.secondary} size={60} iconSize={30} radius={16} />
               <View style={styles.roleTextContent}>
                 <Text style={[styles.roleTitle, { color: theme.textPrimary }]}>Employee</Text>
                 <Text style={[styles.roleDesc, { color: theme.textSecondary }]}>My Attendance, Leave, Profile</Text>
               </View>
-              <View style={styles.arrowContainer}>
-                <Text style={styles.arrowText}>→</Text>
+              <View style={[styles.arrowContainer, { backgroundColor: `${theme.secondary}12` }]}>
+                <Ionicons name="chevron-forward" size={20} color={theme.secondary} />
               </View>
             </View>
           </Card>
@@ -108,15 +113,13 @@ export const RoleSelectionScreen = () => {
             style={styles.roleCard}
           >
             <View style={styles.cardContent}>
-              <View style={[styles.roleIconContainer, { backgroundColor: '#EEF2FF' }]}>
-                <Text style={styles.roleIcon}>⚙️</Text>
-              </View>
+              <TintIcon name="settings" color={theme.accentViolet} size={60} iconSize={30} radius={16} />
               <View style={styles.roleTextContent}>
                 <Text style={[styles.roleTitle, { color: theme.textPrimary }]}>SuperAdmin</Text>
                 <Text style={[styles.roleDesc, { color: theme.textSecondary }]}>Management console · Leave, Credentials, Holidays, Salary</Text>
               </View>
-              <View style={styles.arrowContainer}>
-                <Text style={styles.arrowText}>→</Text>
+              <View style={[styles.arrowContainer, { backgroundColor: `${theme.accentViolet}12` }]}>
+                <Ionicons name="chevron-forward" size={20} color={theme.accentViolet} />
               </View>
             </View>
           </Card>
@@ -132,7 +135,7 @@ export const RoleSelectionScreen = () => {
         {/* Version */}
         <Text style={[styles.versionText, { color: theme.textTertiary }]}>v1.0.0</Text>
       </ScrollView>
-    </View>
+    </SafeAreaView>
   );
 };
 
@@ -157,22 +160,24 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 12,
-    elevation: 4,
-  },
-  logoIcon: {
-    fontSize: 48,
+    shadowColor: '#2563EB',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.35,
+    shadowRadius: 16,
+    elevation: 8,
   },
   appTitle: {
     fontSize: 28,
-    fontWeight: '700',
+    fontWeight: '800',
+    letterSpacing: -0.5,
     textAlign: 'center',
   },
   appSubtitle: {
     marginTop: 6,
+    fontSize: 13,
+    fontWeight: '600',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
   },
   cardsContainer: {
     gap: 16,
@@ -187,17 +192,6 @@ const styles = StyleSheet.create({
     padding: 20,
     gap: 16,
   },
-  roleIconContainer: {
-    width: 60,
-    height: 60,
-    borderRadius: 16,
-    justifyContent: 'center',
-    alignItems: 'center',
-    flexShrink: 0,
-  },
-  roleIcon: {
-    fontSize: 28,
-  },
   roleTextContent: {
     flex: 1,
     gap: 4,
@@ -205,6 +199,7 @@ const styles = StyleSheet.create({
   roleTitle: {
     fontSize: 18,
     fontWeight: '700',
+    letterSpacing: -0.2,
   },
   roleDesc: {
     fontSize: 13,
@@ -217,10 +212,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  arrowText: {
-    fontSize: 20,
-    fontWeight: '600',
-  },
   infoContainer: {
     alignItems: 'center',
     paddingTop: 16,
@@ -230,5 +221,9 @@ const styles = StyleSheet.create({
   infoText: {
     fontSize: 12,
     textAlign: 'center',
+  },
+  versionText: {
+    fontSize: 11,
+    fontWeight: '500',
   },
 });

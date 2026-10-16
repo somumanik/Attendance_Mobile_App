@@ -19,6 +19,13 @@ export const COLORS = {
   secondary: '#0D9488',    // Teal-600
   secondaryLight: '#14B8A6', // Teal-500
   
+  // Accent Palette (colourful module accents - blue/violet/teal/coral/amber)
+  accentBlue: '#2563EB',   // Blue-600
+  accentViolet: '#7C3AED', // Violet-600
+  accentTeal: '#0D9488',   // Teal-600
+  accentCoral: '#F43F5E',  // Rose-500
+  accentAmber: '#F59E0B',  // Amber-500
+  
   // Semantic Colors
   success: '#059669',      // Emerald-600
   warning: '#D97706',      // Amber-600
@@ -73,14 +80,14 @@ export const BORDER_RADIUS = {
 
 // Typography Scale
 export const TYPOGRAPHY = {
-  h1: { fontSize: 32, fontWeight: '700', lineHeight: 40 },
-  h2: { fontSize: 24, fontWeight: '600', lineHeight: 32 },
-  h3: { fontSize: 20, fontWeight: '600', lineHeight: 28 },
-  h4: { fontSize: 18, fontWeight: '600', lineHeight: 24 },
-  body: { fontSize: 16, fontWeight: '400', lineHeight: 24 },
-  bodySmall: { fontSize: 14, fontWeight: '400', lineHeight: 20 },
-  caption: { fontSize: 12, fontWeight: '400', lineHeight: 16 },
-  button: { fontSize: 16, fontWeight: '600', lineHeight: 24 },
+  h1: { fontSize: 30, fontWeight: '800', lineHeight: 38, letterSpacing: -0.5 },
+  h2: { fontSize: 24, fontWeight: '700', lineHeight: 32, letterSpacing: -0.3 },
+  h3: { fontSize: 20, fontWeight: '700', lineHeight: 28, letterSpacing: -0.2 },
+  h4: { fontSize: 18, fontWeight: '600', lineHeight: 24, letterSpacing: -0.1 },
+  body: { fontSize: 15, fontWeight: '400', lineHeight: 22 },
+  bodySmall: { fontSize: 13, fontWeight: '400', lineHeight: 18 },
+  caption: { fontSize: 11, fontWeight: '500', lineHeight: 15, letterSpacing: 0.2 },
+  button: { fontSize: 15, fontWeight: '700', lineHeight: 22, letterSpacing: 0.2 },
 };
 
 // Shadow Presets
@@ -89,21 +96,21 @@ export const SHADOWS = {
     shadowColor: COLORS.shadow,
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 1,
-    shadowRadius: 2,
+    shadowRadius: 3,
     elevation: 1,
   },
   md: {
     shadowColor: COLORS.shadow,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 1,
-    shadowRadius: 8,
+    shadowRadius: 10,
     elevation: 3,
   },
   lg: {
     shadowColor: COLORS.shadow,
-    shadowOffset: { width: 0, height: 8 },
+    shadowOffset: { width: 0, height: 10 },
     shadowOpacity: 1,
-    shadowRadius: 16,
-    elevation: 5,
+    shadowRadius: 20,
+    elevation: 6,
   },
 };

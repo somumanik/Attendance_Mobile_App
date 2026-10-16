@@ -36,13 +36,16 @@
  */
 
 import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Alert, Keyboard } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { View, Text, TouchableOpacity, StyleSheet, Alert, Keyboard, KeyboardAvoidingView, ScrollView, Platform } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { useTheme } from '../../theme';
 import { completeFirstTimeSetup } from '../../services/auth';
 import { Button, Input, Card } from '../../components';
 
 export const FirstTimeSetupScreen = () => {
+  const insets = useSafeAreaInsets();
   const navigation = useNavigation();
   const route = useRoute();
   const { theme } = useTheme();
@@ -101,19 +104,19 @@ export const FirstTimeSetupScreen = () => {
   };
 
   return (
-    <View style={[styles.container, { backgroundColor: theme.background }]}>
+    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={[styles.container, { backgroundColor: theme.background, paddingTop: insets.top, paddingBottom: insets.bottom }]}>
       <TouchableOpacity
-        style={styles.backButton}
+        style={[styles.backButton, { top: insets.top + 8 }]}
         onPress={handleBack}
         hitSlop={{ top: 20, left: 20, bottom: 20, right: 20 }}
       >
-        <Text style={styles.backText}>←</Text>
+        <Ionicons name="arrow-back" size={24} color={theme.textPrimary} />
       </TouchableOpacity>
 
-      <View style={styles.contentContainer}>
+      <ScrollView contentContainerStyle={styles.contentContainer} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
           <View style={[styles.logoCircle, { backgroundColor: theme.secondary }]}>
-            <Text style={styles.logoIcon}>🔑</Text>
+            <Ionicons name="key" size={32} color="#FFFFFF" />
           </View>
           <Text style={[styles.title, { color: theme.textPrimary }]}>Create Your Password</Text>
           <Text style={[styles.subtitle, { color: theme.textSecondary }]}>
@@ -160,7 +163,7 @@ export const FirstTimeSetupScreen = () => {
 
             {error ? (
               <View style={[styles.errorContainer, { backgroundColor: `${theme.error}15`, borderColor: `${theme.error}30` }]}>
-                <Text style={[styles.errorText, { color: theme.error }]}>⚠️ {error}</Text>
+                <Text style={[styles.errorText, { color: theme.error }]}><Ionicons name="alert-circle" size={13} /> {error}</Text>
               </View>
             ) : null}
 
@@ -174,16 +177,15 @@ export const FirstTimeSetupScreen = () => {
             />
           </View>
         </Card>
-      </View>
-    </View>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 };
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
   backButton: { position: 'absolute', top: 8, left: 8, zIndex: 10, padding: 8 },
-  backText: { fontSize: 28, fontWeight: '600' },
-  contentContainer: { flex: 1, paddingHorizontal: 24, justifyContent: 'center', paddingVertical: 24 },
+  contentContainer: { flexGrow: 1, paddingHorizontal: 24, justifyContent: 'center', paddingVertical: 24 },
   header: { alignItems: 'center', marginBottom: 32 },
   logoCircle: {
     width: 80,
@@ -198,7 +200,6 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     elevation: 4,
   },
-  logoIcon: { fontSize: 36 },
   title: { fontSize: 22, fontWeight: '700', textAlign: 'center', marginBottom: 6 },
   subtitle: { fontSize: 13, textAlign: 'center' },
   formContainer: { gap: 16 },

@@ -315,10 +315,10 @@ export const HREmployeesScreen = () => {
           <Text style={styles.loadingText}>Real employees load ho rahe hain...</Text>
         </View>
       ) : (
-        <ScrollView contentContainerStyle={styles.scrollContent}>
+        <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
           {error ? (
             <View style={styles.errorBox}>
-              <Text style={styles.errorText}>⚠️ {error}</Text>
+              <Text style={styles.errorText}><Ionicons name="alert-circle" size={13} /> {error}</Text>
               <Button title="Retry" onPress={loadRoster} variant="outline" size="small" style={styles.retryButton} />
             </View>
           ) : null}
@@ -357,7 +357,7 @@ export const HREmployeesScreen = () => {
               <View style={styles.exportBox}>
                 <Text style={styles.exportText}>Export ready ({filtered.length} employees, {exported.split('\n').length} rows)</Text>
                 <TouchableOpacity onPress={() => setExported(null)} hitSlop={{ top: 10, left: 10, bottom: 10, right: 10 }}>
-                  <Text style={styles.exportClose}>✕</Text>
+                  <Ionicons name="close" size={16} color={COLORS.success} />
                 </TouchableOpacity>
               </View>
             ) : null}
@@ -483,10 +483,10 @@ export const HREmployeesScreen = () => {
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Employee Details</Text>
               <TouchableOpacity onPress={closeDetail} hitSlop={{ top: 12, left: 12, bottom: 12, right: 12 }}>
-                <Text style={styles.modalClose}>✕</Text>
+                <Ionicons name="close" size={20} color={COLORS.textSecondary} />
               </TouchableOpacity>
             </View>
-            <ScrollView style={styles.modalBody}>
+            <ScrollView style={styles.modalBody} keyboardShouldPersistTaps="handled">
               {detailLoading ? (
                 <View style={styles.modalState}>
                   <ActivityIndicator color={COLORS.primary} />
@@ -529,7 +529,7 @@ export const HREmployeesScreen = () => {
             <View style={styles.sheetHeader}>
               <Text style={styles.sheetTitle}>{filterSheet ? filterSheet.label : ''}</Text>
               <TouchableOpacity onPress={closeFilterSheet} hitSlop={{ top: 12, left: 12, bottom: 12, right: 12 }}>
-                <Text style={styles.modalClose}>✕</Text>
+                <Ionicons name="close" size={20} color={COLORS.textSecondary} />
               </TouchableOpacity>
             </View>
 
@@ -543,7 +543,7 @@ export const HREmployeesScreen = () => {
               />
             ) : null}
 
-            <ScrollView style={styles.sheetList}>
+            <ScrollView style={styles.sheetList} keyboardShouldPersistTaps="handled">
               {sheetOptions.map((opt) => {
                 const isSelected = filterSheet && filters[filterSheet.key] === opt.value;
                 return (
@@ -577,14 +577,12 @@ const styles = StyleSheet.create({
   modalCard: { backgroundColor: COLORS.surface, borderRadius: 16, maxHeight: '80%', overflow: 'hidden' },
   modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: SPACING.md, borderBottomWidth: 1, borderBottomColor: COLORS.border },
   modalTitle: { fontSize: 15, fontWeight: '700', color: COLORS.textPrimary },
-  modalClose: { fontSize: 18, color: COLORS.textSecondary, fontWeight: '700' },
   modalBody: { padding: SPACING.md, maxHeight: 420 },
   modalState: { alignItems: 'center', paddingVertical: SPACING.lg, gap: 8 },
   actionRow: { flexDirection: 'row', gap: 8, marginTop: 8 },
   actionButton: { flex: 1 },
   exportBox: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 8, padding: 10, borderRadius: 10, backgroundColor: `${COLORS.success}15`, borderWidth: 1, borderColor: `${COLORS.success}35}` },
   exportText: { fontSize: 11, color: COLORS.success, flex: 1 },
-  exportClose: { fontSize: 14, color: COLORS.success, fontWeight: '700' },
   tableCellDept: { flex: 1.6, fontSize: 10, color: COLORS.textSecondary },
   loadingContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 },
   loadingText: { color: COLORS.textSecondary, fontSize: 13 },

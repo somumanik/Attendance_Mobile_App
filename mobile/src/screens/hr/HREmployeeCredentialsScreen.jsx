@@ -40,7 +40,9 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, ScrollView, StyleSheet, TouchableOpacity, Alert } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { View, Text, ScrollView, StyleSheet, TouchableOpacity, Alert, KeyboardAvoidingView, Platform } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { COLORS, TYPOGRAPHY, SPACING, SHADOWS } from '../../utils/colors';
 import { api } from '../../services/api';
@@ -54,6 +56,7 @@ import {
 import { Button, Input, Card, Can } from '../../components';
 
 export const HREmployeeCredentialsScreen = () => {
+  const insets = useSafeAreaInsets();
   const navigation = useNavigation();
 
   const [search, setSearch] = useState('');
@@ -209,16 +212,16 @@ export const HREmployeeCredentialsScreen = () => {
   };
 
   return (
-    <View style={[styles.container, { backgroundColor: COLORS.background }]}>
-      <View style={styles.headerBar}>
+    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={[styles.container, { backgroundColor: COLORS.background }]}>
+      <View style={[styles.headerBar, { paddingTop: insets.top + 8 }]}>
         <TouchableOpacity
           style={styles.backButton}
           onPress={() => navigation.goBack()}
           hitSlop={{ top: 20, left: 20, bottom: 20, right: 20 }}
         >
-          <Text style={styles.backText}>←</Text>
+          <Ionicons name="arrow-back" size={24} color={COLORS.textPrimary} />
         </TouchableOpacity>
-        <Text style={[styles.headerTitle, { color: COLORS.textPrimary }]}>Employee Credential Management</Text>
+        <Text style={[styles.headerTitle, { color: COLORS.textPrimary }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>Employee Credential Management</Text>
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
@@ -254,7 +257,7 @@ export const HREmployeeCredentialsScreen = () => {
                         {emp.paycode} • {emp.departmentcode || '—'} • {emp.designation || '—'}
                       </Text>
                     </View>
-                    {selected?.paycode === emp.paycode && <Text style={styles.resultCheck}>✓</Text>}
+                    {selected?.paycode === emp.paycode && <Ionicons name="checkmark-circle" size={18} color={COLORS.primary} />}
                   </TouchableOpacity>
                 ))}
               </View>
@@ -416,12 +419,12 @@ export const HREmployeeCredentialsScreen = () => {
 
         {error ? (
           <View style={styles.errorBox}>
-            <Text style={styles.errorText}>⚠️ {error}</Text>
+            <Text style={styles.errorText}><Ionicons name="alert-circle" size={13} /> {error}</Text>
           </View>
         ) : null}
         {success ? (
           <View style={styles.successBox}>
-            <Text style={styles.successText}>✅ {success}</Text>
+            <Text style={styles.successText}><Ionicons name="checkmark-circle" size={13} /> {success}</Text>
           </View>
         ) : null}
 
@@ -433,7 +436,7 @@ export const HREmployeeCredentialsScreen = () => {
           </View>
         )}
       </ScrollView>
-    </View>
+    </KeyboardAvoidingView>
   );
 };
 
@@ -443,12 +446,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 16,
-    paddingTop: 48,
     paddingBottom: 12,
   },
   backButton: { padding: 8 },
-  backText: { fontSize: 28, fontWeight: '600', color: COLORS.textPrimary },
-  headerTitle: { fontSize: 17, fontWeight: '700', marginLeft: 8, flex: 1 },
+  headerTitle: { fontSize: 17, fontWeight: '700', marginLeft: 8, flex: 1, minWidth: 0 },
   scrollContent: { paddingHorizontal: 16, paddingBottom: 32 },
   cardSpacing: { marginTop: 12 },
   section: { gap: 12 },
@@ -468,7 +469,6 @@ const styles = StyleSheet.create({
   resultRowActive: { borderColor: COLORS.primary, backgroundColor: `${COLORS.primary}12` },
   resultName: { fontWeight: '600', color: COLORS.textPrimary, fontSize: 14 },
   resultMeta: { fontSize: 11, color: COLORS.textTertiary },
-  resultCheck: { color: COLORS.primary, fontSize: 18, fontWeight: '700' },
   selectedBox: {
     padding: 14,
     borderRadius: 12,

@@ -272,7 +272,7 @@ export const HRAnalyticsScreen = () => {
         {/* Error state — retry ke saath, fake fallback NAHI */}
         {!loading && error ? (
           <View style={styles.errorBox}>
-            <Text style={styles.errorText}>⚠️ {error}</Text>
+            <Text style={styles.errorText}><Ionicons name="alert-circle" size={13} /> {error}</Text>
             <Button title="Retry" onPress={() => load(false)} variant="outline" size="small" style={styles.retryButton} />
           </View>
         ) : null}
@@ -330,10 +330,10 @@ export const HRAnalyticsScreen = () => {
 
             {/* Daily / Weekly / Monthly summary — the four website categories */}
             <View style={styles.summaryGrid}>
-              <StatCard title="Punched" value={punched} icon="👆" color={COLORS.info} subtitle="Distinct employees" />
-              <StatCard title="Absent" value={absent} icon="🚫" color={COLORS.absent} subtitle="No punch in range" />
-              <StatCard title="Miss Punch" value={miss} icon="⏱️" color={COLORS.missPunch} subtitle="IN-only, shift ended" />
-              <StatCard title="Late" value={late} icon="🕐" color={COLORS.late} subtitle="Tap to view late employees" onPress={openLateDetails} />
+              <StatCard title="Punched" value={punched} icon="finger-print" color={COLORS.info} subtitle="Distinct employees" />
+              <StatCard title="Absent" value={absent} icon="person-remove" color={COLORS.absent} subtitle="No punch in range" />
+              <StatCard title="Miss Punch" value={miss} icon="timer" color={COLORS.missPunch} subtitle="IN-only, shift ended" />
+              <StatCard title="Late" value={late} icon="time" color={COLORS.late} subtitle="Tap to view late employees" onPress={openLateDetails} />
             </View>
 
             {/* Category distribution — same buckets as the website donut */}
@@ -424,7 +424,7 @@ export const HRAnalyticsScreen = () => {
                 </Text>
               </View>
               <TouchableOpacity onPress={closeLateDetails} hitSlop={{ top: 12, left: 12, bottom: 12, right: 12 }}>
-                <Text style={styles.modalClose}>✕</Text>
+                <Ionicons name="close" size={18} color={COLORS.textSecondary} />
               </TouchableOpacity>
             </View>
 
@@ -438,7 +438,7 @@ export const HRAnalyticsScreen = () => {
 
               {!lateLoading && lateError ? (
                 <View style={styles.errorBox}>
-                  <Text style={styles.errorText}>⚠️ {lateError}</Text>
+                  <Text style={styles.errorText}><Ionicons name="alert-circle" size={13} /> {lateError}</Text>
                   <Button title="Retry" onPress={openLateDetails} variant="outline" size="small" style={styles.retryButton} />
                 </View>
               ) : null}
@@ -704,7 +704,6 @@ const styles = StyleSheet.create({
   modalHeaderText: { flex: 1 },
   modalTitle: { fontSize: 15, fontWeight: '800', color: COLORS.textPrimary },
   modalSubtitle: { fontSize: 11, color: COLORS.textTertiary, marginTop: 2 },
-  modalClose: { fontSize: 15, color: COLORS.textSecondary, fontWeight: '700' },
   modalBody: { maxHeight: 460, padding: SPACING.md },
   lateRow: {
     paddingVertical: SPACING.sm,

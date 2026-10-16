@@ -33,13 +33,16 @@
  */
 
 import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Keyboard } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { View, Text, TouchableOpacity, StyleSheet, Keyboard, KeyboardAvoidingView, ScrollView, Platform } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { useTheme } from '../../theme';
 import { requestPasswordReset } from '../../services/auth';
 import { Button, Input, Card } from '../../components';
 
 export const ForgotPasswordScreen = () => {
+  const insets = useSafeAreaInsets();
   const navigation = useNavigation();
   const { theme } = useTheme();
 
@@ -70,19 +73,19 @@ export const ForgotPasswordScreen = () => {
   };
 
   return (
-    <View style={[styles.container, { backgroundColor: theme.background }]}>
+    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={[styles.container, { backgroundColor: theme.background, paddingTop: insets.top, paddingBottom: insets.bottom }]}>
       <TouchableOpacity
-        style={styles.backButton}
+        style={[styles.backButton, { top: insets.top + 8 }]}
         onPress={() => navigation.goBack()}
         hitSlop={{ top: 20, left: 20, bottom: 20, right: 20 }}
       >
-        <Text style={styles.backText}>←</Text>
+        <Ionicons name="arrow-back" size={24} color={theme.textPrimary} />
       </TouchableOpacity>
 
-      <View style={styles.content}>
+      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
           <View style={[styles.logoCircle, { backgroundColor: theme.warning }]}>
-            <Text style={styles.logoIcon}>🔑</Text>
+            <Ionicons name="key" size={32} color="#FFFFFF" />
           </View>
           <Text style={[styles.title, { color: theme.textPrimary }]}>Forgot Password</Text>
           <Text style={[styles.subtitle, { color: theme.textSecondary }]}>
@@ -93,7 +96,7 @@ export const ForgotPasswordScreen = () => {
         <Card>
           {sent ? (
             <View style={styles.sentBox}>
-              <Text style={styles.sentIcon}>📧</Text>
+              <Ionicons name="mail" size={40} color={theme.success} />
               <Text style={[styles.sentText, { color: theme.textPrimary }]}>
                 If the account is eligible for password recovery, reset instructions have been sent.
               </Text>
@@ -135,7 +138,7 @@ export const ForgotPasswordScreen = () => {
 
               {error ? (
                 <View style={[styles.errorBox, { backgroundColor: `${theme.error}15`, borderColor: `${theme.error}30` }]}>
-                  <Text style={[styles.errorText, { color: theme.error }]}>⚠️ {error}</Text>
+                  <Text style={[styles.errorText, { color: theme.error }]}><Ionicons name="alert-circle" size={13} /> {error}</Text>
                 </View>
               ) : null}
 
@@ -150,16 +153,15 @@ export const ForgotPasswordScreen = () => {
             </View>
           )}
         </Card>
-      </View>
-    </View>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 };
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
   backButton: { position: 'absolute', top: 8, left: 8, zIndex: 10, padding: 8 },
-  backText: { fontSize: 28, fontWeight: '600' },
-  content: { flex: 1, paddingHorizontal: 24, paddingVertical: 24, justifyContent: 'center' },
+  content: { flexGrow: 1, paddingHorizontal: 24, paddingVertical: 24, justifyContent: 'center' },
   header: { alignItems: 'center', marginBottom: 28 },
   logoCircle: {
     width: 72,
@@ -169,7 +171,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 16,
   },
-  logoIcon: { fontSize: 32 },
   title: { fontSize: 20, fontWeight: '700', textAlign: 'center', marginBottom: 6 },
   subtitle: { fontSize: 13, textAlign: 'center' },
   form: { gap: 16 },
@@ -178,7 +179,6 @@ const styles = StyleSheet.create({
   errorBox: { padding: 12, borderRadius: 8, borderWidth: 1 },
   errorText: { fontSize: 12, fontWeight: '500', textAlign: 'center' },
   sentBox: { gap: 14, alignItems: 'stretch' },
-  sentIcon: { fontSize: 40, textAlign: 'center' },
   sentText: { fontSize: 14, fontWeight: '600', textAlign: 'center' },
   sentHint: { fontSize: 12, textAlign: 'center' },
 });

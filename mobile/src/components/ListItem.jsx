@@ -27,6 +27,7 @@
  */
 
 import React from 'react';
+import { Ionicons } from '@expo/vector-icons';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { useTheme } from '../theme';
 
@@ -102,7 +103,7 @@ export const ListItem = ({
               borderColor: selected ? theme.primary : theme.border,
             },
           ]}>
-            {selected && <Text style={styles.checkmark}>✓</Text>}
+            {selected && <Ionicons name="checkmark" size={14} color="#FFFFFF" />}
           </View>
         </TouchableOpacity>
       )}
@@ -115,9 +116,9 @@ export const ListItem = ({
         )}
 
         <View style={styles.centerContent}>
-          {title && <Text style={styles.title} numberOfLines={1}>{title}</Text>}
-          {subtitle && <Text style={styles.subtitle} numberOfLines={1}>{subtitle}</Text>}
-          {meta && <Text style={styles.meta} numberOfLines={1}>{meta}</Text>}
+          {title && <Text style={[styles.title, { color: theme.textPrimary }]} numberOfLines={1}>{title}</Text>}
+          {subtitle && <Text style={[styles.subtitle, { color: theme.textSecondary }]} numberOfLines={1}>{subtitle}</Text>}
+          {meta && <Text style={[styles.meta, { color: theme.textTertiary }]} numberOfLines={1}>{meta}</Text>}
         </View>
 
         {right && (
@@ -149,11 +150,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  checkmark: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '700',
-  },
   contentWrapper: {
     flex: 1,
     flexDirection: 'row',
@@ -176,7 +172,7 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#0F172A', // Will be theme-aware
+    letterSpacing: -0.1,
   },
   subtitle: {
     fontSize: 13,

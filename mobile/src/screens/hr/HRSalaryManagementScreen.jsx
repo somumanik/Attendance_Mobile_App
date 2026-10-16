@@ -346,7 +346,7 @@ export const HRSalaryManagementScreen = () => {
 
         {!loading && error ? (
           <View style={styles.errorBox}>
-            <Text style={styles.errorText}>⚠️ {error}</Text>
+            <Text style={styles.errorText}><Ionicons name="alert-circle" size={13} /> {error}</Text>
             <Button title="Retry" onPress={() => load(false)} variant="outline" size="small" />
           </View>
         ) : null}
@@ -397,7 +397,7 @@ export const HRSalaryManagementScreen = () => {
             </View>
 
             {importError ? (
-              <View style={styles.errorBox}><Text style={styles.errorText}>⚠️ {importError}</Text></View>
+              <View style={styles.errorBox}><Text style={styles.errorText}><Ionicons name="alert-circle" size={13} /> {importError}</Text></View>
             ) : null}
             {renderImportSummary()}
           </>
@@ -494,7 +494,7 @@ export const HRSalaryManagementScreen = () => {
               <TextInput style={styles.input} value={dueForm.description} onChangeText={(v) => setDueForm({ ...dueForm, description: v })} placeholder="Details..." />
               <Text style={styles.label}>Amount</Text>
               <TextInput style={styles.input} value={dueForm.amount} onChangeText={(v) => setDueForm({ ...dueForm, amount: v })} placeholder="0.00" keyboardType="decimal-pad" />
-              {dueError ? <Text style={styles.configMsg}>⚠️ {dueError}</Text> : null}
+              {dueError ? <Text style={styles.configMsg}><Ionicons name="alert-circle" size={13} /> {dueError}</Text> : null}
               <Can module="salary" action="create">
                 <Button title="Add Entry" onPress={addDue} variant="primary" size="small" style={styles.importBtn} />
               </Can>
@@ -542,7 +542,7 @@ export const HRSalaryManagementScreen = () => {
               <Can module="fullfinal" action="view">
                 <Button title={estimating ? 'Calculating...' : 'Run Estimate'} onPress={runEstimate} variant="primary" size="small" disabled={estimating || !clean(estimatePaycode)} style={styles.importBtn} />
               </Can>
-              {estimateError ? <Text style={styles.configMsg}>⚠️ {estimateError}</Text> : null}
+              {estimateError ? <Text style={styles.configMsg}><Ionicons name="alert-circle" size={13} /> {estimateError}</Text> : null}
             </View>
 
             {estimate ? (

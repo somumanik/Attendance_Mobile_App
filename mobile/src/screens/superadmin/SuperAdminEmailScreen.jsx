@@ -74,7 +74,7 @@ export const SuperAdminEmailScreen = () => {
 
   return (
     <ScreenContainer title="Email Management" showHeader={true}>
-      <ScrollView contentContainerStyle={styles.scroll}>
+      <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
         <Text style={styles.hint}>
           Provider credentials (SMTP password / API key) server par encrypted rehte hain aur UI mein
           kabhi expose nahi hote — yahan sirf non-sensitive settings edit hoti hain.

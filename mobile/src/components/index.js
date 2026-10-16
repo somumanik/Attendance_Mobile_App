@@ -20,6 +20,7 @@ export { Divider } from './Divider';
 export { Avatar } from './Avatar';
 export { Can, useCan } from './Can';
 export { GradientIcon } from './GradientIcon';
+export { TintIcon } from './TintIcon';
 export { ListItem } from './ListItem';
 export { ProgressBar } from './ProgressBar';
 export { ScreenContainer } from './ScreenContainer';

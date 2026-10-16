@@ -278,7 +278,7 @@ export const HRDailyMasterScreen = () => {
             <View style={styles.exportHeaderRow}>
               <Text style={styles.exportFile} numberOfLines={1}>{exported.fileName}</Text>
               <TouchableOpacity onPress={() => setExported(null)} hitSlop={{ top: 10, left: 10, bottom: 10, right: 10 }}>
-                <Text style={styles.exportClose}>✕</Text>
+                <Ionicons name="close" size={16} color={COLORS.success} />
               </TouchableOpacity>
             </View>
             <Text style={styles.exportMeta}>{exported.count} employees · selected date {exported.fileName.replace('daily-master-', '').replace('.csv', '')}</Text>
@@ -299,7 +299,7 @@ export const HRDailyMasterScreen = () => {
         {/* Error */}
         {!loading && error ? (
           <View style={styles.errorBox}>
-            <Text style={styles.errorText}>⚠️ {error}</Text>
+            <Text style={styles.errorText}><Ionicons name="alert-circle" size={13} /> {error}</Text>
             <Button title="Retry" onPress={() => fetchDb(date)} variant="outline" size="small" style={styles.retryButton} />
           </View>
         ) : null}
@@ -344,7 +344,7 @@ export const HRDailyMasterScreen = () => {
               />
               {search ? (
                 <TouchableOpacity style={styles.searchClear} onPress={() => setSearch('')} hitSlop={{ top: 10, left: 10, bottom: 10, right: 10 }}>
-                  <Text style={styles.searchClearText}>✕</Text>
+                  <Ionicons name="close" size={16} color={COLORS.textTertiary} />
                 </TouchableOpacity>
               ) : null}
             </View>
@@ -451,6 +451,8 @@ const styles = StyleSheet.create({
   dateCenter: { flex: 1, alignItems: 'center' },
   dateInput: {
     width: 148,
+    maxWidth: '100%',
+    flexShrink: 1,
     textAlign: 'center',
     fontSize: 17,
     fontWeight: '800',
@@ -473,7 +475,6 @@ const styles = StyleSheet.create({
   },
   exportHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: SPACING.sm },
   exportFile: { flex: 1, fontSize: 12, fontWeight: '800', color: COLORS.success },
-  exportClose: { fontSize: 14, color: COLORS.success, fontWeight: '700' },
   exportMeta: { fontSize: 11, color: COLORS.textSecondary },
   exportScroll: { marginTop: 6, maxHeight: 130 },
   exportText: { fontSize: 10, color: COLORS.textSecondary },
@@ -529,7 +530,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
   searchClear: { position: 'absolute', right: 10 },
-  searchClearText: { fontSize: 13, color: COLORS.textTertiary, fontWeight: '700' },
   emptyBox: {
     marginTop: SPACING.lg,
     padding: SPACING.lg,

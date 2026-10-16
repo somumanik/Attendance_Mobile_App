@@ -45,6 +45,7 @@
 import React from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { GradientIcon } from '../components/GradientIcon';
 import { getNavIcon } from '../utils/navigationIcons';
 import { EmployeeDashboardScreen } from '../screens/employee/EmployeeDashboardScreen';
@@ -136,7 +137,11 @@ const tabLabelStyle = (name) => ({ focused }) => ({
 });
 
 /** Sirf PIN screens wala inner stack — tabs iske andar hi rehte hain. */
-const EmployeeTabs = () => (
+const EmployeeTabs = () => {
+  // Home-indicator / gesture-nav safe area: the bar's height and bottom padding
+  // must include the inset or the last row of tabs is covered on notched devices.
+  const insets = useSafeAreaInsets();
+  return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
         // Per-tab active/inactive tints. The ICON (gradient tile) and the LABEL
@@ -148,8 +153,15 @@ const EmployeeTabs = () => (
           backgroundColor: COLORS.surface,
           borderTopWidth: 1,
           borderTopColor: COLORS.divider,
-          paddingBottom: 8,
-          height: 64,
+          paddingTop: 6,
+          paddingBottom: 8 + insets.bottom,
+          height: 64 + insets.bottom,
+          // Soft top lift keeps the bar premium without changing layout.
+          shadowColor: COLORS.shadow,
+          shadowOffset: { width: 0, height: -2 },
+          shadowOpacity: 1,
+          shadowRadius: 8,
+          elevation: 8,
         },
         // 7 tabs share the bar, so the label sits a touch tighter than before to
         // guarantee the longest label ("Full & Final") and the icon never collide.
@@ -228,7 +240,8 @@ const EmployeeTabs = () => (
         }}
       />
     </Tab.Navigator>
-);
+  );
+};
 
 /**
  * Employee Navigator — bottom tabs + authenticated PIN/password screens.

@@ -31,6 +31,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { Ionicons } from '@expo/vector-icons';
 import {
   View, Text, ScrollView, StyleSheet, TouchableOpacity, TextInput,
   ActivityIndicator, RefreshControl, Alert, Platform,
@@ -228,7 +229,7 @@ export const EmployeeLeaveScreen = () => {
         ))}
       </View>
 
-      <ScrollView
+      <ScrollView keyboardShouldPersistTaps="handled"
         refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={() => load(true)} colors={[COLORS.primary]} />}
         contentContainerStyle={styles.scroll}
         showsVerticalScrollIndicator={false}
@@ -242,7 +243,7 @@ export const EmployeeLeaveScreen = () => {
 
         {!loading && error ? (
           <View style={styles.errorBox}>
-            <Text style={styles.errorText}>⚠️ {error}</Text>
+            <Text style={styles.errorText}><Ionicons name="alert-circle" size={13} /> {error}</Text>
             <Button title="Retry" onPress={() => load(false)} variant="outline" size="small" />
           </View>
         ) : null}
@@ -409,7 +410,7 @@ export const EmployeeLeaveScreen = () => {
 
             {formError ? (
               <View style={styles.errorBox}>
-                <Text style={styles.errorText}>⚠️ {formError}</Text>
+                <Text style={styles.errorText}><Ionicons name="alert-circle" size={13} /> {formError}</Text>
               </View>
             ) : null}
 
@@ -459,7 +460,7 @@ export const EmployeeLeaveScreen = () => {
                   <View style={styles.reqMetaRow}>
                     <Text style={styles.reqMeta}>{`${clean(r.leavetype)} · ${daysLabel(r.days)}`}</Text>
                     {r.isHalfDay ? <Text style={styles.reqMeta}>{` · ${clean(r.halfdaypart) === 'AN' ? 'Second Half' : 'First Half'}`}</Text> : null}
-                    {r.hasAttachment ? <Text style={styles.reqMeta}>{` · 📎 ${clean(r.attachmentname)}`}</Text> : null}
+                    {r.hasAttachment ? <Text style={styles.reqMeta}>{` · `}<Ionicons name="attach" size={11} /> {clean(r.attachmentname)}</Text> : null}
                   </View>
 
                   {clean(r.reason) ? <Text style={styles.reqReason}>{clean(r.reason)}</Text> : null}

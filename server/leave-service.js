@@ -46,6 +46,7 @@ const LEAVE_TYPES_TABLE = process.env.HR_LEAVE_TYPES_TABLE || 'dbo.HR_LeaveTypes
 const LEAVE_BALANCE_TABLE = process.env.HR_LEAVE_BALANCE_TABLE || 'dbo.HR_LeaveBalance';
 const LEAVE_REQUEST_TABLE = process.env.HR_LEAVE_REQUEST_TABLE || 'dbo.HR_LeaveRequest';
 const LEAVE_CONFIG_TABLE = process.env.HR_LEAVE_CONFIG_TABLE || 'dbo.HR_LeaveConfig';
+const EMPLOYEE_CODE_MAPPING_TABLE = process.env.HR_EMPLOYEE_CODE_MAPPING_TABLE || 'dbo.HR_EmployeeCodeMapping';
 
 export const LEAVE_STATUS = { PENDING: 'Pending', APPROVED: 'Approved', REJECTED: 'Rejected', CANCELLED: 'Cancelled' };
 // Uppercase mirrors used for COMPARISON only. Status is normalised to upper case
@@ -62,6 +63,7 @@ const SEED_LEAVE_TYPES = [
   ['CL', 'Casual Leave', 3],
   ['OLA', 'Optional Leave A', 4],
   ['OLB', 'Optional Leave B', 5],
+  ['CO', 'Comp Off', 6],
 ];
 
 const DEFAULT_CONFIG = {
@@ -151,21 +153,31 @@ CREATE TABLE ${LEAVE_CONFIG_TABLE} (
   updatedat DATETIME2 NOT NULL CONSTRAINT DF_LeaveCfg_Updated DEFAULT SYSUTCDATETIME(),
   updatedby NVARCHAR(50) NULL,
   CONSTRAINT UQ_LeaveCfg_Key UNIQUE (configkey)
+);
+
+IF OBJECT_ID('${EMPLOYEE_CODE_MAPPING_TABLE}','U') IS NULL
+CREATE TABLE ${EMPLOYEE_CODE_MAPPING_TABLE} (
+  id INT IDENTITY(1,1) PRIMARY KEY,
+  employeecode NVARCHAR(50) NOT NULL,
+  paycode NVARCHAR(50) NOT NULL,
+  createddate DATETIME2 NOT NULL CONSTRAINT DF_EmpCodeMap_Created DEFAULT SYSUTCDATETIME(),
+  updateddate DATETIME2 NOT NULL CONSTRAINT DF_EmpCodeMap_Updated DEFAULT SYSUTCDATETIME(),
+  updatedby NVARCHAR(50) NULL,
+  CONSTRAINT UQ_EmpCodeMap_Code UNIQUE (employeecode),
+  CONSTRAINT UQ_EmpCodeMap_Paycode UNIQUE (paycode)
 );`);
 
-    // Seed the required leave types ONCE (empty table only, so an HR-managed
-    // list is never overwritten).
-    const seeded = await pool.request().query(`SELECT COUNT(1) AS n FROM ${LEAVE_TYPES_TABLE}`);
-    if (Number(seeded.recordset?.[0]?.n || 0) === 0) {
-      for (const [code, name, order] of SEED_LEAVE_TYPES) {
-        await pool.request()
-          .input('code', sql.NVarChar(10), code)
-          .input('name', sql.NVarChar(100), name)
-          .input('order', sql.Int, order)
-          .query(`INSERT INTO ${LEAVE_TYPES_TABLE} (leavetype, typename, sortorder, active)
-                  SELECT @code, @name, @order, 1
-                  WHERE NOT EXISTS (SELECT 1 FROM ${LEAVE_TYPES_TABLE} WHERE LTRIM(RTRIM(leavetype)) = @code)`);
-      }
+    // Seed / backfill the required leave types. `WHERE NOT EXISTS` keeps this an
+    // idempotent backfill: a missing required type (e.g. Comp Off) is added, while
+    // an existing HR-managed list is never overwritten or duplicated.
+    for (const [code, name, order] of SEED_LEAVE_TYPES) {
+      await pool.request()
+        .input('code', sql.NVarChar(10), code)
+        .input('name', sql.NVarChar(100), name)
+        .input('order', sql.Int, order)
+        .query(`INSERT INTO ${LEAVE_TYPES_TABLE} (leavetype, typename, sortorder, active)
+                SELECT @code, @name, @order, 1
+                WHERE NOT EXISTS (SELECT 1 FROM ${LEAVE_TYPES_TABLE} WHERE LTRIM(RTRIM(leavetype)) = @code)`);
     }
 
     // Seed company config defaults once.
@@ -380,6 +392,41 @@ export async function findActiveEmployee(pool, paycode) {
   return r.recordset?.[0] || null;
 }
 
+/** Real employee lookup by biometric code (presentcardno), used by the Excel import. */
+export async function findEmployeeByBiometric(pool, biometric) {
+  const r = await pool.request()
+    .input('biometric', sql.NVarChar(50), clean(biometric))
+    .query(`SELECT TOP 1 LTRIM(RTRIM(paycode)) AS paycode,
+                    LTRIM(RTRIM(empname)) AS empname,
+                    LTRIM(RTRIM(presentcardno)) AS presentcardno,
+                    LTRIM(RTRIM(companycode)) AS companycode
+             FROM dbo.tblemployee
+             WHERE LTRIM(RTRIM(presentcardno)) = @biometric AND ISNULL(active, 'Y') <> 'N'`);
+  return r.recordset?.[0] || null;
+}
+
+/* ------------------------------------------------------------------ */
+/* EmployeeCode -> employee mapping (application-owned)                */
+/* ------------------------------------------------------------------ */
+
+/** Mapping row for a given (normalized) external EmployeeCode, or null. */
+async function getMappingByCode(pool, codeKey) {
+  const r = await pool.request()
+    .input('code', sql.NVarChar(50), codeKey)
+    .query(`SELECT TOP 1 LTRIM(RTRIM(employeecode)) AS employeecode, LTRIM(RTRIM(paycode)) AS paycode
+            FROM ${EMPLOYEE_CODE_MAPPING_TABLE} WHERE LTRIM(RTRIM(employeecode)) = @code`);
+  return r.recordset?.[0] || null;
+}
+
+/** Mapping row for a given paycode, or null. */
+async function getMappingByPaycode(pool, paycode) {
+  const r = await pool.request()
+    .input('paycode', sql.NVarChar(50), clean(paycode))
+    .query(`SELECT TOP 1 LTRIM(RTRIM(employeecode)) AS employeecode, LTRIM(RTRIM(paycode)) AS paycode
+            FROM ${EMPLOYEE_CODE_MAPPING_TABLE} WHERE LTRIM(RTRIM(paycode)) = @paycode`);
+  return r.recordset?.[0] || null;
+}
+
 /* ------------------------------------------------------------------ */
 /* Day counting                                                        */
 /* ------------------------------------------------------------------ */
@@ -461,10 +508,11 @@ export async function calculateLeaveDays(pool, { paycode, fromdate, todate, isHa
  */
 export async function getLeaveBalance(pool, { paycode, leaveyear }) {
   await ensureLeaveTables(pool);
-  const year = Number(leaveyear) || yearOf(todayIso());
+  const parsed = parseLeaveYear(leaveyear);
+  const year = parsed.ok ? parsed.startYear : currentLeaveYearStart();
   const types = await listLeaveTypes(pool, { includeInactive: true });
   const codes = types.map((t) => t.leavetype);
-  if (!codes.length) return { leaveyear: year, types: [] };
+  if (!codes.length) return { leaveyear: leaveYearLabel(year), types: [] };
 
   // Codes and statuses are inlined from values that came out of our own tables
   // (NVARCHAR columns, not user input), which keeps the query to one round trip
@@ -499,7 +547,7 @@ export async function getLeaveBalance(pool, { paycode, leaveyear }) {
   }
 
   return {
-    leaveyear: year,
+    leaveyear: leaveYearLabel(year),
     types: types.map((t) => {
       const openingBal = openMap.get(t.leavetype) || 0;
       const approved = usedMap.get(`${t.leavetype}|${LEAVE_STATUS.APPROVED}`) || 0;
@@ -539,7 +587,8 @@ function companyScopeFragment(alias, scope) {
 
 export async function listEmployeeBalances(pool, { leaveyear, search, limit = 100, companyScope }) {
   await ensureLeaveTables(pool);
-  const year = Number(leaveyear) || yearOf(todayIso());
+  const parsed = parseLeaveYear(leaveyear);
+  const year = parsed.ok ? parsed.startYear : currentLeaveYearStart();
   const like = clean(search);
   const request = pool.request()
     .input('year', sql.Int, year)
@@ -547,7 +596,7 @@ export async function listEmployeeBalances(pool, { leaveyear, search, limit = 10
   let where = `WHERE ISNULL(e.active, 'Y') <> 'N' AND b.leaveyear = @year`;
   /* PROMPT 4.2 — a scoped HR Admin only sees balances of employees in its companies. */
   const scope = companyScopeFragment('e', companyScope);
-  if (scope.denied) return { leaveyear: year, employees: [] };
+  if (scope.denied) return { leaveyear: leaveYearLabel(year), employees: [] };
   where += scope.fragment;
   if (like) {
     where += ` AND (e.paycode LIKE @like OR e.empname LIKE @like)`;
@@ -555,6 +604,7 @@ export async function listEmployeeBalances(pool, { leaveyear, search, limit = 10
   }
   const r = await request.query(`
     SELECT TOP (@limit) LTRIM(RTRIM(e.paycode)) AS paycode, LTRIM(RTRIM(e.empname)) AS empname,
+           LTRIM(RTRIM(e.presentcardno)) AS presentcardno,
            LTRIM(RTRIM(e.companycode)) AS companycode,
            LTRIM(RTRIM(b.leavetype)) AS leavetype, b.openingbalance
     FROM dbo.tblemployee e
@@ -566,11 +616,11 @@ export async function listEmployeeBalances(pool, { leaveyear, search, limit = 10
   for (const row of r.recordset || []) {
     const key = clean(row.paycode);
     if (!grouped.has(key)) {
-      grouped.set(key, { paycode: key, empname: clean(row.empname), companycode: clean(row.companycode), types: [] });
+      grouped.set(key, { paycode: key, empname: clean(row.empname), presentcardno: clean(row.presentcardno), companycode: clean(row.companycode), types: [] });
     }
     grouped.get(key).types.push({ leavetype: clean(row.leavetype), openingBalance: round2(row.openingbalance) });
   }
-  return { leaveyear: year, employees: [...grouped.values()] };
+  return { leaveyear: leaveYearLabel(year), employees: [...grouped.values()] };
 }
 
 /* ------------------------------------------------------------------ */
@@ -903,6 +953,54 @@ const num = (v) => {
   return Number.isFinite(n) ? Math.round(n * 100) / 100 : null;
 };
 
+/* ------------------------------------------------------------------ */
+/* Financial year (1 Apr YYYY -> 31 Mar YYYY+1) helpers                 */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Parses a leave-year value. Canonical form is the FINANCIAL YEAR label
+ * `YYYY-YYYY` (e.g. 2026-2027). A plain 4-digit year `YYYY` is still accepted
+ * for backward compatibility (existing records / mobile filters) and is treated
+ * as the financial-year START year.
+ * Returns { ok:true, startYear, label } or { ok:false, message }.
+ */
+export function parseLeaveYear(raw) {
+  const s = clean(raw);
+  if (!s) {
+    return { ok: false, message: 'LeaveYear is required. Use the financial-year format YYYY-YYYY (e.g. 2026-2027).' };
+  }
+  let m = s.match(/^(\d{4})\s*-\s*(\d{4})$/);
+  if (m) {
+    const start = Number(m[1]);
+    const end = Number(m[2]);
+    if (start < 2000 || start > 2200 || end !== start + 1) {
+      return { ok: false, message: `LeaveYear "${s}" is invalid. The two years must be consecutive (e.g. 2026-2027).` };
+    }
+    return { ok: true, startYear: start, label: `${start}-${end}` };
+  }
+  m = s.match(/^(\d{4})$/);
+  if (m) {
+    const start = Number(m[1]);
+    if (start < 2000 || start > 2200) {
+      return { ok: false, message: `LeaveYear "${s}" is invalid. Use the financial-year format YYYY-YYYY (e.g. 2026-2027).` };
+    }
+    return { ok: true, startYear: start, label: `${start}-${start + 1}` };
+  }
+  return { ok: false, message: `LeaveYear "${s}" is invalid. Use the financial-year format YYYY-YYYY (e.g. 2026-2027).` };
+}
+
+/** Display label for a stored financial-year start year (e.g. 2026 -> "2026-2027"). */
+export function leaveYearLabel(startYear) {
+  return `${startYear}-${startYear + 1}`;
+}
+
+/** Start year of the financial year containing today (1 Apr -> 31 Mar). */
+export function currentLeaveYearStart() {
+  const d = new Date();
+  const y = d.getFullYear();
+  return (d.getMonth() + 1) >= 4 ? y : y - 1; // April (month 4) onward -> this year's FY
+}
+
 /**
  * Import opening balances from parsed Excel rows.
  *
@@ -938,7 +1036,8 @@ export async function importLeaveBalances(pool, { rows, actor, companyScope }) {
     const code = clean(row.EmployeeCode ?? row.employeeCode);
     const biometric = clean(row.BiometricCode ?? row.biometricCode);
     const nameInFile = clean(row.EmployeeName ?? row.employeeName);
-    const year = num(row.LeaveYear ?? row.leaveYear);
+    const yearParsed = parseLeaveYear(row.LeaveYear ?? row.leaveYear);
+    const companyInFile = clean(row.CompanyCode ?? row.companyCode);
     const type = upper(row.LeaveType ?? row.leaveType);
     const opening = num(row.OpeningBalance ?? row.openingBalance);
 
@@ -948,8 +1047,10 @@ export async function importLeaveBalances(pool, { rows, actor, companyScope }) {
       summary.results.push({ row: excelRow, employeeCode: code, status: 'Failed', message });
     };
 
-    if (!code) { fail('EmployeeCode is empty.'); continue; }
-    if (!year || year < 2000 || year > 2200) { fail(`LeaveYear "${row.LeaveYear ?? ''}" is not a valid year.`); continue; }
+    if (!code) { fail('EmployeeCode is empty. Please enter the employee external (Navision) code.'); continue; }
+    if (!biometric) { fail('BiometricCode is empty — the employee cannot be resolved. Use the auto-populated BiometricCode.'); continue; }
+    if (!yearParsed.ok) { fail(yearParsed.message); continue; }
+    const year = yearParsed.startYear;
     if (!type) { fail('LeaveType is empty.'); continue; }
     if (opening === null) { fail(`OpeningBalance "${row.OpeningBalance ?? ''}" is not a number.`); continue; }
     if (opening < 0) { fail('OpeningBalance cannot be negative.'); continue; }
@@ -959,61 +1060,107 @@ export async function importLeaveBalances(pool, { rows, actor, companyScope }) {
       continue;
     }
 
-    // ---- identity validation against the real roster ----
-    const employee = await findActiveEmployee(pool, code);
+    // ---- identity resolution via the verified biometric (presentcardno) ----
+    // EmployeeCode is a manual external code; it is NOT looked up in dbo.tblemployee.
+    const employee = await findEmployeeByBiometric(pool, biometric);
     if (!employee) {
-      fail(`EmployeeCode "${code}" was not found among active employees. Nothing was imported for this row.`);
+      fail(`BiometricCode "${biometric}" was not found among active employees. Nothing was imported for this row.`);
       continue;
     }
     /* PROMPT 4.2 — the row's employee must belong to a company assigned to this HR
        Admin. Reported as Failed, so an out-of-scope row is never written. */
     if (scopeList && (!scopeList.length || !scopeList.includes(clean(employee.companycode).toUpperCase()))) {
-      fail(`EmployeeCode "${code}" belongs to a company outside your access.`);
-      continue;
-    }
-    if (biometric && employee.presentcardno && clean(biometric).toUpperCase() !== clean(employee.presentcardno).toUpperCase()) {
-      fail(`BiometricCode "${biometric}" does not match the saved code "${clean(employee.presentcardno)}" for employee ${code}.`);
+      fail(`BiometricCode "${biometric}" belongs to a company outside your access.`);
       continue;
     }
     if (nameInFile && employee.empname && clean(nameInFile).toUpperCase() !== clean(employee.empname).toUpperCase()) {
-      fail(`EmployeeName "${nameInFile}" does not match "${clean(employee.empname)}" for employee ${code}.`);
+      fail(`EmployeeName "${nameInFile}" does not match "${clean(employee.empname)}" for BiometricCode ${biometric}.`);
+      continue;
+    }
+    if (companyInFile && employee.companycode && clean(companyInFile).toUpperCase() !== clean(employee.companycode).toUpperCase()) {
+      fail(`CompanyCode "${companyInFile}" does not match "${clean(employee.companycode)}" for BiometricCode ${biometric}.`);
       continue;
     }
 
-    // ---- upsert opening balance ----
-    const existing = await pool.request()
-      .input('paycode', sql.NVarChar(50), employee.paycode)
-      .input('year', sql.Int, year)
-      .input('type', sql.NVarChar(10), type)
-      .query(`SELECT TOP 1 id, openingbalance FROM ${LEAVE_BALANCE_TABLE}
-              WHERE LTRIM(RTRIM(paycode)) = @paycode AND leaveyear = @year AND LTRIM(RTRIM(leavetype)) = @type`);
+    // ---- EmployeeCode -> employee mapping (application-owned) ----
+    const codeKey = clean(code).toUpperCase();
+    const mapByCode = await getMappingByCode(pool, codeKey);
+    if (mapByCode && clean(mapByCode.paycode).toUpperCase() !== clean(employee.paycode).toUpperCase()) {
+      fail(`EmployeeCode "${code}" is already mapped to a different employee (paycode ${clean(mapByCode.paycode)}). Correct the mapping first.`);
+      continue;
+    }
+    const mapByPaycode = await getMappingByPaycode(pool, employee.paycode);
+    if (mapByPaycode && clean(mapByPaycode.employeecode).toUpperCase() !== codeKey) {
+      fail(`Employee ${clean(employee.paycode)} is already mapped to a different EmployeeCode "${clean(mapByPaycode.employeecode)}". Correct the mapping first.`);
+      continue;
+    }
 
-    if (existing.recordset?.[0]) {
-      if (round2(existing.recordset[0].openingbalance) === opening) {
-        summary.skipped += 1;
-        summary.results.push({ row: excelRow, employeeCode: employee.paycode, leaveyear: year, leavetype: type, status: 'Skipped', message: 'Opening balance is unchanged.' });
-        continue;
+    // ---- persist mapping + opening balance atomically ----
+    let writeStatus;
+    try {
+      const tx = pool.transaction();
+      await tx.begin();
+      try {
+        if (!mapByCode && !mapByPaycode) {
+          await tx.request()
+            .input('code', sql.NVarChar(50), codeKey)
+            .input('paycode', sql.NVarChar(50), employee.paycode)
+            .input('by', sql.NVarChar(50), clean(actor).slice(0, 50))
+            .query(`INSERT INTO ${EMPLOYEE_CODE_MAPPING_TABLE} (employeecode, paycode, updatedby)
+                    VALUES (@code, @paycode, @by)`);
+        }
+
+        const existing = await tx.request()
+          .input('paycode', sql.NVarChar(50), employee.paycode)
+          .input('year', sql.Int, year)
+          .input('type', sql.NVarChar(10), type)
+          .query(`SELECT TOP 1 id, openingbalance FROM ${LEAVE_BALANCE_TABLE}
+                  WHERE LTRIM(RTRIM(paycode)) = @paycode AND leaveyear = @year AND LTRIM(RTRIM(leavetype)) = @type`);
+
+        if (existing.recordset?.[0]) {
+          if (round2(existing.recordset[0].openingbalance) === opening) {
+            writeStatus = 'Skipped';
+          } else {
+            await tx.request()
+              .input('id', sql.Int, existing.recordset[0].id)
+              .input('opening', sql.Decimal(9, 2), opening)
+              .input('by', sql.NVarChar(50), clean(actor).slice(0, 50))
+              .query(`UPDATE ${LEAVE_BALANCE_TABLE}
+                      SET openingbalance = @opening, updateddate = SYSUTCDATETIME(), updatedby = @by
+                      WHERE id = @id`);
+            writeStatus = 'Updated';
+          }
+        } else {
+          await tx.request()
+            .input('paycode', sql.NVarChar(50), employee.paycode)
+            .input('year', sql.Int, year)
+            .input('type', sql.NVarChar(10), type)
+            .input('opening', sql.Decimal(9, 2), opening)
+            .input('by', sql.NVarChar(50), clean(actor).slice(0, 50))
+            .query(`INSERT INTO ${LEAVE_BALANCE_TABLE} (paycode, leaveyear, leavetype, openingbalance, updatedby)
+                    VALUES (@paycode, @year, @type, @opening, @by)`);
+          writeStatus = 'Imported';
+        }
+
+        await tx.commit();
+      } catch (txError) {
+        await tx.rollback();
+        throw txError;
       }
-      await pool.request()
-        .input('id', sql.Int, existing.recordset[0].id)
-        .input('opening', sql.Decimal(9, 2), opening)
-        .input('by', sql.NVarChar(50), clean(actor).slice(0, 50))
-        .query(`UPDATE ${LEAVE_BALANCE_TABLE}
-                SET openingbalance = @opening, updateddate = SYSUTCDATETIME(), updatedby = @by
-                WHERE id = @id`);
+    } catch (error) {
+      fail(`Could not save this row: ${String(error?.message || error || '').slice(0, 200)}`);
+      continue;
+    }
+
+    if (writeStatus === 'Skipped') {
+      summary.skipped += 1;
+      summary.results.push({ row: excelRow, employeeCode: code, empname: employee.empname, leaveyear: year, leavetype: type, status: 'Skipped', message: 'Opening balance is unchanged.' });
+    } else if (writeStatus === 'Updated') {
       summary.updated += 1;
-      summary.results.push({ row: excelRow, employeeCode: employee.paycode, empname: employee.empname, leaveyear: year, leavetype: type, openingBalance: opening, status: 'Updated' });
+      summary.results.push({ row: excelRow, employeeCode: code, empname: employee.empname, leaveyear: year, leavetype: type, openingBalance: opening, status: 'Updated' });
     } else {
-      await pool.request()
-        .input('paycode', sql.NVarChar(50), employee.paycode)
-        .input('year', sql.Int, year)
-        .input('type', sql.NVarChar(10), type)
-        .input('opening', sql.Decimal(9, 2), opening)
-        .input('by', sql.NVarChar(50), clean(actor).slice(0, 50))
-        .query(`INSERT INTO ${LEAVE_BALANCE_TABLE} (paycode, leaveyear, leavetype, openingbalance, updatedby)
-                VALUES (@paycode, @year, @type, @opening, @by)`);
       summary.imported += 1;
-      summary.results.push({ row: excelRow, employeeCode: employee.paycode, empname: employee.empname, leaveyear: year, leavetype: type, openingBalance: opening, status: 'Imported' });
+      summary.results.push({ row: excelRow, employeeCode: code, empname: employee.empname, leaveyear: year, leavetype: type, openingBalance: opening, status: 'Imported' });
     }
   }
 
@@ -1023,7 +1170,7 @@ export async function importLeaveBalances(pool, { rows, actor, companyScope }) {
 /** A ready-to-fill template so HR imports the exact expected columns. */
 export function leaveImportTemplateRows() {
   return [[
-    'EmployeeCode', 'BiometricCode', 'EmployeeName',
+    'EmployeeCode', 'BiometricCode', 'EmployeeName', 'CompanyCode',
     'LeaveYear', 'LeaveType', 'OpeningBalance',
   ]];
 }

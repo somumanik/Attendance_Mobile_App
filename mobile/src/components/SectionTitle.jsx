@@ -69,12 +69,14 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   title: {
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: '700',
+    letterSpacing: -0.2,
   },
   subtitle: {
     fontSize: 12,
-    fontWeight: '400',
+    fontWeight: '500',
+    letterSpacing: 0.1,
   },
   actionContainer: {
     marginLeft: 12,

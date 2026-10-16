@@ -506,7 +506,7 @@ export const HRHolidayManagementScreen = () => {
 
         {!loading && error ? (
           <View style={styles.errorBox}>
-            <Text style={styles.errorText}>⚠️ {error}</Text>
+            <Text style={styles.errorText}><Ionicons name="alert-circle" size={13} /> {error}</Text>
             <Button title="Retry" onPress={() => load(false)} variant="outline" size="small" />
           </View>
         ) : null}
@@ -871,8 +871,8 @@ const styles = StyleSheet.create({
   catPickRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
   catLoadRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 },
   viewRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 12, paddingVertical: 9, borderBottomWidth: 1, borderBottomColor: COLORS.divider },
-  viewKey: { fontSize: 12, fontWeight: '700', color: COLORS.textSecondary, width: 92 },
-  viewVal: { flex: 1, fontSize: 13, color: COLORS.textPrimary, textAlign: 'right' },
+  viewKey: { fontSize: 12, fontWeight: '700', color: COLORS.textSecondary, width: 92, flexShrink: 1 },
+  viewVal: { flex: 1, minWidth: 0, fontSize: 13, color: COLORS.textPrimary, textAlign: 'right' },
   catPick: { paddingHorizontal: 12, paddingVertical: 9, borderRadius: 10, borderWidth: 1 },
   catPickText: { fontSize: 11.5, fontWeight: '600' },
   catPickTextSelected: { fontWeight: '800' },

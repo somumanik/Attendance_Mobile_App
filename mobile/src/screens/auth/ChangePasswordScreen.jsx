@@ -35,7 +35,9 @@
  */
 
 import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Keyboard } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { View, Text, TouchableOpacity, StyleSheet, Keyboard, KeyboardAvoidingView, ScrollView, Platform } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { useTheme } from '../../theme';
 import { useAuth } from '../../hooks/useAuth';
@@ -49,6 +51,7 @@ const PASSWORD_RULES = [
 ];
 
 export const ChangePasswordScreen = () => {
+  const insets = useSafeAreaInsets();
   const navigation = useNavigation();
   const route = useRoute();
   const { theme } = useTheme();
@@ -118,21 +121,21 @@ export const ChangePasswordScreen = () => {
   };
 
   return (
-    <View style={[styles.container, { backgroundColor: theme.background }]}>
+    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={[styles.container, { backgroundColor: theme.background, paddingTop: insets.top, paddingBottom: insets.bottom }]}>
       {!isForced ? (
         <TouchableOpacity
-          style={styles.backButton}
+          style={[styles.backButton, { top: insets.top + 8 }]}
           onPress={handleBack}
           hitSlop={{ top: 20, left: 20, bottom: 20, right: 20 }}
         >
-          <Text style={styles.backText}>←</Text>
+          <Ionicons name="arrow-back" size={24} color={theme.textPrimary} />
         </TouchableOpacity>
       ) : null}
 
-      <View style={styles.contentContainer}>
+      <ScrollView contentContainerStyle={styles.contentContainer} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
           <View style={[styles.logoCircle, { backgroundColor: theme.secondary }]}>
-            <Text style={styles.logoIcon}>🔐</Text>
+            <Ionicons name="lock-closed" size={32} color="#FFFFFF" />
           </View>
           <Text style={[styles.title, { color: theme.textPrimary }]}>Set New Password</Text>
           <Text style={[styles.subtitle, { color: theme.textSecondary }]}>
@@ -145,7 +148,7 @@ export const ChangePasswordScreen = () => {
         {/* Forced mode mein employee ko exactly kya karna hai, ye saaf bataya jata hai. */}
         {isForced ? (
           <View style={styles.forcedNotice}>
-            <Text style={styles.forcedTitle}>⚠️ Password change required</Text>
+            <Text style={styles.forcedTitle}><Ionicons name="alert-circle" size={13} /> Password change required</Text>
             <Text style={styles.forcedText}>
               {`HR ne aapke liye ek temporary password set kiya hai. ${userData?.paycode ? `Paycode ${String(userData.paycode).trim()}: ` : ''}`}
               {'Neeche "Current / Temporary Password" mein wahi password daalein, phir apna naya password set karein.'}
@@ -195,7 +198,7 @@ export const ChangePasswordScreen = () => {
 
             {error ? (
               <View style={styles.errorContainer}>
-                <Text style={styles.errorText}>⚠️ {error}</Text>
+                <Text style={styles.errorText}><Ionicons name="alert-circle" size={13} /> {error}</Text>
               </View>
             ) : null}
 
@@ -220,17 +223,16 @@ export const ChangePasswordScreen = () => {
             ) : null}
           </View>
         </Card>
-      </View>
-    </View>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 };
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
   backButton: { position: 'absolute', top: 8, left: 8, zIndex: 10, padding: 8 },
-  backText: { fontSize: 28, fontWeight: '600' },
   contentContainer: {
-    flex: 1,
+    flexGrow: 1,
     paddingHorizontal: 24,
     justifyContent: 'center',
     paddingVertical: 24,
@@ -249,7 +251,6 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     elevation: 4,
   },
-  logoIcon: { fontSize: 32 },
   title: { fontSize: 21, fontWeight: '700', textAlign: 'center', marginBottom: 6 },
   subtitle: { fontSize: 13, textAlign: 'center', paddingHorizontal: 8 },
   forcedNotice: {

@@ -15,7 +15,7 @@
       },
       "autoIncrement": true,
       "env": {
-        "EXPO_PUBLIC_API_BASE_URL": "https://attendance-perfect-light-mobile-build-api.onrender.com/api"
+        "EXPO_PUBLIC_API_BASE_URL": "https://attendance-mobile-app-main.onrender.com/api"
       }
     },
     "production": {

@@ -46,7 +46,7 @@ import {
 // so the storage backend can be swapped later (Phase J section 7 keeps the seam
 // ready for a future Navision integration - no Navision code exists here).
 // Attendance, holiday and HR login paths do not import it.
-import { ensureLeaveTables, getLeaveProvider } from './leave-service.js';
+import { ensureLeaveTables, getLeaveProvider, listLeaveTypes, leaveYearLabel, currentLeaveYearStart } from './leave-service.js';
 // Phase K: salary configuration/import + Full & Final estimation engine.
 // Same discipline as leave-service: application-owned HR_Salary* tables only.
 import {
@@ -71,7 +71,7 @@ import {
 } from './admin-access.js';
 
 const app = express();
-const port = Number(process.env.API_PORT || 4000);
+const port = Number(process.env.PORT || process.env.API_PORT || 4000);
 const marriageTable = process.env.HR_MARRIAGE_TABLE || 'dbo.HR_MarriageAnniversary';
 const jwtSecret = process.env.JWT_SECRET;
 const hrUsername = process.env.HR_USERNAME;
@@ -1620,6 +1620,38 @@ app.post('/api/hr/leave/balances/import', authenticate, requireRole('HR'), requi
     const summary = await provider.importBalances(pool, { rows, actor: req.user?.sub, companyScope: req.hrCompanyScope });
     res.json({ success: true, summary });
   }));
+
+// ---- Leave opening-balance Excel template (employee-prefilled) ----
+// Read-only, company-scoped: returns real active employee identity rows, the
+// configured leave-type codes, and the current financial-year label. The workbook
+// is built client-side from this data; SQL credentials stay server-side.
+app.get('/api/hr/leave/import-template', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const pool = await getPool();
+    await ensureLeaveTables(pool);
+    const types = await listLeaveTypes(pool, { includeInactive: false });
+    const typeCodes = (types || []).map((t) => String(t?.leavetype || '').trim()).filter(Boolean);
+    const scopeClause = req.hrCompanyScopeClause || '';
+    const result = await pool.request().query(
+      `SELECT TOP (20000) LTRIM(RTRIM(paycode)) AS paycode, LTRIM(RTRIM(presentcardno)) AS presentcardno,
+              LTRIM(RTRIM(empname)) AS empname, LTRIM(RTRIM(companycode)) AS companycode
+       FROM dbo.tblemployee e
+       WHERE LTRIM(RTRIM(active)) = 'Y'${scopeClause}
+       ORDER BY empname, paycode`,
+    );
+    res.json({
+      success: true,
+      leaveYear: leaveYearLabel(currentLeaveYearStart()),
+      leaveTypes: typeCodes,
+      employees: (result.recordset || []).map((r) => ({
+        paycode: String(r.paycode || '').trim(),
+        presentcardno: String(r.presentcardno || '').trim(),
+        empname: String(r.empname || '').trim(),
+        companycode: String(r.companycode || '').trim(),
+      })),
+    });
+  } catch (error) { sendDbError(res, error); }
+});
 
 // ---- Employee 4-digit PIN (Phase 3A.8) ----
 // The employee is taken from the verified JWT (req.user.paycode) on EVERY call.

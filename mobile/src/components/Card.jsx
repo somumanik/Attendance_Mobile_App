@@ -59,23 +59,23 @@ export const Card = ({
         };
       case 'raised':
         return {
-          shadowColor: theme.shadow,
-          shadowOffset: { width: 0, height: 2 },
+          shadowColor: theme.shadowMedium,
+          shadowOffset: { width: 0, height: 3 },
           shadowOpacity: 1,
-          shadowRadius: 4,
+          shadowRadius: 8,
           elevation: 2,
           borderWidth: bordered ? 1 : 0,
-          borderColor: theme.border,
+          borderColor: theme.borderLight,
         };
       case 'elevated':
         return {
-          shadowColor: theme.shadowMedium,
-          shadowOffset: { width: 0, height: 4 },
+          shadowColor: theme.shadowStrong,
+          shadowOffset: { width: 0, height: 8 },
           shadowOpacity: 1,
-          shadowRadius: 8,
-          elevation: 4,
+          shadowRadius: 18,
+          elevation: 5,
           borderWidth: bordered ? 1 : 0,
-          borderColor: theme.border,
+          borderColor: theme.borderLight,
         };
       default:
         return {};

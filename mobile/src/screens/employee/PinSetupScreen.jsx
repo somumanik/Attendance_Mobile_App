@@ -32,7 +32,9 @@
  */
 
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, Alert, Keyboard, TouchableOpacity } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { View, Text, StyleSheet, Alert, Keyboard, TouchableOpacity, KeyboardAvoidingView, ScrollView, Platform } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { useTheme } from '../../theme';
 import { useAuth } from '../../hooks/useAuth';
@@ -97,11 +99,11 @@ export const PinSetupScreen = ({ forced = false }) => {
   };
 
   return (
-    <View style={[styles.container, { backgroundColor: theme.background }]}>
-      <View style={styles.content}>
+    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={[styles.container, { backgroundColor: theme.background, paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
           <View style={[styles.iconCircle, { backgroundColor: theme.secondary }]}>
-            <Text style={styles.icon}>🔐</Text>
+            <Ionicons name="lock-closed" size={32} color="#FFFFFF" />
           </View>
           <Text style={[styles.title, { color: theme.textPrimary }]}>Create 4-Digit PIN</Text>
           <Text style={[styles.subtitle, { color: theme.textSecondary }]}>
@@ -148,7 +150,7 @@ export const PinSetupScreen = ({ forced = false }) => {
 
             {error ? (
               <View style={[styles.errorBox, { backgroundColor: `${theme.error}15`, borderColor: `${theme.error}30` }]}>
-                <Text style={[styles.errorText, { color: theme.error }]}>⚠️ {error}</Text>
+                <Text style={[styles.errorText, { color: theme.error }]}><Ionicons name="alert-circle" size={13} /> {error}</Text>
               </View>
             ) : null}
 
@@ -172,14 +174,14 @@ export const PinSetupScreen = ({ forced = false }) => {
             ) : null}
           </View>
         </Card>
-      </View>
-    </View>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 };
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  content: { flex: 1, paddingHorizontal: 24, paddingVertical: 24, justifyContent: 'center' },
+  content: { flexGrow: 1, paddingHorizontal: 24, paddingVertical: 24, justifyContent: 'center' },
   header: { alignItems: 'center', marginBottom: 28 },
   iconCircle: {
     width: 72,
@@ -189,7 +191,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 16,
   },
-  icon: { fontSize: 32 },
   title: { fontSize: 20, fontWeight: '700', textAlign: 'center', marginBottom: 6 },
   subtitle: { fontSize: 13, textAlign: 'center' },
   forcedBox: { marginTop: 12, padding: 12, borderRadius: 8, borderWidth: 1 },

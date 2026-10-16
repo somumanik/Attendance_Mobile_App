@@ -14,6 +14,7 @@
 
 import React, { useCallback, useState } from 'react';
 import { View, Text, ScrollView, StyleSheet, TouchableOpacity, TextInput, Alert, ActivityIndicator, RefreshControl } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { ScreenContainer } from '../../components/ScreenContainer';
 import { Button } from '../../components/Button';
@@ -77,7 +78,7 @@ export const SuperAdminUsersScreen = () => {
 
   return (
     <ScreenContainer title="SuperAdmin Users" showHeader={true}>
-      <ScrollView
+      <ScrollView keyboardShouldPersistTaps="handled"
         contentContainerStyle={styles.scroll}
         refreshControl={<RefreshControl refreshing={false} onRefresh={load} />}
       >
@@ -94,7 +95,7 @@ export const SuperAdminUsersScreen = () => {
           <View key={row.username} style={styles.card}>
             <View style={styles.cardTop}>
               <View style={{ flex: 1, minWidth: 0 }}>
-                <Text style={styles.username}>{row.username}{row.isbootstrap ? '  🔒' : ''}</Text>
+                <Text style={styles.username}>{row.username}{row.isbootstrap ? '  ' : ''}{row.isbootstrap ? <Ionicons name="lock-closed" size={12} color={COLORS.warning} /> : null}</Text>
                 <Text style={styles.meta}>{row.displayname || '—'}</Text>
                 <Text style={[styles.meta, { color: row.isactive ? COLORS.success : COLORS.error }]}>
                   {row.isactive ? 'Active' : 'Disabled'}{row.source === 'env' ? ' · env-managed' : ''}

@@ -144,6 +144,7 @@ export const Button = ({
           paddingVertical: sizeStyles.paddingVertical,
           paddingHorizontal: sizeStyles.paddingHorizontal,
           width: fullWidth ? '100%' : undefined,
+          shadowColor: isDisabled ? 'transparent' : variantStyles.borderColor,
         },
         style,
       ]}
@@ -179,11 +180,16 @@ export const Button = ({
 
 const styles = StyleSheet.create({
   container: {
-    borderRadius: 12,
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
     flexDirection: 'row',
     minHeight: 48,
+    // Soft coloured lift (shadowColor is set per-variant inline).
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.22,
+    shadowRadius: 8,
+    elevation: 2,
   },
   content: {
     flexDirection: 'row',
@@ -192,7 +198,8 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   text: {
-    fontWeight: '600',
+    fontWeight: '700',
+    letterSpacing: 0.2,
     fontFamily: undefined, // System font
   },
   iconLeft: {

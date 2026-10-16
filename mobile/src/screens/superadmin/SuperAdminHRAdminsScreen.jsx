@@ -18,6 +18,7 @@
  */
 
 import React, { useCallback, useRef, useState } from 'react';
+import { Ionicons } from '@expo/vector-icons';
 import { View, Text, ScrollView, StyleSheet, TouchableOpacity, TextInput, ActivityIndicator, RefreshControl } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { ScreenContainer } from '../../components/ScreenContainer';
@@ -266,11 +267,11 @@ export const SuperAdminHRAdminsScreen = () => {
 
   return (
     <ScreenContainer title="HR Admin Accounts" showHeader={true}>
-      <ScrollView contentContainerStyle={styles.scroll} refreshControl={<RefreshControl refreshing={false} onRefresh={load} />}>
+      <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled" refreshControl={<RefreshControl refreshing={false} onRefresh={load} />}>
         <Text style={styles.hint}>
           Permissions server par save hoti hain aur har API request par enforce hoti hain —
           revoked permission turant lagu hoti hai, chahe purana screen khula ho.
-          🔒 = bootstrap account (always full access).
+          <Ionicons name="lock-closed" size={11} color={COLORS.warning} /> = bootstrap account (always full access).
         </Text>
         {error ? <Text style={styles.error}>{error}</Text> : null}
         {msg ? <Text style={styles.ok}>{msg}</Text> : null}
@@ -281,13 +282,13 @@ export const SuperAdminHRAdminsScreen = () => {
             <TouchableOpacity onPress={() => (selected === row.username ? setSelected(null) : openEditor(row))} activeOpacity={0.8}>
               <View style={styles.cardTop}>
                 <View style={{ flex: 1, minWidth: 0 }}>
-                  <Text style={styles.username}>{row.username}{row.isbootstrap ? '  🔒' : ''}</Text>
+                  <Text style={styles.username}>{row.username}{row.isbootstrap ? '  ' : ''}{row.isbootstrap ? <Ionicons name="lock-closed" size={12} color={COLORS.warning} /> : null}</Text>
                   <Text style={styles.meta}>{row.displayname || '—'}</Text>
                   <Text style={[styles.meta, { color: row.isactive ? COLORS.success : COLORS.error }]}>
                     {row.isactive ? 'Active' : 'Disabled'}
                   </Text>
                 </View>
-                <Text style={styles.chevron}>{selected === row.username ? '⌃' : '⌄'}</Text>
+                <Ionicons name={selected === row.username ? 'chevron-up' : 'chevron-down'} size={18} color={COLORS.textSecondary} />
               </View>
             </TouchableOpacity>
 
@@ -471,7 +472,6 @@ const styles = StyleSheet.create({
   cardTop: { flexDirection: 'row', alignItems: 'center', gap: SPACING.sm },
   username: { fontSize: 14, fontWeight: '800', color: COLORS.textPrimary },
   meta: { fontSize: 11, color: COLORS.textSecondary, marginTop: 2 },
-  chevron: { fontSize: 16, color: COLORS.textTertiary, fontWeight: '800' },
   editor: { marginTop: SPACING.sm, borderTopWidth: 1, borderTopColor: COLORS.divider, paddingTop: SPACING.sm, gap: SPACING.sm },
   rowActions: { flexDirection: 'row', gap: 6, alignItems: 'center', flexWrap: 'wrap' },
   smallBtn: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8, borderWidth: 1, borderColor: COLORS.border },

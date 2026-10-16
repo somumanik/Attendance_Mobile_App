@@ -25,6 +25,7 @@
 
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme';
 
 /**
@@ -62,32 +63,37 @@ export const ErrorState = ({
       case 'network':
         return {
           title: 'Connection Error',
-          illustration: '📡',
+          illustration: 'wifi',
+          tint: theme.accentCoral,
           message: 'Unable to connect to server. Please check your internet connection.',
         };
       case 'server':
         return {
           title: 'Server Error',
-          illustration: '🖥️',
+          illustration: 'server',
+          tint: theme.accentViolet,
           message: 'Server is temporarily unavailable. Please try again later.',
         };
       case 'not-found':
         return {
           title: 'Not Found',
-          illustration: '🔍',
+          illustration: 'search',
+          tint: theme.accentBlue,
           message: 'The requested resource was not found.',
         };
       case 'permission':
         return {
           title: 'Access Denied',
-          illustration: '🔒',
+          illustration: 'lock-closed',
+          tint: theme.warning,
           message: 'You don\'t have permission to perform this action.',
         };
       case 'generic':
       default:
         return {
           title: 'Something Went Wrong',
-          illustration: '⚠️',
+          illustration: 'alert-circle',
+          tint: theme.error,
           message: getErrorMessage(),
         };
     }
@@ -98,7 +104,9 @@ export const ErrorState = ({
   return (
     <View style={[styles.container, { backgroundColor: theme.background }, style]}>
       <View style={styles.content}>
-        <Text style={styles.illustration}>{config.illustration}</Text>
+        <View style={[styles.illustrationWrap, { backgroundColor: `${config.tint}1A` }]}>
+          <Ionicons name={config.illustration} size={44} color={config.tint} />
+        </View>
         <Text style={[styles.title, { color: theme.textPrimary }]}>{config.title}</Text>
         <Text style={[styles.message, { color: theme.textSecondary }]}>{config.message}</Text>
 
@@ -144,17 +152,22 @@ const styles = StyleSheet.create({
     gap: 16,
     paddingHorizontal: 32,
   },
-  illustration: {
-    fontSize: 64,
+  illustrationWrap: {
+    width: 96,
+    height: 96,
+    borderRadius: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 4,
   },
   title: {
     fontSize: 18,
     fontWeight: '700',
     textAlign: 'center',
+    letterSpacing: -0.2,
   },
   message: {
     fontSize: 14,
-    color: '#64748B',
     textAlign: 'center',
     lineHeight: 20,
   },

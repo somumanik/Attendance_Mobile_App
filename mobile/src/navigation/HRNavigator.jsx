@@ -28,6 +28,7 @@
 import React from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { GradientIcon } from '../components/GradientIcon';
 import { getNavIcon } from '../utils/navigationIcons';
 import { useAuth } from '../hooks/useAuth';
@@ -96,6 +97,9 @@ const HRTabs = () => {
      too, so it cannot be reached by entering its URL. */
   const showTab = (m) => can(m, 'view') && isVisible(m);
   const inBar = (m) => showTab(m) && modulePlacement(m) !== 'more';
+  // Home-indicator / gesture-nav safe area: the bar's height and bottom padding
+  // must include the inset or the last row of tabs is covered on notched devices.
+  const insets = useSafeAreaInsets();
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
@@ -105,12 +109,20 @@ const HRTabs = () => {
           backgroundColor: COLORS.surface,
           borderTopWidth: 1,
           borderTopColor: COLORS.divider,
-          paddingBottom: 8,
-          height: 64,
+          paddingTop: 6,
+          paddingBottom: 8 + insets.bottom,
+          height: 64 + insets.bottom,
+          // Soft top lift keeps the bar premium without changing layout.
+          shadowColor: COLORS.shadow,
+          shadowOffset: { width: 0, height: -2 },
+          shadowOpacity: 1,
+          shadowRadius: 8,
+          elevation: 8,
         },
         tabBarLabelStyle: {
           fontSize: 10,
           fontWeight: '600',
+          letterSpacing: 0.1,
         },
         headerShown: false,
       })}

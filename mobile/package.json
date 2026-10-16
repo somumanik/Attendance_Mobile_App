@@ -41,7 +41,7 @@
   },
   "devDependencies": {
     "@babel/core": "^7.25.0",
-    "@react-native/metro-config": "^0.81.0"
+    "@react-native/metro-config": "0.76.9"
   },
   "overrides": {
     "@react-navigation/elements": "2.9.42"

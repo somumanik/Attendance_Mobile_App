@@ -26,11 +26,12 @@
  */
 
 import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Keyboard } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Keyboard, KeyboardAvoidingView, ScrollView, Platform } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { useTheme } from '../../theme';
 import { useAuth } from '../../hooks/useAuth';
-import { Button, Input, Card } from '../../components';
+import { Button, Input, Card, GradientIcon } from '../../components';
+import { Ionicons } from '@expo/vector-icons';
 
 /** Distinct accent so the SuperAdmin portal is instantly recognisable. */
 const SUPERADMIN_ACCENT = '#4F46E5';
@@ -74,17 +75,15 @@ export const SuperAdminLoginScreen = () => {
   };
 
   return (
-    <View style={[styles.container, { backgroundColor: theme.background }]}>
-      <TouchableOpacity style={styles.backButton} onPress={handleBack} hitSlop={{ top: 20, left: 20, bottom: 20, right: 20 }}>
-        <Text style={styles.backText}>←</Text>
+    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={[styles.container, { backgroundColor: theme.background, paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+      <TouchableOpacity style={[styles.backButton, { top: insets.top + 8 }]} onPress={handleBack} hitSlop={{ top: 20, left: 20, bottom: 20, right: 20 }}>
+        <Ionicons name="arrow-back" size={24} color={theme.textPrimary} />
       </TouchableOpacity>
 
-      <View style={styles.contentContainer}>
+      <ScrollView contentContainerStyle={styles.contentContainer} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
         {/* Header */}
         <View style={styles.header}>
-          <View style={[styles.logoCircle, { backgroundColor: SUPERADMIN_ACCENT }]}>
-            <Text style={styles.logoIcon}>⚙️</Text>
-          </View>
+          <GradientIcon from={SUPERADMIN_ACCENT} to="#9333EA" name="settings" size={96} radius={28} glyphRatio={0.5} />
           <Text style={[styles.title, { color: theme.textPrimary }]}>SuperAdmin Login</Text>
           <Text style={[styles.subtitle, { color: theme.textSecondary }]}>Management console access only</Text>
         </View>
@@ -115,13 +114,15 @@ export const SuperAdminLoginScreen = () => {
             />
 
             {error ? (
-              <View style={styles.errorContainer}>
-                <Text style={styles.errorText}>⚠️ {error}</Text>
+              <View style={[styles.errorContainer, { backgroundColor: theme.errorContainer, borderColor: `${theme.error}40` }]}>
+                <Ionicons name="alert-circle" size={16} color={theme.error} style={styles.inlineIcon} />
+                <Text style={[styles.errorText, { color: theme.error }]}>{error}</Text>
               </View>
             ) : null}
 
-            <View style={styles.notice}>
-              <Text style={styles.noticeText}>🔐 Server-side hashed credential — no password is stored in the app.</Text>
+            <View style={[styles.notice, { backgroundColor: theme.infoContainer, borderColor: `${theme.info}30` }]}>
+              <Ionicons name="lock-closed" size={14} color={theme.textSecondary} style={styles.inlineIcon} />
+              <Text style={[styles.noticeText, { color: theme.textSecondary }]}>Server-side hashed credential — no password is stored in the app.</Text>
             </View>
 
             <Button
@@ -135,8 +136,8 @@ export const SuperAdminLoginScreen = () => {
             />
           </View>
         </Card>
-      </View>
-    </View>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 };
 
@@ -151,12 +152,8 @@ const styles = StyleSheet.create({
     zIndex: 10,
     padding: 8,
   },
-  backText: {
-    fontSize: 28,
-    fontWeight: '600',
-  },
   contentContainer: {
-    flex: 1,
+    flexGrow: 1,
     paddingHorizontal: 24,
     justifyContent: 'center',
     paddingVertical: 24,
@@ -164,27 +161,14 @@ const styles = StyleSheet.create({
   header: {
     alignItems: 'center',
     marginBottom: 32,
-  },
-  logoCircle: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 12,
-    elevation: 4,
-  },
-  logoIcon: {
-    fontSize: 36,
+    gap: 4,
   },
   title: {
     fontSize: 22,
-    fontWeight: '700',
+    fontWeight: '800',
+    letterSpacing: -0.4,
     textAlign: 'center',
+    marginTop: 16,
     marginBottom: 6,
   },
   subtitle: {
@@ -198,27 +182,36 @@ const styles = StyleSheet.create({
     gap: 16,
   },
   errorContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
     padding: 12,
-    backgroundColor: '#FEE2E2',
-    borderRadius: 8,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#FECACA',
+  },
+  inlineIcon: {
+    marginTop: 1,
   },
   errorText: {
     fontSize: 12,
-    fontWeight: '500',
+    fontWeight: '600',
     textAlign: 'center',
+    flexShrink: 1,
   },
   notice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
     padding: 12,
-    backgroundColor: '#EEF2FF',
-    borderRadius: 8,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#C7D2FE',
   },
   noticeText: {
     fontSize: 12,
     textAlign: 'center',
+    flexShrink: 1,
   },
 });
 

@@ -37,7 +37,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { useTheme } from '../../theme';
 import { ScreenContainer } from '../../components';
-import { StatCard, Button, Card, AttendanceBadge } from '../../components';
+import { StatCard, Button, Card, AttendanceBadge, TintIcon } from '../../components';
 import EmployeeMonthNav, { currentMonthKey } from '../../components/EmployeeMonthNav';
 import { useAuth } from '../../hooks/useAuth';
 import { api } from '../../services/api';
@@ -227,9 +227,9 @@ export const EmployeeDashboardScreen = () => {
         out.push({ key: `${label}-${clean(it.date)}-${i}`, icon, label, name: clean(it.name), date: clean(it.date) });
       });
     };
-    add(g.birthdays && g.birthdays.today, '🎂', 'Birthday');
-    add(g.workAnniversaries && g.workAnniversaries.today, '🎉', 'Work Anniversary');
-    add(g.marriageAnniversaries && g.marriageAnniversaries.today, '💍', 'Marriage Anniversary');
+    add(g.birthdays && g.birthdays.today, { name: 'gift', color: '#DB2777' }, 'Birthday');
+    add(g.workAnniversaries && g.workAnniversaries.today, { name: 'trophy', color: '#D97706' }, 'Work Anniversary');
+    add(g.marriageAnniversaries && g.marriageAnniversaries.today, { name: 'heart', color: '#E11D48' }, 'Marriage Anniversary');
     return out;
   }, [celebrations]);
 
@@ -270,7 +270,7 @@ export const EmployeeDashboardScreen = () => {
 
         {!isLoading && error ? (
           <Card style={styles.sectionCard}>
-            <Text style={[styles.errorText, { color: theme.error }]}>⚠️ {error}</Text>
+            <Text style={[styles.errorText, { color: theme.error }]}><Ionicons name="alert-circle" size={13} /> {error}</Text>
             <Button title="Retry" onPress={() => load(false)} variant="outline" size="small" style={{ marginTop: 12 }} />
           </Card>
         ) : null}
@@ -314,7 +314,7 @@ export const EmployeeDashboardScreen = () => {
                 </View>
                 {todayCelebrations.map((c) => (
                   <View key={c.key} style={styles.celebRow}>
-                    <Text style={styles.celebIcon}>{c.icon}</Text>
+                    <TintIcon name={c.icon.name} color={c.icon.color} size={38} iconSize={20} radius={12} />
                     <View style={styles.celebBody}>
                       <Text style={[styles.celebName, { color: theme.textPrimary }]} numberOfLines={1}>{c.name}</Text>
                       <Text style={[styles.celebType, { color: theme.textSecondary }]} numberOfLines={1}>{c.label}</Text>
@@ -333,28 +333,28 @@ export const EmployeeDashboardScreen = () => {
                 title="Present Days"
                 value={stats.present}
                 subtitle={`${stats.percentage}%`}
-                icon="✅"
+                icon="checkmark-circle"
                 color={theme.success}
               />
               <StatCard
                 title="Absent Days"
                 value={stats.absent}
                 subtitle="This Month"
-                icon="❌"
+                icon="close-circle"
                 color={theme.error}
               />
               <StatCard
                 title="Miss Punch"
                 value={stats.miss}
                 subtitle="Pending Review"
-                icon="⚠️"
+                icon="warning"
                 color={theme.warning}
               />
               <StatCard
                 title="Late Arrivals"
                 value={stats.late}
                 subtitle={graceLeft !== null ? `${graceLeft} grace left` : 'This Month'}
-                icon="⏰"
+                icon="time"
                 color={theme.error}
               />
             </View>
@@ -586,12 +586,12 @@ export const EmployeeDashboardScreen = () => {
 
 const styles = StyleSheet.create({
   scrollContent: { paddingHorizontal: 16, paddingBottom: 32 },
-  greetingHeader: { marginBottom: 16, flexDirection: 'row', alignItems: 'center', gap: 12 },
-  greetingContent: { flex: 1 },
+  greetingHeader: { marginBottom: 16, flexDirection: 'row', alignItems: 'center', gap: 12, flexWrap: 'wrap' },
+  greetingContent: { flex: 1, minWidth: 160 },
   greetingTitle: { fontSize: 20, fontWeight: '700' },
   greetingName: { fontSize: 26, fontWeight: '700', marginTop: 2 },
   greetingMeta: { fontSize: 12, marginTop: 2 },
-  todayStatusCard: { width: 160, borderRadius: 16, padding: 16, alignItems: 'center', justifyContent: 'center' },
+  todayStatusCard: { width: 160, maxWidth: '100%', flexShrink: 1, borderRadius: 16, padding: 16, alignItems: 'center', justifyContent: 'center' },
   todayStatusLabel: { fontSize: 11, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 },
   todayStatusValue: { fontSize: 16, fontWeight: '700' },
   todayStatusTime: { fontSize: 11, marginTop: 3 },
@@ -653,7 +653,6 @@ const styles = StyleSheet.create({
   celebViewAll: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, borderWidth: 1 },
   celebViewAllText: { fontSize: 11, fontWeight: '800' },
   celebRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 5 },
-  celebIcon: { fontSize: 18 },
   celebBody: { flex: 1 },
   celebName: { fontSize: 13, fontWeight: '700' },
   celebType: { fontSize: 11 },

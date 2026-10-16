@@ -25,6 +25,7 @@
 
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme';
 
 /**
@@ -53,38 +54,44 @@ export const EmptyState = ({
         return {
           title: 'No Results',
           message: 'Try adjusting your search terms or filters',
-          illustration: '🔍',
+          illustration: 'search',
+          tint: theme.accentBlue,
         };
       case 'filter':
         return {
           title: 'No Matching Records',
           message: 'Try adjusting your filters',
-          illustration: '🔧',
+          illustration: 'options',
+          tint: theme.accentViolet,
         };
       case 'no-network':
         return {
           title: 'No Connection',
           message: 'Check your internet connection and try again',
-          illustration: '📡',
+          illustration: 'wifi',
+          tint: theme.accentCoral,
         };
       case 'no-permission':
         return {
           title: 'Access Denied',
           message: 'You don\'t have permission to view this content',
-          illustration: '🔒',
+          illustration: 'lock-closed',
+          tint: theme.warning,
         };
       case 'no-results':
         return {
           title: 'No Data Found',
           message: 'No records match your criteria',
-          illustration: '📭',
+          illustration: 'mail-open',
+          tint: theme.accentTeal,
         };
       case 'no-data':
       default:
         return {
           title: 'No Data Available',
           message: 'There are no records to display at this time',
-          illustration: '📦',
+          illustration: 'cube',
+          tint: theme.accentAmber,
         };
     }
   };
@@ -93,11 +100,14 @@ export const EmptyState = ({
   const finalTitle = title || defaults.title;
   const finalMessage = message || defaults.message;
   const finalIllustration = illustration || defaults.illustration;
+  const illustrationTint = defaults.tint || theme.primary;
 
   return (
     <View style={[styles.container, { backgroundColor: theme.background }, style]}>
       <View style={styles.content}>
-        <Text style={styles.illustration}>{finalIllustration}</Text>
+        <View style={[styles.illustrationWrap, { backgroundColor: `${illustrationTint}1A` }]}>
+          <Ionicons name={finalIllustration} size={44} color={illustrationTint} />
+        </View>
         <Text style={[styles.title, { color: theme.textPrimary }]}>{finalTitle}</Text>
         <Text style={[styles.message, { color: theme.textSecondary }]}>{finalMessage}</Text>
         {action && (
@@ -128,17 +138,22 @@ const styles = StyleSheet.create({
     gap: 16,
     paddingHorizontal: 32,
   },
-  illustration: {
-    fontSize: 64,
+  illustrationWrap: {
+    width: 96,
+    height: 96,
+    borderRadius: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 4,
   },
   title: {
     fontSize: 18,
     fontWeight: '700',
     textAlign: 'center',
+    letterSpacing: -0.2,
   },
   message: {
     fontSize: 14,
-    color: '#64748B',
     textAlign: 'center',
     lineHeight: 20,
   },

@@ -27,7 +27,8 @@
  */
 
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, SafeAreaView } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTheme } from '../theme';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -49,10 +50,10 @@ export const ScreenContainer = ({
   const { theme } = useTheme();
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
+    <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]} edges={['top', 'left', 'right']}>
       {showHeader && (
         <View style={[styles.header, { backgroundColor: theme.background, borderBottomColor: theme.divider }]}>
-          {backAction && (
+          {backAction ? (
             <TouchableOpacity 
               style={styles.backButton}
               onPress={backAction}
@@ -60,16 +61,29 @@ export const ScreenContainer = ({
             >
               <Ionicons name="chevron-back" size={28} color={theme.textPrimary} />
             </TouchableOpacity>
+          ) : (
+            // Keeps the title optically centred when only a right action exists.
+            <View style={styles.sideSpacer} />
           )}
           <View style={styles.titleContainer}>
-            <Text style={[styles.title, { color: theme.textPrimary, fontSize: 20 }]}>{title}</Text>
+            <Text
+              style={[styles.title, { color: theme.textPrimary }]}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.75}
+            >
+              {title}
+            </Text>
           </View>
-          {rightAction && (
+          {rightAction ? (
+            // Auto-width slot (no fixed 44px) so header buttons are never clipped;
+            // minHeight keeps icon-only actions at a comfortable tap size.
             <View style={styles.rightAction}>
               {rightAction}
             </View>
+          ) : (
+            <View style={styles.sideSpacer} />
           )}
-          {!backAction && !rightAction && <View style={styles.spacer} />}
         </View>
       )}
       <View style={styles.content}>{children}</View>
@@ -84,9 +98,9 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    gap: 8,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   backButton: {
@@ -94,22 +108,30 @@ const styles = StyleSheet.create({
     height: 44,
     justifyContent: 'center',
     alignItems: 'center',
+    flexShrink: 0,
+  },
+  sideSpacer: {
+    width: 12,
+    flexShrink: 0,
   },
   titleContainer: {
     flex: 1,
+    minWidth: 0,
     alignItems: 'center',
+    justifyContent: 'center',
   },
   title: {
+    fontSize: 20,
     fontWeight: '700',
+    letterSpacing: -0.3,
+    textAlign: 'center',
   },
   rightAction: {
-    width: 44,
-    height: 44,
+    flexShrink: 0,
+    minHeight: 44,
+    minWidth: 44,
     justifyContent: 'center',
-    alignItems: 'center',
-  },
-  spacer: {
-    width: 44,
+    alignItems: 'flex-end',
   },
   content: {
     flex: 1,

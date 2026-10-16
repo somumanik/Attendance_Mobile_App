@@ -301,7 +301,7 @@ export const EmployeeReportsScreen = () => {
 
         {!isLoading && error ? (
           <Card style={styles.card}>
-            <Text style={[styles.errorText, { color: theme.error }]}>⚠️ {error}</Text>
+            <Text style={[styles.errorText, { color: theme.error }]}><Ionicons name="alert-circle" size={13} /> {error}</Text>
             <Button title="Retry" onPress={() => load(false, month)} variant="outline" size="small" style={{ marginTop: 12 }} />
           </Card>
         ) : null}
@@ -496,7 +496,7 @@ export const EmployeeReportsScreen = () => {
                     : { backgroundColor: `${theme.error}18`, borderColor: `${theme.error}44` },
                 ]}>
                   <Text style={[styles.exportMsgText, { color: exportMsg.kind === 'ok' ? (theme.success || COLORS.success) : theme.error }]}>
-                    {exportMsg.kind === 'ok' ? '✅' : '⚠️'} {exportMsg.text}
+                    {exportMsg.kind === 'ok' ? <Ionicons name="checkmark-circle" size={13} /> : <Ionicons name="alert-circle" size={13} />} {exportMsg.text}
                   </Text>
                 </View>
               ) : null}

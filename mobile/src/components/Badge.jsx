@@ -71,7 +71,7 @@ export const Badge = ({
           backgroundColor: 'transparent',
           textColor: theme.primary,
           borderColor: theme.primary,
-          borderWidth: 1,
+          borderWidth: 1.5,
         };
       case 'dot':
         return {
@@ -247,6 +247,7 @@ const styles = StyleSheet.create({
   text: {
     fontWeight: '700',
     lineHeight: 1,
+    letterSpacing: 0.1,
   },
 });
 

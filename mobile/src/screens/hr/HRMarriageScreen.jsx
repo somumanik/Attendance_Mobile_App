@@ -814,7 +814,7 @@ export const HRMarriageScreen = () => {
 
         {!loading && error ? (
           <View style={styles.errorBox}>
-            <Text style={styles.errorText}>⚠️ {error}</Text>
+            <Text style={styles.errorText}><Ionicons name="alert-circle" size={13} /> {error}</Text>
             <Button title="Retry" onPress={() => loadAll(false)} variant="outline" size="small" style={styles.retryButton} />
           </View>
         ) : null}
@@ -823,7 +823,7 @@ export const HRMarriageScreen = () => {
           <>
             {/* ---------- Today's anniversaries ---------- */}
             <View style={styles.sectionHeader}>
-              <Text style={styles.sectionIcon}>💍</Text>
+              <Ionicons name="heart" size={18} color={ROSE} />
               <Text style={[styles.sectionTitle, { color: ROSE }]}>Today's Marriage Anniversaries</Text>
               <View style={[styles.sectionCount, { backgroundColor: ROSE }]}>
                 <Text style={styles.sectionCountText}>{view.today.length}</Text>
@@ -846,7 +846,7 @@ export const HRMarriageScreen = () => {
 
             {/* ---------- Upcoming anniversaries ---------- */}
             <View style={styles.sectionHeader}>
-              <Text style={styles.sectionIcon}>📆</Text>
+              <Ionicons name="calendar" size={18} color={TEAL} />
               <Text style={[styles.sectionTitle, { color: TEAL }]}>Upcoming Marriage Anniversaries ({UPCOMING_MARRIAGE_DAYS} days)</Text>
               <View style={[styles.sectionCount, { backgroundColor: TEAL }]}>
                 <Text style={styles.sectionCountText}>{view.upcoming.length}</Text>
@@ -869,7 +869,7 @@ export const HRMarriageScreen = () => {
 
             {/* ---------- Register ---------- */}
             <View style={styles.sectionHeader}>
-              <Text style={styles.sectionIcon}>🗂️</Text>
+              <Ionicons name="folder-open" size={18} color={COLORS.primary} />
               <Text style={[styles.sectionTitle, { color: COLORS.textPrimary }]}>Marriage Anniversary Register</Text>
               <View style={[styles.sectionCount, { backgroundColor: COLORS.primary }]}>
                 <Text style={styles.sectionCountText}>{view.all.length}</Text>
@@ -945,7 +945,7 @@ export const HRMarriageScreen = () => {
                         styles.templateMsgText,
                         { color: templateMsg.kind === 'ok' ? COLORS.success : COLORS.error },
                       ]}>
-                        {templateMsg.kind === 'ok' ? '✅' : '⚠️'} {templateMsg.text}
+                        {templateMsg.kind === 'ok' ? <Ionicons name="checkmark-circle" size={13} /> : <Ionicons name="alert-circle" size={13} />} {templateMsg.text}
                       </Text>
                     </View>
                   ) : null}
@@ -955,7 +955,7 @@ export const HRMarriageScreen = () => {
                 </>
               ) : null}
 
-              {fileError ? <Text style={styles.fileError}>⚠️ {fileError}</Text> : null}
+              {fileError ? <Text style={styles.fileError}><Ionicons name="alert-circle" size={13} /> {fileError}</Text> : null}
 
               {step === 2 ? (
                 <>
@@ -1084,7 +1084,6 @@ const styles = StyleSheet.create({
     marginTop: SPACING.md,
     marginBottom: SPACING.sm,
   },
-  sectionIcon: { fontSize: 15 },
   sectionTitle: { flex: 1, fontSize: 12.5, fontWeight: '800' },
   sectionCount: { minWidth: 24, paddingHorizontal: 7, paddingVertical: 2, borderRadius: 999, alignItems: 'center' },
   sectionCountText: { color: '#FFFFFF', fontSize: 11, fontWeight: '800' },

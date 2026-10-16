@@ -22,6 +22,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { Ionicons } from '@expo/vector-icons';
 import { View, Text, ScrollView, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { COLORS, TYPOGRAPHY, SPACING, SHADOWS } from '../../utils/colors';
 import { ScreenContainer } from '../../components/ScreenContainer';
@@ -281,7 +282,7 @@ export const HRAuditScreen = ({ route }) => {
 
         {!loadingAudit && error ? (
           <View style={styles.errorBox}>
-            <Text style={styles.errorText}>⚠️ {error}</Text>
+            <Text style={styles.errorText}><Ionicons name="alert-circle" size={13} /> {error}</Text>
           </View>
         ) : null}
 
@@ -543,7 +544,7 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: COLORS.divider,
   },
-  attLeft: { width: 76 },
+  attLeft: { width: 76, flexShrink: 1 },
   attDate: { fontSize: 11, color: COLORS.textPrimary, fontWeight: '600' },
   attDay: { fontSize: 10, color: COLORS.textTertiary },
   attMid: { flex: 1, flexDirection: 'row', gap: SPACING.sm },

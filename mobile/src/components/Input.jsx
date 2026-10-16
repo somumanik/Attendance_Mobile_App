@@ -32,6 +32,7 @@
 
 import React, { forwardRef, useState } from 'react';
 import { View, Text, TextInput, StyleSheet, TouchableOpacity } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme';
 
 /**
@@ -163,7 +164,11 @@ export const Input = forwardRef((
                     ("Unexpected text node: 🔒 ... cannot be a child of a
                     <View>"). Wrap it in Text, exactly like every other glyph
                     in this project. */}
-                <Text style={styles.toggleIcon}>{showPassword ? '👁️' : '🔒'}</Text>
+                <Ionicons
+                  name={showPassword ? 'eye-off' : 'eye'}
+                  size={20}
+                  color={showPassword ? theme.primary : theme.textTertiary}
+                />
               </TouchableOpacity>
             ) : (
               rightIcon
@@ -222,9 +227,6 @@ const styles = StyleSheet.create({
     paddingRight: 8,
     fontSize: 15,
     minHeight: 48,
-  },
-  toggleIcon: {
-    fontSize: 16,
   },
   messageContainer: {
     flexDirection: 'row',

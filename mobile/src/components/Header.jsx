@@ -71,14 +71,18 @@ export const Header = ({
           <Text style={[
             styles.title,
             { color: theme.textPrimary },
-          ]}>
+          ]}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.75}
+          >
             {title}
           </Text>
         </View>
 
         <View style={styles.rightContainer}>
           {rightAction}
-          {shouldShowBack && <View style={styles.backPlaceholder} />}
+          {!rightAction && shouldShowBack && <View style={styles.backPlaceholder} />}
         </View>
       </View>
 
@@ -109,11 +113,13 @@ const styles = StyleSheet.create({
     height: 44,
     justifyContent: 'center',
     alignItems: 'center',
+    flexShrink: 0,
   },
   titleContainer: {
     flex: 1,
+    minWidth: 0,
     alignItems: 'center',
-    paddingHorizontal: 12,
+    paddingHorizontal: 8,
   },
   titleLeft: {
     alignItems: 'flex-start',
@@ -121,13 +127,17 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 18,
     fontWeight: '700',
-    maxWidth: '90%',
+    letterSpacing: -0.3,
     textAlign: 'center',
   },
   rightContainer: {
-    width: 44,
-    alignItems: 'flex-end',
-    justifyContent: 'center',
+    flexShrink: 0,
+    minWidth: 44,
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 8,
   },
   backPlaceholder: {
     width: 44,

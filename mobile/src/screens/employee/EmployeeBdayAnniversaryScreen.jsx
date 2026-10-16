@@ -80,7 +80,7 @@ const SECTIONS = [
   {
     id: 'birthdays',
     title: 'Birthdays',
-    icon: '🎂',
+    icon: 'gift',
     accent: '#DB2777',
     empty: 'No birthdays found.',
     line: (it) => `Birthday · ${longDate(it.date)}`,
@@ -89,7 +89,7 @@ const SECTIONS = [
   {
     id: 'workAnniversaries',
     title: 'Work Anniversaries',
-    icon: '🎉',
+    icon: 'sparkles',
     accent: '#D97706',
     empty: 'No work anniversaries found.',
     line: (it) => `Work Anniversary · ${longDate(it.date)}`,
@@ -98,7 +98,7 @@ const SECTIONS = [
   {
     id: 'marriageAnniversaries',
     title: 'Marriage Anniversaries',
-    icon: '💍',
+    icon: 'heart',
     accent: '#E11D48',
     empty: 'Marriage anniversary data is currently unavailable.',
     line: (it) => `Marriage Anniversary · ${longDate(it.date)}`,
@@ -158,7 +158,7 @@ export const EmployeeBdayAnniversaryScreen = () => {
   const renderCard = (section, it, key) => (
     <View key={key} style={[styles.card, { backgroundColor: theme.surface || '#FFFFFF', borderColor: theme.border }]}>
       <View style={[styles.cardIcon, { backgroundColor: `${section.accent}18` }]}>
-        <Text style={styles.cardIconText}>{section.icon}</Text>
+        <Ionicons name={section.icon} size={20} color={section.accent} />
       </View>
       <View style={styles.cardBody}>
         <Text style={[styles.cardName, { color: theme.textPrimary }]} numberOfLines={1}>{clean(it.name) || PLACEHOLDER}</Text>
@@ -204,7 +204,7 @@ export const EmployeeBdayAnniversaryScreen = () => {
 
         {!isLoading && error ? (
           <Card style={styles.card}>
-            <Text style={[styles.errorText, { color: theme.error }]}>⚠️ {error}</Text>
+            <Text style={[styles.errorText, { color: theme.error }]}><Ionicons name="alert-circle" size={13} /> {error}</Text>
             <Button title="Retry" onPress={() => load(false)} variant="outline" size="small" style={{ marginTop: 12 }} />
           </Card>
         ) : null}
@@ -236,7 +236,7 @@ export const EmployeeBdayAnniversaryScreen = () => {
               return (
                 <View key={section.id} style={styles.section}>
                   <View style={styles.sectionHeader}>
-                    <Text style={styles.sectionIcon}>{section.icon}</Text>
+                    <Ionicons name={section.icon} size={16} color={section.accent} />
                     <Text style={[styles.sectionTitle, { color: theme.textPrimary }]}>{section.title}</Text>
                     <View style={[styles.sectionCount, { backgroundColor: `${section.accent}18` }]}>
                       <Text style={[styles.sectionCountText, { color: section.accent }]}>{totals[section.id]}</Text>
@@ -279,7 +279,6 @@ const styles = StyleSheet.create({
 
   section: { marginBottom: 18 },
   sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
-  sectionIcon: { fontSize: 16 },
   sectionTitle: { flex: 1, fontSize: 14.5, fontWeight: '800' },
   sectionCount: { paddingHorizontal: 9, paddingVertical: 2, borderRadius: 999, minWidth: 28, alignItems: 'center' },
   sectionCountText: { fontSize: 11, fontWeight: '800' },
@@ -289,7 +288,6 @@ const styles = StyleSheet.create({
     borderRadius: 14, borderWidth: 1, padding: 12, marginBottom: 8, gap: 10,
   },
   cardIcon: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
-  cardIconText: { fontSize: 18 },
   cardBody: { flex: 1, gap: 2 },
   cardName: { fontSize: 13.5, fontWeight: '700' },
   cardRole: { fontSize: 11 },

@@ -484,7 +484,7 @@ export const EmployeeAttendanceScreen = () => {
 
         {!isLoading && error ? (
           <Card style={styles.card}>
-            <Text style={[styles.errorText, { color: theme.error }]}>⚠️ {error}</Text>
+            <Text style={[styles.errorText, { color: theme.error }]}><Ionicons name="alert-circle" size={13} /> {error}</Text>
             <Button title="Retry" onPress={() => load(false, month)} variant="outline" size="small" style={{ marginTop: 12 }} />
           </Card>
         ) : null}
@@ -781,13 +781,13 @@ export const EmployeeAttendanceScreen = () => {
                 && graceForDay.remaining.grace1hr === 0
                 && graceForDay.remaining.grace2hr === 0;
               return (
-                <View>
+                <ScrollView contentContainerStyle={styles.sheetScroll} showsVerticalScrollIndicator={false}>
                   <View style={styles.sheetHeader}>
                     <Text style={[styles.sheetTitle, { color: theme.textPrimary }]}>
                       {`${shortDate(pickedDay.key)} (${dayName(pickedDay.key)})`}
                     </Text>
                     <TouchableOpacity onPress={() => setPickedDay(null)} hitSlop={{ top: 12, left: 12, bottom: 12, right: 12 }}>
-                      <Text style={[styles.sheetClose, { color: theme.textSecondary }]}>✕</Text>
+                      <Ionicons name="close" size={18} color={theme.textSecondary} />
                     </TouchableOpacity>
                   </View>
                   <View style={[styles.sheetBadge, { backgroundColor: `${color}18`, borderColor: color }]}>
@@ -910,7 +910,7 @@ export const EmployeeAttendanceScreen = () => {
                       </Text>
                     </View>
                   ) : null}
-                </View>
+                </ScrollView>
               );
             })()}
           </View>
@@ -973,12 +973,12 @@ const styles = StyleSheet.create({
   lateBadge: { fontSize: 11, fontWeight: '800' },
   lateMeta: { fontSize: 10.5, marginTop: 2 },
   graceRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 },
-  graceName: { fontSize: 11.5, width: 92, fontWeight: '600' },
-  graceBarTrack: { flexDirection: 'row', gap: 4, flex: 1 },
+  graceName: { fontSize: 11.5, width: 92, flexShrink: 1, fontWeight: '600' },
+  graceBarTrack: { flexDirection: 'row', gap: 4, flex: 1, flexWrap: 'wrap' },
   gracePip: { width: 18, height: 8, borderRadius: 4 },
-  graceText: { fontSize: 10.5, width: 74, textAlign: 'right' },
+  graceText: { fontSize: 10.5, width: 74, flexShrink: 1, textAlign: 'right' },
   attRow: { flexDirection: 'row', alignItems: 'center', borderTopWidth: 1, borderTopColor: '#EEE', paddingVertical: 8, gap: 8 },
-  attDateCol: { width: 58 },
+  attDateCol: { width: 58, flexShrink: 1 },
   attDay: { fontSize: 11, fontWeight: '700' },
   attDate: { fontSize: 10 },
   attPunchCol: { flex: 1, gap: 1 },
@@ -990,10 +990,10 @@ const styles = StyleSheet.create({
   empty: { fontSize: 12, textAlign: 'center', paddingVertical: 14 },
   sheetBackdrop: { flex: 1, backgroundColor: 'rgba(15,23,42,0.45)', justifyContent: 'flex-end' },
   sheetDismiss: { flex: 1 },
-  sheet: { backgroundColor: '#FFFFFF', borderTopLeftRadius: 18, borderTopRightRadius: 18, padding: 16, gap: 8 },
+  sheet: { backgroundColor: '#FFFFFF', borderTopLeftRadius: 18, borderTopRightRadius: 18, padding: 16, maxHeight: '85%' },
+  sheetScroll: { paddingBottom: 16, gap: 8 },
   sheetHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   sheetTitle: { fontSize: 15, fontWeight: '800' },
-  sheetClose: { fontSize: 15, fontWeight: '700' },
   sheetBadge: { alignSelf: 'flex-start', paddingHorizontal: 10, paddingVertical: 3, borderRadius: 999, borderWidth: 1, marginBottom: 4 },
   sheetBadgeText: { fontSize: 10.5, fontWeight: '800' },
   sheetRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 4 },

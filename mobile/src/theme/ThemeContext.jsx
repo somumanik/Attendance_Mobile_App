@@ -61,6 +61,18 @@ const lightTheme = {
   secondaryLight: '#14B8A6',    // Teal-500
   secondaryContainer: '#CCFBF1', // Teal-100
   
+  // Accent palette (colourful module accents - blue/violet/teal/coral/amber)
+  accentBlue: '#2563EB',
+  accentBlueContainer: '#DBEAFE',
+  accentViolet: '#7C3AED',
+  accentVioletContainer: '#EDE9FE',
+  accentTeal: '#0D9488',
+  accentTealContainer: '#CCFBF1',
+  accentCoral: '#F43F5E',
+  accentCoralContainer: '#FFE4E6',
+  accentAmber: '#F59E0B',
+  accentAmberContainer: '#FEF3C7',
+  
   // Semantic colors
   success: '#059669',           // Emerald-600
   successLight: '#10B981',      // Emerald-500
@@ -151,6 +163,18 @@ const darkTheme = {
   secondary: '#2DD4BF',         // Teal-400
   secondaryLight: '#5EEAD4',    // Teal-300
   secondaryContainer: '#134E4A', // Dark teal
+  
+  // Accent palette (colourful module accents - blue/violet/teal/coral/amber)
+  accentBlue: '#60A5FA',
+  accentBlueContainer: '#1E3A5F',
+  accentViolet: '#A78BFA',
+  accentVioletContainer: '#2E1065',
+  accentTeal: '#2DD4BF',
+  accentTealContainer: '#134E4A',
+  accentCoral: '#FB7185',
+  accentCoralContainer: '#4C0519',
+  accentAmber: '#FBBF24',
+  accentAmberContainer: '#451A03',
   
   // Semantic colors
   success: '#34D399',           // Emerald-400

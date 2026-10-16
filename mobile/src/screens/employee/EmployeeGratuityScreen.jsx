@@ -223,7 +223,7 @@ export const EmployeeGratuityScreen = () => {
 
         {!isLoading && error ? (
           <Card style={styles.card}>
-            <Text style={[styles.errorText, { color: theme.error }]}>⚠️ {error}</Text>
+            <Text style={[styles.errorText, { color: theme.error }]}><Ionicons name="alert-circle" size={13} /> {error}</Text>
             <Button title="Retry" onPress={() => load(false)} variant="outline" size="small" style={{ marginTop: 12 }} />
           </Card>
         ) : null}
@@ -311,7 +311,7 @@ export const EmployeeGratuityScreen = () => {
               />
               {result && result.invalid ? (
                 <Text style={[styles.warnText, { color: theme.error }]}>
-                  ⚠️ Proposed leaving date is before your joining date.
+                  <Ionicons name="alert-circle" size={13} /> Proposed leaving date is before your joining date.
                 </Text>
               ) : null}
             </Card>

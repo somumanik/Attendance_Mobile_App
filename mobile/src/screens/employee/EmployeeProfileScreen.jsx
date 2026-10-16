@@ -30,10 +30,12 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { Ionicons } from '@expo/vector-icons';
 import { View, Text, ScrollView, StyleSheet, TouchableOpacity, TextInput, ActivityIndicator } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { COLORS, TYPOGRAPHY, SPACING, SHADOWS } from '../../utils/colors';
 import { ScreenContainer } from '../../components/ScreenContainer';
+import { TintIcon } from '../../components/TintIcon';
 import { Button } from '../../components/Button';
 import { PlaceholderCard } from '../../components/PlaceholderCard';
 import { LogoutButton } from '../../components/LogoutButton';
@@ -206,7 +208,7 @@ export const EmployeeProfileScreen = () => {
     return (
       <ScreenContainer title="My Profile" showHeader={true} rightAction={<LogoutButton />}>
         <View style={styles.loadingContainer}>
-          <Text style={[styles.loadingText, { color: COLORS.error }]}>⚠️ {loadError || 'Profile not found.'}</Text>
+          <Text style={[styles.loadingText, { color: COLORS.error }]}><Ionicons name="alert-circle" size={13} /> {loadError || 'Profile not found.'}</Text>
           <Button title="Retry" onPress={() => loadProfile(true)} variant="outline" size="small" style={{ marginTop: 12 }} />
         </View>
       </ScreenContainer>
@@ -225,7 +227,7 @@ export const EmployeeProfileScreen = () => {
 
   return (
     <ScreenContainer title="My Profile" showHeader={true} rightAction={<LogoutButton />}>
-      <ScrollView contentContainerStyle={styles.scrollContent}>
+      <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
         {/* Profile Header — real authenticated employee */}
         <View style={styles.profileHeader}>
           <View style={styles.avatarContainer}>
@@ -323,7 +325,7 @@ export const EmployeeProfileScreen = () => {
                 : { backgroundColor: COLORS.error + '12', borderColor: COLORS.error + '33' },
             ]}>
               <Text style={[styles.formMsgText, { color: formMessage.kind === 'ok' ? COLORS.success : COLORS.error }]}>
-                {formMessage.kind === 'ok' ? '✅' : '⚠️'} {formMessage.text}
+                {formMessage.kind === 'ok' ? <Ionicons name="checkmark-circle" size={13} /> : <Ionicons name="alert-circle" size={13} />} {formMessage.text}
               </Text>
             </View>
           ) : null}
@@ -389,7 +391,7 @@ export const EmployeeProfileScreen = () => {
             activeOpacity={0.9}
           >
             <View style={styles.securityLeft}>
-              <Text style={styles.securityIcon}>🔑</Text>
+              <TintIcon name="key" color={COLORS.accentAmber || '#F59E0B'} size={40} iconSize={20} radius={12} style={styles.securityIcon} />
               <View>
                 <Text style={styles.securityTitle}>Change Password</Text>
                 <Text style={[styles.securitySubtitle, TYPOGRAPHY.caption]}>
@@ -405,7 +407,7 @@ export const EmployeeProfileScreen = () => {
             activeOpacity={0.9}
           >
             <View style={styles.securityLeft}>
-              <Text style={styles.securityIcon}>🔐</Text>
+              <TintIcon name="lock-closed" color={COLORS.accentViolet || '#7C3AED'} size={40} iconSize={20} radius={12} style={styles.securityIcon} />
               <View>
                 <Text style={styles.securityTitle}>
                   {pinConfigured ? 'Change 4-Digit PIN' : 'Create 4-Digit PIN'}
@@ -492,7 +494,7 @@ const styles = StyleSheet.create({
     padding: SPACING.md, borderRadius: 12, borderWidth: 1,
   },
   securityLeft: { flexDirection: 'row', alignItems: 'center', gap: SPACING.md },
-  securityIcon: { fontSize: 20 },
+  securityIcon: { marginRight: 12 },
   securityTitle: { color: COLORS.textPrimary, fontWeight: '700', fontSize: 13.5 },
   securitySubtitle: { color: COLORS.textTertiary },
   securityArrow: { fontSize: 22, color: COLORS.textTertiary },

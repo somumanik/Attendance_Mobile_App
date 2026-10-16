@@ -640,6 +640,7 @@ export async function listSalaryMaster(pool, { search, limit = 200, companyScope
   }
   const r = await request.query(`
     SELECT TOP (@limit) m.id, LTRIM(RTRIM(m.paycode)) AS paycode, LTRIM(RTRIM(e.empname)) AS empname,
+           LTRIM(RTRIM(e.presentcardno)) AS presentcardno, LTRIM(RTRIM(e.companycode)) AS companycode,
            m.effectivefrom, m.basicsalary, m.pfapplicable, m.esiapplicable, m.pfwage, m.esiwage,
            m.updateddate, m.updatedby
     FROM ${SALARY_MASTER_TABLE} m
@@ -648,6 +649,7 @@ export async function listSalaryMaster(pool, { search, limit = 200, companyScope
     ORDER BY m.paycode, m.effectivefrom DESC`);
   return (r.recordset || []).map((x) => ({
     id: x.id, paycode: clean(x.paycode), empname: clean(x.empname),
+    presentcardno: clean(x.presentcardno), companycode: clean(x.companycode),
     effectivefrom: toIsoDate(x.effectivefrom), basicsalary: round2(x.basicsalary),
     pfapplicable: Boolean(x.pfapplicable), esiapplicable: Boolean(x.esiapplicable),
     pfwage: round2(x.pfwage), esiwage: round2(x.esiwage),
@@ -676,6 +678,7 @@ export async function listSalaryElements(pool, { paycode, search, limit = 300, c
   }
   const r = await request.query(`
     SELECT TOP (@limit) x.id, LTRIM(RTRIM(x.paycode)) AS paycode, LTRIM(RTRIM(e.empname)) AS empname,
+           LTRIM(RTRIM(e.presentcardno)) AS presentcardno, LTRIM(RTRIM(e.companycode)) AS companycode,
            LTRIM(RTRIM(x.payelementcode)) AS payelementcode, x.payelementname,
            LTRIM(RTRIM(x.payelementtype)) AS payelementtype, LTRIM(RTRIM(x.calculationtype)) AS calculationtype,
            x.amount, x.percentage, x.percentagebase, x.effectivefrom
@@ -685,6 +688,7 @@ export async function listSalaryElements(pool, { paycode, search, limit = 300, c
     ORDER BY x.paycode, x.payelementcode, x.effectivefrom DESC`);
   return (r.recordset || []).map((x) => ({
     id: x.id, paycode: clean(x.paycode), empname: clean(x.empname),
+    presentcardno: clean(x.presentcardno), companycode: clean(x.companycode),
     payelementcode: clean(x.payelementcode), payelementname: clean(x.payelementname),
     payelementtype: clean(x.payelementtype), calculationtype: clean(x.calculationtype),
     amount: x.amount === null ? null : round2(x.amount),

@@ -23,10 +23,12 @@
  */
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { Ionicons } from '@expo/vector-icons';
 import { View, Text, ScrollView, StyleSheet, TouchableOpacity, RefreshControl, ActivityIndicator, TextInput } from 'react-native';
 import { COLORS, TYPOGRAPHY, SPACING, SHADOWS } from '../../utils/colors';
 import { ScreenContainer } from '../../components/ScreenContainer';
 import { StatCard } from '../../components/StatCard';
+import { TintIcon } from '../../components/TintIcon';
 import { PlaceholderCard } from '../../components/PlaceholderCard';
 import { LogoutButton } from '../../components/LogoutButton';
 import { Button } from '../../components/Button';
@@ -376,7 +378,7 @@ const ascendingByDate = (list) => (Array.isArray(list) ? list : [])
 
   return (
     <ScreenContainer title="Executive Overview" showHeader={true} rightAction={<LogoutButton />}>
-      <ScrollView
+      <ScrollView keyboardShouldPersistTaps="handled"
         refreshControl={
           <RefreshControl refreshing={isRefreshing} onRefresh={handleRefresh} colors={[COLORS.primary]} />
         }
@@ -393,7 +395,7 @@ const ascendingByDate = (list) => (Array.isArray(list) ? list : [])
         {/* Error state — retry ke saath, fake fallback NAHI */}
         {!loading && error ? (
           <View style={styles.errorBox}>
-            <Text style={styles.errorText}>⚠️ {error}</Text>
+            <Text style={styles.errorText}><Ionicons name="alert-circle" size={13} /> {error}</Text>
             <Button title="Retry" onPress={() => loadDashboard(false)} variant="outline" size="small" style={styles.retryButton} />
           </View>
         ) : null}
@@ -402,7 +404,7 @@ const ascendingByDate = (list) => (Array.isArray(list) ? list : [])
             an API error can never be mistaken for a genuine "no records" result. */}
         {!loading && !error && partialError ? (
           <View style={styles.errorBox}>
-            <Text style={styles.errorText}>⚠️ Some dashboard sections could not load — {partialError}</Text>
+            <Text style={styles.errorText}><Ionicons name="alert-circle" size={13} /> Some dashboard sections could not load — {partialError}</Text>
             <Button title="Retry" onPress={() => loadDashboard(false)} variant="outline" size="small" style={styles.retryButton} />
           </View>
         ) : null}
@@ -412,10 +414,10 @@ const ascendingByDate = (list) => (Array.isArray(list) ? list : [])
         {/* Notifications Bar - Today's Celebrations (real DOB/DOJ se) */}
         <View style={styles.notificationBar}>
           <View style={styles.notificationHeader}>
-            <Text style={styles.notificationIcon}>🔔</Text>
+            <TintIcon name="notifications" color={COLORS.accentCoral || '#F43F5E'} size={36} iconSize={19} radius={11} style={{ marginRight: SPACING.sm }} />
             <Text style={styles.notificationTitle}>Today's Celebrations</Text>
             <TouchableOpacity style={styles.viewAllLink}>
-              <Text style={styles.viewAllText}>View All →</Text>
+              <Text style={styles.viewAllText}>View All <Ionicons name="chevron-forward" size={12} /></Text>
             </TouchableOpacity>
           </View>
           
@@ -425,7 +427,7 @@ const ascendingByDate = (list) => (Array.isArray(list) ? list : [])
             ) : null}
             {celebrations.birthdays.map((emp, i) => (
               <View key={`bday-${i}`} style={styles.celebrationItem}>
-                <Text style={styles.celebrationIcon}>🎂</Text>
+                <TintIcon name="gift" color="#DB2777" size={36} iconSize={18} radius={11} style={{ marginRight: SPACING.md }} />
                 <View>
                   <Text style={styles.celebrationName}>{emp.empname}</Text>
                   <Text style={styles.celebrationDept}>{emp.departmentcode || emp.paycode} • Birthday</Text>
@@ -434,7 +436,7 @@ const ascendingByDate = (list) => (Array.isArray(list) ? list : [])
             ))}
             {celebrations.workAnniversaries.map((emp, i) => (
               <View key={`wanniv-${i}`} style={styles.celebrationItem}>
-                <Text style={styles.celebrationIcon}>🏆</Text>
+                <TintIcon name="trophy" color="#D97706" size={36} iconSize={18} radius={11} style={{ marginRight: SPACING.md }} />
                 <View>
                   <Text style={styles.celebrationName}>{emp.empname}</Text>
                   <Text style={styles.celebrationDept}>
@@ -445,7 +447,7 @@ const ascendingByDate = (list) => (Array.isArray(list) ? list : [])
             ))}
             {celebrations.marriageAnniversaries.map((emp, i) => (
               <View key={`manniv-${i}`} style={styles.celebrationItem}>
-                <Text style={styles.celebrationIcon}>💍</Text>
+                <TintIcon name="heart" color="#E11D48" size={36} iconSize={18} radius={11} style={{ marginRight: SPACING.md }} />
                 <View>
                   <Text style={styles.celebrationName}>{emp.empname}</Text>
                   <Text style={styles.celebrationDept}>{emp.departmentcode || emp.paycode} • Marriage Anniversary</Text>
@@ -461,35 +463,35 @@ const ascendingByDate = (list) => (Array.isArray(list) ? list : [])
             title="Total Staff"
             value={stats.totalStaff}
             subtitle="Active Employees"
-            icon="👥"
+            icon="people"
             color={COLORS.primary}
           />
           <StatCard
             title="Punched Today"
             value={stats.punchedToday}
             subtitle={stats.totalStaff ? `${Math.round((stats.punchedToday / stats.totalStaff) * 100)}%` : '0%'}
-            icon="👆"
+            icon="finger-print"
             color={COLORS.success}
           />
           <StatCard
             title="Absent Today"
             value={stats.absentToday}
             subtitle={stats.totalStaff ? `${Math.round((stats.absentToday / stats.totalStaff) * 100)}%` : '0%'}
-            icon="🚫"
+            icon="person-remove"
             color={COLORS.error}
           />
           <StatCard
             title="Miss Punch"
             value={stats.missToday}
             subtitle="Needs Review"
-            icon="⚠️"
+            icon="warning"
             color={COLORS.warning}
           />
           <StatCard
             title="Late Today"
             value={stats.lateToday}
             subtitle="Tap to view"
-            icon="⏰"
+            icon="time"
             color={COLORS.error}
             onPress={openLateEmployees}
           />
@@ -585,7 +587,7 @@ const ascendingByDate = (list) => (Array.isArray(list) ? list : [])
           onPress={openCredentialManagement}
           variant="primary"
           size="medium"
-          leftIcon={<Text style={styles.credentialIcon}>🔑</Text>}
+          leftIcon={<Ionicons name="key" size={18} color="#FFFFFF" />}
           style={styles.credentialButton}
         />
 
@@ -695,11 +697,11 @@ const ascendingByDate = (list) => (Array.isArray(list) ? list : [])
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Late Today ({lateData.late})</Text>
               <TouchableOpacity onPress={() => setLateOpen(false)} hitSlop={{ top: 12, left: 12, bottom: 12, right: 12 }}>
-                <Text style={styles.modalClose}>✕</Text>
+                <Ionicons name="close" size={20} color={COLORS.textSecondary} />
               </TouchableOpacity>
             </View>
 
-            <ScrollView style={styles.modalBody}>
+            <ScrollView style={styles.modalBody} keyboardShouldPersistTaps="handled">
               {lateLoading ? (
                 <View style={styles.modalState}>
                   <ActivityIndicator color={COLORS.primary} />
@@ -709,7 +711,7 @@ const ascendingByDate = (list) => (Array.isArray(list) ? list : [])
 
               {!lateLoading && lateError ? (
                 <View style={styles.errorBox}>
-                  <Text style={styles.errorText}>⚠️ {lateError}</Text>
+                  <Text style={styles.errorText}><Ionicons name="alert-circle" size={13} /> {lateError}</Text>
                 </View>
               ) : null}
 
@@ -745,14 +747,14 @@ const ascendingByDate = (list) => (Array.isArray(list) ? list : [])
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Employee Attendance Audit</Text>
               <TouchableOpacity onPress={() => { setBiDetail(null); setBiDetailError(null); }} hitSlop={{ top: 12, left: 12, bottom: 12, right: 12 }}>
-                <Text style={styles.modalClose}>✕</Text>
+                <Ionicons name="close" size={20} color={COLORS.textSecondary} />
               </TouchableOpacity>
             </View>
             {/* Month-wise historical attendance for the same employee. */}
             <View style={styles.modalMonthBar}>
               <MonthNavigator month={biMonth} onChange={changeBiMonth} />
             </View>
-            <ScrollView style={styles.modalBody}>
+            <ScrollView style={styles.modalBody} keyboardShouldPersistTaps="handled">
               {biDetailLoading ? (
                 <View style={styles.modalState}>
                   <ActivityIndicator color={COLORS.primary} />
@@ -761,7 +763,7 @@ const ascendingByDate = (list) => (Array.isArray(list) ? list : [])
               ) : null}
               {!biDetailLoading && biDetailError ? (
                 <View style={styles.errorBox}>
-                  <Text style={styles.errorText}>⚠️ {biDetailError}</Text>
+                  <Text style={styles.errorText}><Ionicons name="alert-circle" size={13} /> {biDetailError}</Text>
                 </View>
               ) : null}
 
@@ -948,7 +950,6 @@ const styles = StyleSheet.create({
     borderBottomColor: COLORS.border,
   },
   modalTitle: { fontSize: 15, fontWeight: '700', color: COLORS.textPrimary },
-  modalClose: { fontSize: 18, color: COLORS.textSecondary, fontWeight: '700' },
   modalBody: { padding: SPACING.md, maxHeight: 420 },
   modalState: { alignItems: 'center', paddingVertical: SPACING.lg, gap: 8 },
   lateRow: {
@@ -958,8 +959,8 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   lateLine1: { flexDirection: 'row', alignItems: 'center', gap: SPACING.sm },
-  latePaycode: { fontSize: 12, fontWeight: '700', color: COLORS.textPrimary, width: 64 },
-  lateName: { flex: 1, fontSize: 13, fontWeight: '600', color: COLORS.textPrimary },
+  latePaycode: { fontSize: 12, fontWeight: '700', color: COLORS.textPrimary, width: 64, flexShrink: 1 },
+  lateName: { flex: 1, minWidth: 0, fontSize: 13, fontWeight: '600', color: COLORS.textPrimary },
   lateLine2: { flexDirection: 'row', alignItems: 'center', gap: SPACING.sm, paddingLeft: 72 },
   lateMeta: { fontSize: 11, color: COLORS.textSecondary },
   // Late Today drill-down: IN dark green, OUT dark red (a missing punch stays neutral).
@@ -977,12 +978,12 @@ const styles = StyleSheet.create({
     paddingBottom: 4,
   },
   bioHeadCell: { fontSize: 10, fontWeight: '700', color: COLORS.textSecondary, textTransform: 'uppercase' },
-  bioColId: { width: 62 },
-  bioColName: { flex: 1 },
-  bioColDept: { width: 74 },
-  bioColTime: { width: 78 },
-  bioColStatus: { width: 86 },
-  bioColAction: { width: 46, textAlign: 'right' },
+  bioColId: { width: 62, flexShrink: 1 },
+  bioColName: { flex: 1, minWidth: 0 },
+  bioColDept: { width: 74, flexShrink: 1 },
+  bioColTime: { width: 78, flexShrink: 1 },
+  bioColStatus: { width: 86, flexShrink: 1 },
+  bioColAction: { width: 46, flexShrink: 1, textAlign: 'right' },
   bioRow: {
     borderWidth: 1,
     borderColor: COLORS.border,
@@ -1133,9 +1134,6 @@ const styles = StyleSheet.create({
     marginBottom: SPACING.md,
     borderRadius: 14,
   },
-  credentialIcon: {
-    fontSize: 15,
-  },
   scrollContent: {
     paddingHorizontal: SPACING.lg,
     paddingBottom: SPACING.xxl,
@@ -1154,10 +1152,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     marginBottom: SPACING.md,
-  },
-  notificationIcon: {
-    fontSize: 20,
-    marginRight: SPACING.sm,
   },
   notificationTitle: {
     fontWeight: '700',
@@ -1185,10 +1179,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: SPACING.md,
     backgroundColor: COLORS.surface,
     borderRadius: 8,
-  },
-  celebrationIcon: {
-    fontSize: 20,
-    marginRight: SPACING.md,
   },
   celebrationName: {
     fontWeight: '600',
