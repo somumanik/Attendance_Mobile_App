@@ -46,7 +46,7 @@ import {
 // so the storage backend can be swapped later (Phase J section 7 keeps the seam
 // ready for a future Navision integration - no Navision code exists here).
 // Attendance, holiday and HR login paths do not import it.
-import { ensureLeaveTables, getLeaveProvider, listLeaveTypes, leaveYearLabel, currentLeaveYearStart } from './leave-service.js';
+import { ensureLeaveTables, getLeaveProvider, listLeaveTypes, leaveYearLabel, currentLeaveYearStart, listEmployeeOptions } from './leave-service.js';
 // Phase K: salary configuration/import + Full & Final estimation engine.
 // Same discipline as leave-service: application-owned HR_Salary* tables only.
 import {
@@ -1652,6 +1652,64 @@ app.get('/api/hr/leave/import-template', authenticate, requireRole('HR'), requir
     });
   } catch (error) { sendDbError(res, error); }
 });
+
+// ---- HR leave opening balances (independent CRUD) ----
+// Manages HR_LeaveBalance rows directly (add/edit/delete) with the same
+// authorization + company scoping as the Excel import, so HR can fix a single
+// entry without re-importing a whole workbook.
+
+// Lightweight active-employee options for the opening-balance add/edit picker.
+// Includes the resolved Employee Code (distinct from paycode) so the modal can
+// populate it on employee select.
+app.get('/api/hr/leave/employees', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const employees = await listEmployeeOptions(pool, { companyScope: req.hrCompanyScope });
+    res.json({ success: true, employees });
+  } catch (error) { sendDbError(res, error); }
+});
+
+app.get('/api/hr/leave/opening-balances', authenticate, requireRole('HR'), requireDbConfig,
+  withLeaveProvider(async ({ req, res, pool, provider }) => {
+    res.json({ success: true, ...(await provider.listOpeningBalances(pool, { leaveyear: req.query?.leaveyear, search: req.query?.search, limit: req.query?.limit, companyScope: req.hrCompanyScope })) });
+  }));
+
+app.post('/api/hr/leave/opening-balances', authenticate, requireRole('HR'), requireDbConfig,
+  withLeaveProvider(async ({ req, res, pool, provider }) => {
+    const outcome = await provider.upsertOpeningBalance(pool, {
+      paycode: req.body?.paycode,
+      leaveyear: req.body?.leaveyear,
+      leavetype: req.body?.leavetype,
+      openingbalance: req.body?.openingbalance,
+      employeecode: req.body?.employeecode,
+      actor: req.user?.sub,
+      companyScope: req.hrCompanyScope,
+    });
+    if (!outcome.ok) return res.status(outcome.status).json({ success: false, message: outcome.message, code: outcome.code });
+    res.status(outcome.created ? 201 : 200).json({ success: true, openingBalance: outcome });
+  }));
+
+app.delete('/api/hr/leave/opening-balances/:id', authenticate, requireRole('HR'), requireDbConfig,
+  withLeaveProvider(async ({ req, res, pool, provider }) => {
+    const outcome = await provider.deleteOpeningBalance(pool, { id: req.params?.id, actor: req.user?.sub, companyScope: req.hrCompanyScope });
+    if (!outcome.ok) return res.status(outcome.status).json({ success: false, message: outcome.message, code: outcome.code });
+    res.json({ success: true, message: 'Opening balance deleted.', deleted: outcome.deleted });
+  }));
+
+// ---- Leave type lifecycle (deactivate / permanent delete only when unused) ----
+app.post('/api/hr/leave/types/:code/status', authenticate, requireRole('HR'), requireDbConfig,
+  withLeaveProvider(async ({ req, res, pool, provider }) => {
+    const outcome = await provider.setTypeActive(pool, { leavetype: req.params?.code, active: req.body?.active !== false, actor: req.user?.sub });
+    if (!outcome.ok) return res.status(outcome.status).json({ success: false, message: outcome.message, code: outcome.code });
+    res.json({ success: true, leavetype: outcome.leavetype });
+  }));
+
+app.delete('/api/hr/leave/types/:code', authenticate, requireRole('HR'), requireDbConfig,
+  withLeaveProvider(async ({ req, res, pool, provider }) => {
+    const outcome = await provider.deleteType(pool, { leavetype: req.params?.code, actor: req.user?.sub });
+    if (!outcome.ok) return res.status(outcome.status).json({ success: false, message: outcome.message, code: outcome.code });
+    res.json({ success: true, message: 'Leave type deleted.', deleted: outcome.deleted });
+  }));
 
 // ---- Employee 4-digit PIN (Phase 3A.8) ----
 // The employee is taken from the verified JWT (req.user.paycode) on EVERY call.

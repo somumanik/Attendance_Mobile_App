@@ -335,6 +335,60 @@ export async function addLeaveType(pool, { leavetype, typename, sortorder, actor
   return { ok: true, leavetype: { ...r.recordset[0], active: true } };
 }
 
+/**
+ * Activate or deactivate a leave type. Deactivation is preferred over deletion when
+ * the type is already referenced by historical balances/requests, so history stays
+ * intact.
+ */
+export async function setLeaveTypeActive(pool, { leavetype, active, actor }) {
+  await ensureLeaveTables(pool);
+  const code = clean(leavetype);
+  if (!code) return { ok: false, status: 400, code: 'TYPE_REQUIRED', message: 'Leave type code is required.' };
+  const existing = await pool.request().input('code', sql.NVarChar(10), code)
+    .query(`SELECT TOP 1 id, leavetype, typename, sortorder, active
+            FROM ${LEAVE_TYPES_TABLE} WHERE LTRIM(RTRIM(leavetype)) = @code`);
+  if (!existing.recordset?.[0]) {
+    return { ok: false, status: 404, code: 'NOT_FOUND', message: `Leave type "${code}" not found.` };
+  }
+  await pool.request()
+    .input('code', sql.NVarChar(10), code)
+    .input('active', sql.Bit, active ? 1 : 0)
+    .query(`UPDATE ${LEAVE_TYPES_TABLE} SET active = @active WHERE LTRIM(RTRIM(leavetype)) = @code`);
+  return { ok: true, leavetype: { ...existing.recordset[0], active: Boolean(active) } };
+}
+
+/**
+ * Permanently delete a leave type ONLY when it is unused. A type referenced by
+ * opening balances or leave requests cannot be deleted — it is blocked with a clear
+ * reason and HR is pointed at deactivation instead, so historical records are never
+ * corrupted.
+ */
+export async function deleteLeaveType(pool, { leavetype, actor }) {
+  await ensureLeaveTables(pool);
+  const code = clean(leavetype);
+  if (!code) return { ok: false, status: 400, code: 'TYPE_REQUIRED', message: 'Leave type code is required.' };
+  const existing = await pool.request().input('code', sql.NVarChar(10), code)
+    .query(`SELECT TOP 1 id FROM ${LEAVE_TYPES_TABLE} WHERE LTRIM(RTRIM(leavetype)) = @code`);
+  if (!existing.recordset?.[0]) {
+    return { ok: false, status: 404, code: 'NOT_FOUND', message: `Leave type "${code}" not found.` };
+  }
+  const usageBalance = await pool.request().input('code', sql.NVarChar(10), code)
+    .query(`SELECT TOP 1 id FROM ${LEAVE_BALANCE_TABLE} WHERE LTRIM(RTRIM(leavetype)) = @code`);
+  const usageRequest = await pool.request().input('code', sql.NVarChar(10), code)
+    .query(`SELECT TOP 1 id FROM ${LEAVE_REQUEST_TABLE} WHERE LTRIM(RTRIM(leavetype)) = @code`);
+  if (usageBalance.recordset?.[0] || usageRequest.recordset?.[0]) {
+    return {
+      ok: false,
+      status: 409,
+      code: 'TYPE_IN_USE',
+      message: `Leave type "${code}" is already used by opening balances or leave requests. Deactivate it instead of deleting, so historical records stay intact.`,
+    };
+  }
+  await pool.request().input('code', sql.NVarChar(10), code)
+    .query(`DELETE FROM ${LEAVE_TYPES_TABLE} WHERE LTRIM(RTRIM(leavetype)) = @code`);
+  return { ok: true, deleted: code };
+}
+
 /* ------------------------------------------------------------------ */
 /* Company configuration                                               */
 /* ------------------------------------------------------------------ */
@@ -425,6 +479,81 @@ async function getMappingByPaycode(pool, paycode) {
     .query(`SELECT TOP 1 LTRIM(RTRIM(employeecode)) AS employeecode, LTRIM(RTRIM(paycode)) AS paycode
             FROM ${EMPLOYEE_CODE_MAPPING_TABLE} WHERE LTRIM(RTRIM(paycode)) = @paycode`);
   return r.recordset?.[0] || null;
+}
+
+/**
+ * Validate + persist an EmployeeCode <-> paycode mapping (application-owned).
+ * EmployeeCode is the external/HR code and is DISTINCT from paycode. A code is only
+ * saved when explicitly provided (never invented); a code already owned by a
+ * different employee is rejected so the master mapping stays consistent.
+ * Returns { ok:true, employeecode } or { ok:false, status, code, message }.
+ */
+export async function upsertEmployeeCodeMapping(pool, { paycode, employeecode, actor }) {
+  const p = clean(paycode);
+  const rawCode = clean(employeecode);
+  if (!rawCode) return { ok: true, employeecode: '' }; // nothing provided -> mapping untouched
+  if (rawCode.length > 50) {
+    return { ok: false, status: 400, code: 'EMPLOYEE_CODE_TOO_LONG', message: 'Employee Code must be 50 characters or fewer.' };
+  }
+  const codeKey = rawCode.toUpperCase();
+  // A code already mapped to a DIFFERENT employee is a conflict.
+  const byCode = await getMappingByCode(pool, codeKey);
+  if (byCode && clean(byCode.paycode).toUpperCase() !== p.toUpperCase()) {
+    return {
+      ok: false,
+      status: 409,
+      code: 'EMPLOYEE_CODE_CONFLICT',
+      message: `Employee Code "${rawCode}" is already mapped to paycode ${clean(byCode.paycode)}. Clear or correct that mapping first.`,
+    };
+  }
+  const byPaycode = await getMappingByPaycode(pool, p);
+  const by = clean(actor).slice(0, 50);
+  if (byPaycode) {
+    if (clean(byPaycode.employeecode).toUpperCase() !== codeKey) {
+      await pool.request()
+        .input('code', sql.NVarChar(50), codeKey)
+        .input('paycode', sql.NVarChar(50), p)
+        .input('by', sql.NVarChar(50), by)
+        .query(`UPDATE ${EMPLOYEE_CODE_MAPPING_TABLE}
+                SET employeecode = @code, updateddate = SYSUTCDATETIME(), updatedby = @by
+                WHERE LTRIM(RTRIM(paycode)) = @paycode`);
+    }
+  } else {
+    await pool.request()
+      .input('code', sql.NVarChar(50), codeKey)
+      .input('paycode', sql.NVarChar(50), p)
+      .input('by', sql.NVarChar(50), by)
+      .query(`INSERT INTO ${EMPLOYEE_CODE_MAPPING_TABLE} (employeecode, paycode, updatedby)
+              VALUES (@code, @paycode, @by)`);
+  }
+  return { ok: true, employeecode: codeKey };
+}
+
+/**
+ * Active employees + their mapped EmployeeCode (for the opening-balance picker).
+ * EmployeeCode is resolved from the application-owned code mapping via paycode.
+ */
+export async function listEmployeeOptions(pool, { companyScope } = {}) {
+  await ensureLeaveTables(pool);
+  const scope = companyScopeFragment('e', companyScope);
+  if (scope.denied) return [];
+  const r = await pool.request().query(`
+    SELECT TOP (20000) LTRIM(RTRIM(e.paycode)) AS paycode,
+           LTRIM(RTRIM(e.presentcardno)) AS presentcardno,
+           LTRIM(RTRIM(e.empname)) AS empname,
+           LTRIM(RTRIM(e.companycode)) AS companycode,
+           LTRIM(RTRIM(m.employeecode)) AS employeecode
+    FROM dbo.tblemployee e
+    LEFT JOIN ${EMPLOYEE_CODE_MAPPING_TABLE} m ON LTRIM(RTRIM(m.paycode)) = LTRIM(RTRIM(e.paycode))
+    WHERE LTRIM(RTRIM(e.active)) = 'Y'${scope.fragment}
+    ORDER BY e.empname, e.paycode`);
+  return (r.recordset || []).map((row) => ({
+    paycode: clean(row.paycode),
+    presentcardno: clean(row.presentcardno),
+    empname: clean(row.empname),
+    companycode: clean(row.companycode),
+    employeecode: clean(row.employeecode),
+  }));
 }
 
 /* ------------------------------------------------------------------ */
@@ -606,21 +735,261 @@ export async function listEmployeeBalances(pool, { leaveyear, search, limit = 10
     SELECT TOP (@limit) LTRIM(RTRIM(e.paycode)) AS paycode, LTRIM(RTRIM(e.empname)) AS empname,
            LTRIM(RTRIM(e.presentcardno)) AS presentcardno,
            LTRIM(RTRIM(e.companycode)) AS companycode,
+           LTRIM(RTRIM(m.employeecode)) AS employeecode,
            LTRIM(RTRIM(b.leavetype)) AS leavetype, b.openingbalance
     FROM dbo.tblemployee e
     JOIN ${LEAVE_BALANCE_TABLE} b ON LTRIM(RTRIM(b.paycode)) = LTRIM(RTRIM(e.paycode))
+    LEFT JOIN ${EMPLOYEE_CODE_MAPPING_TABLE} m ON LTRIM(RTRIM(m.paycode)) = LTRIM(RTRIM(e.paycode))
     ${where}
-    ORDER BY e.paycode, b.leavetype`);
+    ORDER BY e.empname, e.paycode, b.leavetype`);
+
+  // All configured types (active + inactive) so the per-employee math matches the
+  // single-employee balance view (getLeaveBalance) exactly.
+  const types = await listLeaveTypes(pool, { includeInactive: true });
+  const typeIndex = new Map(types.map((t) => [t.leavetype, t]));
+
+  // Used days (Approved + Pending) for the whole scoped population in this year.
+  const usedRequest = pool.request().input('year', sql.Int, year);
+  let usedWhere = `WHERE ISNULL(e.active, 'Y') <> 'N' AND r.leaveyear = @year
+                   AND LTRIM(RTRIM(r.status)) IN ('${LEAVE_STATUS.APPROVED}', '${LEAVE_STATUS.PENDING}')`;
+  usedWhere += scope.fragment;
+  const used = await usedRequest.query(`
+    SELECT LTRIM(RTRIM(r.paycode)) AS paycode, LTRIM(RTRIM(r.leavetype)) AS leavetype,
+           LTRIM(RTRIM(r.status)) AS status, SUM(r.days) AS days
+    FROM ${LEAVE_REQUEST_TABLE} r
+    JOIN dbo.tblemployee e ON LTRIM(RTRIM(e.paycode)) = LTRIM(RTRIM(r.paycode))
+    ${usedWhere}
+    GROUP BY LTRIM(RTRIM(r.paycode)), LTRIM(RTRIM(r.leavetype)), LTRIM(RTRIM(r.status))`);
+  const usedMap = new Map();
+  for (const u of used.recordset || []) {
+    usedMap.set(`${clean(u.paycode)}|${clean(u.leavetype)}|${clean(u.status)}`, Number(u.days) || 0);
+  }
 
   const grouped = new Map();
   for (const row of r.recordset || []) {
     const key = clean(row.paycode);
     if (!grouped.has(key)) {
-      grouped.set(key, { paycode: key, empname: clean(row.empname), presentcardno: clean(row.presentcardno), companycode: clean(row.companycode), types: [] });
+      grouped.set(key, {
+        paycode: key,
+        empname: clean(row.empname),
+        presentcardno: clean(row.presentcardno),
+        companycode: clean(row.companycode),
+        employeecode: clean(row.employeecode),
+        types: [],
+      });
     }
-    grouped.get(key).types.push({ leavetype: clean(row.leavetype), openingBalance: round2(row.openingbalance) });
+    const leavetype = clean(row.leavetype);
+    const tInfo = typeIndex.get(leavetype) || {};
+    const opening = round2(row.openingbalance);
+    const approved = round2(usedMap.get(`${key}|${leavetype}|${LEAVE_STATUS.APPROVED}`) || 0);
+    const pending = round2(usedMap.get(`${key}|${leavetype}|${LEAVE_STATUS.PENDING}`) || 0);
+    grouped.get(key).types.push({
+      leavetype,
+      typename: clean(tInfo.typename) || leavetype,
+      active: tInfo.active !== false,
+      openingBalance: opening,
+      approvedUsed: approved,
+      pending,
+      availableBalance: round2(opening - approved - pending),
+    });
   }
-  return { leaveyear: leaveYearLabel(year), employees: [...grouped.values()] };
+
+  const employees = [...grouped.values()].map((e) => ({
+    ...e,
+    totalAvailable: round2(e.types.reduce((a, t) => a + (t.active === false ? 0 : t.availableBalance), 0)),
+  }));
+  return { leaveyear: leaveYearLabel(year), employees };
+}
+
+/* ------------------------------------------------------------------ */
+/* Opening balances CRUD (independent of Excel import)                 */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Raw opening-balance rows (not grouped per employee) for the Opening Balances tab.
+ * Only configured/imported entries are returned; approved leave transactions are
+ * never merged here.
+ */
+export async function listOpeningBalances(pool, { leaveyear, search, limit = 200, companyScope }) {
+  await ensureLeaveTables(pool);
+  const parsed = parseLeaveYear(leaveyear);
+  const like = clean(search);
+  const request = pool.request().input('limit', sql.Int, Math.min(Number(limit) || 200, 1000));
+  let where = `WHERE ISNULL(e.active, 'Y') <> 'N'`;
+  const scope = companyScopeFragment('e', companyScope);
+  if (scope.denied) return { leaveyear: parsed.ok ? leaveYearLabel(parsed.startYear) : null, rows: [] };
+  where += scope.fragment;
+  if (parsed.ok) {
+    where += ` AND b.leaveyear = @year`;
+    request.input('year', sql.Int, parsed.startYear);
+  }
+  if (like) {
+    where += ` AND (e.paycode LIKE @like OR e.empname LIKE @like OR b.leavetype LIKE @like OR m.employeecode LIKE @like)`;
+    request.input('like', sql.NVarChar(60), `%${like}%`);
+  }
+  const r = await request.query(`
+    SELECT b.id, LTRIM(RTRIM(b.paycode)) AS paycode, LTRIM(RTRIM(m.employeecode)) AS employeecode,
+           LTRIM(RTRIM(e.empname)) AS empname, LTRIM(RTRIM(e.presentcardno)) AS presentcardno,
+           LTRIM(RTRIM(e.companycode)) AS companycode, b.leaveyear,
+           LTRIM(RTRIM(b.leavetype)) AS leavetype, LTRIM(RTRIM(t.typename)) AS typename,
+           b.openingbalance
+    FROM ${LEAVE_BALANCE_TABLE} b
+    JOIN dbo.tblemployee e ON LTRIM(RTRIM(e.paycode)) = LTRIM(RTRIM(b.paycode))
+    LEFT JOIN ${EMPLOYEE_CODE_MAPPING_TABLE} m ON LTRIM(RTRIM(m.paycode)) = LTRIM(RTRIM(b.paycode))
+    LEFT JOIN ${LEAVE_TYPES_TABLE} t ON LTRIM(RTRIM(t.leavetype)) = LTRIM(RTRIM(b.leavetype))
+    ${where}
+    ORDER BY e.empname, e.paycode, b.leaveyear, b.leavetype`);
+
+  return {
+    leaveyear: parsed.ok ? leaveYearLabel(parsed.startYear) : null,
+    rows: (r.recordset || []).map((row) => ({
+      id: row.id,
+      paycode: clean(row.paycode),
+      employeecode: clean(row.employeecode),
+      empname: clean(row.empname),
+      presentcardno: clean(row.presentcardno),
+      companycode: clean(row.companycode),
+      leaveyear: Number(row.leaveyear),
+      leavetype: clean(row.leavetype),
+      typename: clean(row.typename),
+      openingBalance: round2(row.openingbalance),
+    })),
+  };
+}
+
+/**
+ * Add or update an opening-balance entry.
+ * A duplicate (employee + leave year + leave type) is safely updated, never doubled.
+ */
+export async function upsertOpeningBalance(pool, { paycode, leaveyear, leavetype, openingbalance, employeecode, actor, companyScope }) {
+  await ensureLeaveTables(pool);
+  const p = clean(paycode);
+  if (!p) return { ok: false, status: 400, code: 'PAYCODE_REQUIRED', message: 'Employee is required.' };
+  const parsed = parseLeaveYear(leaveyear);
+  if (!parsed.ok) return { ok: false, status: 400, code: 'INVALID_YEAR', message: parsed.message };
+  const type = upper(leavetype);
+  if (!type) return { ok: false, status: 400, code: 'TYPE_REQUIRED', message: 'Leave type is required.' };
+  if (!(await leaveTypeExists(pool, type))) {
+    return { ok: false, status: 400, code: 'INVALID_LEAVE_TYPE', message: `Leave type "${type}" does not exist.` };
+  }
+  const opening = Number(openingbalance);
+  if (!Number.isFinite(opening)) {
+    return { ok: false, status: 400, code: 'INVALID_BALANCE', message: 'Opening balance must be a number.' };
+  }
+  if (opening < 0) {
+    return { ok: false, status: 400, code: 'NEGATIVE_BALANCE', message: 'Opening balance cannot be negative.' };
+  }
+
+  const employee = await findActiveEmployee(pool, p);
+  if (!employee) return { ok: false, status: 404, code: 'EMPLOYEE_NOT_FOUND', message: 'Employee not found or inactive.' };
+
+  const scopeList = (companyScope === null || companyScope === undefined)
+    ? null
+    : (Array.isArray(companyScope) ? companyScope.map((c) => String(c || '').trim().toUpperCase()).filter(Boolean) : []);
+  if (scopeList && (!scopeList.length || !scopeList.includes(clean(employee.companycode).toUpperCase()))) {
+    return { ok: false, status: 403, code: 'COMPANY_FORBIDDEN', message: 'Employee belongs to a company outside your access.' };
+  }
+
+  // Employee Code (external/HR code) is distinct from paycode. Validate + persist
+  // the master mapping so the Opening Balances table can resolve and display it.
+  const codeResult = await upsertEmployeeCodeMapping(pool, { paycode: p, employeecode, actor });
+  if (!codeResult.ok) return codeResult;
+
+  const year = parsed.startYear;
+  const existing = await pool.request()
+    .input('paycode', sql.NVarChar(50), p)
+    .input('year', sql.Int, year)
+    .input('type', sql.NVarChar(10), type)
+    .query(`SELECT TOP 1 id FROM ${LEAVE_BALANCE_TABLE}
+            WHERE LTRIM(RTRIM(paycode)) = @paycode AND leaveyear = @year AND LTRIM(RTRIM(leavetype)) = @type`);
+
+  let created = false;
+  if (existing.recordset?.[0]) {
+    await pool.request()
+      .input('id', sql.Int, existing.recordset[0].id)
+      .input('opening', sql.Decimal(9, 2), opening)
+      .input('by', sql.NVarChar(50), clean(actor).slice(0, 50))
+      .query(`UPDATE ${LEAVE_BALANCE_TABLE}
+              SET openingbalance = @opening, updateddate = SYSUTCDATETIME(), updatedby = @by
+              WHERE id = @id`);
+  } else {
+    await pool.request()
+      .input('paycode', sql.NVarChar(50), p)
+      .input('year', sql.Int, year)
+      .input('type', sql.NVarChar(10), type)
+      .input('opening', sql.Decimal(9, 2), opening)
+      .input('by', sql.NVarChar(50), clean(actor).slice(0, 50))
+      .query(`INSERT INTO ${LEAVE_BALANCE_TABLE} (paycode, leaveyear, leavetype, openingbalance, updatedby)
+              VALUES (@paycode, @year, @type, @opening, @by)`);
+    created = true;
+  }
+  return {
+    ok: true,
+    created,
+    paycode: p,
+    employeecode: codeResult.employeecode,
+    empname: clean(employee.empname),
+    leaveyear: year,
+    leavetype: type,
+    openingBalance: round2(opening),
+  };
+}
+
+/**
+ * Delete an opening-balance entry. Historical approved/pending leave requests are
+ * NEVER deleted. If such requests depend on this entry, the delete is blocked with a
+ * clear reason so HR can correct the data consciously instead of silently losing it.
+ */
+export async function deleteOpeningBalance(pool, { id, actor, companyScope }) {
+  await ensureLeaveTables(pool);
+  const numId = Number(id);
+  if (!Number.isInteger(numId) || numId <= 0) {
+    return { ok: false, status: 400, code: 'INVALID_ID', message: 'Invalid opening balance id.' };
+  }
+  const row = await pool.request().input('id', sql.Int, numId)
+    .query(`SELECT TOP 1 b.id, LTRIM(RTRIM(b.paycode)) AS paycode, b.leaveyear,
+                   LTRIM(RTRIM(b.leavetype)) AS leavetype,
+                   LTRIM(RTRIM(e.companycode)) AS companycode, LTRIM(RTRIM(e.empname)) AS empname
+            FROM ${LEAVE_BALANCE_TABLE} b
+            JOIN dbo.tblemployee e ON LTRIM(RTRIM(e.paycode)) = LTRIM(RTRIM(b.paycode))
+            WHERE b.id = @id`);
+  const current = row.recordset?.[0];
+  if (!current) return { ok: false, status: 404, code: 'NOT_FOUND', message: 'Opening balance entry not found.' };
+
+  const scopeList = (companyScope === null || companyScope === undefined)
+    ? null
+    : (Array.isArray(companyScope) ? companyScope.map((c) => String(c || '').trim().toUpperCase()).filter(Boolean) : []);
+  if (scopeList && (!scopeList.length || !scopeList.includes(clean(current.companycode).toUpperCase()))) {
+    return { ok: false, status: 403, code: 'COMPANY_FORBIDDEN', message: 'You are not authorized to delete this entry.' };
+  }
+
+  const dep = await pool.request()
+    .input('paycode', sql.NVarChar(50), clean(current.paycode))
+    .input('year', sql.Int, Number(current.leaveyear))
+    .input('type', sql.NVarChar(10), clean(current.leavetype))
+    .query(`SELECT TOP 1 LTRIM(RTRIM(status)) AS status FROM ${LEAVE_REQUEST_TABLE}
+            WHERE LTRIM(RTRIM(paycode)) = @paycode AND leaveyear = @year AND LTRIM(RTRIM(leavetype)) = @type
+              AND LTRIM(RTRIM(status)) IN ('${LEAVE_STATUS.PENDING}', '${LEAVE_STATUS.APPROVED}')`);
+  if (dep.recordset?.[0]) {
+    return {
+      ok: false,
+      status: 409,
+      code: 'HAS_DEPENDENT_REQUESTS',
+      message: `Cannot delete: this opening balance has ${clean(dep.recordset[0].status).toLowerCase()} leave request(s). Decide/cancel those requests first, or edit the opening balance instead.`,
+    };
+  }
+
+  await pool.request().input('id', sql.Int, numId).query(`DELETE FROM ${LEAVE_BALANCE_TABLE} WHERE id = @id`);
+  return {
+    ok: true,
+    deleted: {
+      id: numId,
+      paycode: clean(current.paycode),
+      empname: clean(current.empname),
+      leaveyear: Number(current.leaveyear),
+      leavetype: clean(current.leavetype),
+    },
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -1189,10 +1558,15 @@ const applicationLeaveProvider = {
   isNavision: false,
   listTypes: (pool, opts) => listLeaveTypes(pool, opts),
   addType: (pool, p) => addLeaveType(pool, p),
+  setTypeActive: (pool, p) => setLeaveTypeActive(pool, p),
+  deleteType: (pool, p) => deleteLeaveType(pool, p),
   getConfig: (pool) => getLeaveConfig(pool),
   setConfig: (pool, patch, actor) => setLeaveConfig(pool, patch, actor),
   getBalance: (pool, p) => getLeaveBalance(pool, p),
   listBalances: (pool, p) => listEmployeeBalances(pool, p),
+  listOpeningBalances: (pool, p) => listOpeningBalances(pool, p),
+  upsertOpeningBalance: (pool, p) => upsertOpeningBalance(pool, p),
+  deleteOpeningBalance: (pool, p) => deleteOpeningBalance(pool, p),
   listRequests: (pool, p) => listLeaveRequests(pool, p),
   listAllRequests: (pool, p) => listAllLeaveRequests(pool, p),
   createRequest: (pool, p) => createLeaveRequest(pool, p),
