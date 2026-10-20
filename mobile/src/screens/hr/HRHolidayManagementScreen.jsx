@@ -415,6 +415,20 @@ export const HRHolidayManagementScreen = () => {
     return cells;
   }, [calMonth, holidayByDate]);
 
+  /**
+   * PRESENTATION ONLY: group the flat 42-cell grid into 6 week rows so every
+   * row is a plain flex row of 7 equal `flex: 1` cells. The previous wrap-based
+   * `width: ${100/7}%` grid could round each cell's resolved width up on some
+   * device widths/densities, making the 7th cell (Sunday) overflow the row and
+   * wrap out of the grid. Row-based flex layout always fills the row exactly,
+   * at any screen width or font scale. No date maths or data flow change here.
+   */
+  const calWeeks = useMemo(() => {
+    const out = [];
+    for (let i = 0; i < calCells.length; i += 7) out.push(calCells.slice(i, i + 7));
+    return out;
+  }, [calCells]);
+
   const activeCount = useMemo(() => holidays.filter((h) => h.active !== false).length, [holidays]);
   const inactiveCount = holidays.length - activeCount;
 
@@ -528,20 +542,34 @@ export const HRHolidayManagementScreen = () => {
             </View>
 
             <View style={styles.calWeekRow}>
-              {WEEK_HEADER.map((w) => <Text key={w} style={styles.calWeekHead}>{w}</Text>)}
+              {WEEK_HEADER.map((w) => <Text key={w} maxFontSizeMultiplier={1.3} style={styles.calWeekHead}>{w}</Text>)}
             </View>
             <View style={styles.calGrid}>
-              {calCells.map((c) => {
-                const showHoliday = c.inMonth && (c.hasActive || c.hasInactive);
-                return (
-                  <View key={c.key} style={styles.calCell} accessible accessibilityLabel={`${c.key}${showHoliday ? ` holiday ${c.holidays.map((h) => h.holidayname).join(', ')}` : ' no holiday'}`}>
-                    <View style={[styles.calDot, { backgroundColor: showHoliday ? HOLIDAY_PURPLE : 'transparent', opacity: c.hasActive ? 1 : 0.35 }]} />
-                    <Text style={[styles.calDay, !c.inMonth && styles.calDayOut, showHoliday && !c.hasActive && { color: COLORS.textTertiary }]}>
-                      {c.day}
-                    </Text>
-                  </View>
-                );
-              })}
+              {calWeeks.map((week, wi) => (
+                // One flex row per week: 7 equal `flex: 1` cells exactly match
+                // the 7 `flex: 1` weekday headers above, so Sunday can never be
+                // pushed off the row (see calWeeks).
+                <View key={`week-${wi}`} style={styles.calWeek}>
+                  {week.map((c) => {
+                    const showHoliday = c.inMonth && (c.hasActive || c.hasInactive);
+                    return (
+                      <View key={c.key} style={styles.calCell} accessible accessibilityLabel={`${c.key}${showHoliday ? ` holiday ${c.holidays.map((h) => h.holidayname).join(', ')}` : ' no holiday'}`}>
+                        <View style={[styles.calDot, { backgroundColor: showHoliday ? HOLIDAY_PURPLE : 'transparent', opacity: c.hasActive ? 1 : 0.35 }]} />
+                        <Text
+                          numberOfLines={1}
+                          adjustsFontSizeToFit
+                          minimumFontScale={0.7}
+                          minFontSizeMultiplier={0.7}
+                          maxFontSizeMultiplier={1.3}
+                          style={[styles.calDay, !c.inMonth && styles.calDayOut, showHoliday && !c.hasActive && { color: COLORS.textTertiary }]}
+                        >
+                          {c.day}
+                        </Text>
+                      </View>
+                    );
+                  })}
+                </View>
+              ))}
             </View>
             <Text style={styles.cardFoot}>Purple dot = holiday. Inactive holidays appear faded.</Text>
           </View>
@@ -626,7 +654,7 @@ export const HRHolidayManagementScreen = () => {
               </TouchableOpacity>
             </View>
 
-            <ScrollView style={styles.sheetBody} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+            <ScrollView style={styles.sheetBody} contentContainerStyle={styles.sheetBodyContent} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
               <Text style={styles.label}>Holiday Date<Text style={styles.req}> *</Text></Text>
               <TextInput
                 style={[styles.input, formErrors.holidaydate && styles.inputError]}
@@ -755,7 +783,7 @@ export const HRHolidayManagementScreen = () => {
                 <Ionicons name="close" size={20} color={COLORS.textSecondary} />
               </TouchableOpacity>
             </View>
-            <ScrollView style={styles.sheetBody} showsVerticalScrollIndicator={false}>
+            <ScrollView style={styles.sheetBody} contentContainerStyle={styles.sheetBodyContent} showsVerticalScrollIndicator={false}>
               {(() => {
                 const h = viewing || {};
                 const companyNames = (Array.isArray(h.companies) && h.companies.length
@@ -830,9 +858,15 @@ const styles = StyleSheet.create({
   monthBar: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   monthLabel: { fontSize: 12.5, fontWeight: '700', color: COLORS.textPrimary, minWidth: 66, textAlign: 'center' },
   calWeekRow: { flexDirection: 'row', marginBottom: 4 },
-  calWeekHead: { flex: 1, textAlign: 'center', fontSize: 9.5, fontWeight: '700', color: COLORS.textTertiary },
-  calGrid: { flexDirection: 'row', flexWrap: 'wrap' },
-  calCell: { width: `${100 / 7}%`, alignItems: 'center', paddingVertical: 4 },
+  // The header cells and the day cells share the SAME sizing basis (flex: 1),
+  // so all seven weekday columns stay perfectly aligned at any screen width.
+  calWeekHead: { flex: 1, minWidth: 0, textAlign: 'center', fontSize: 9.5, fontWeight: '700', color: COLORS.textTertiary },
+  calGrid: {},
+  calWeek: { flexDirection: 'row' },
+  // flex: 1 per cell (instead of percentage widths in a wrap grid) makes each
+  // week row fill exactly 100% - the Sunday column can never wrap or clip away.
+  // minHeight gives every week row the SAME height across the grid.
+  calCell: { flex: 1, minWidth: 0, alignItems: 'center', justifyContent: 'flex-start', paddingVertical: 4, paddingHorizontal: 1, minHeight: 38 },
   calDot: { width: 12, height: 4, borderRadius: 2, marginBottom: 2 },
   calDay: { fontSize: 12.5, fontWeight: '700', color: COLORS.textPrimary },
   calDayOut: { color: COLORS.textTertiary, fontWeight: '500' },
@@ -855,7 +889,10 @@ const styles = StyleSheet.create({
   sheet: { backgroundColor: COLORS.surface, borderTopLeftRadius: 18, borderTopRightRadius: 18, maxHeight: '88%', paddingBottom: 8 },
   sheetHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, borderBottomWidth: 1, borderBottomColor: COLORS.border },
   sheetTitle: { fontSize: 15.5, fontWeight: '800', color: COLORS.textPrimary },
-  sheetBody: { padding: 16, maxHeight: 460 },
+  // flexShrink (not a fixed maxHeight) keeps the form inside the 88% sheet on
+  // short screens, so the Save button / final field is never clipped.
+  sheetBody: { padding: 16, flexGrow: 0, flexShrink: 1 },
+  sheetBodyContent: { paddingBottom: 16 },
   sheetFooter: { flexDirection: 'row', gap: 10, padding: 16, borderTopWidth: 1, borderTopColor: COLORS.border },
   label: { fontSize: 12, fontWeight: '700', color: COLORS.textPrimary, marginBottom: 6, marginTop: 12 },
   req: { color: COLORS.error },

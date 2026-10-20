@@ -20,6 +20,7 @@
 
 import React from 'react';
 import { Text, ScrollView, StyleSheet, TouchableOpacity } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { ScreenContainer } from '../../components/ScreenContainer';
 import { GradientIcon } from '../../components/GradientIcon';
@@ -72,9 +73,10 @@ export const HRMoreScreen = () => {
                 activeOpacity={0.85}
                 onPress={() => navigation.navigate(meta.route)}
               >
-                <GradientIcon from={from} to={to} name={meta.glyph} size={40} glyphRatio={0.5} />
+                {/* Premium icon treatment matching the bottom-nav tiles. */}
+                <GradientIcon from={from} to={to} name={meta.glyph} size={38} glyphRatio={0.5} haloColor={`${to}1F`} />
                 <Text style={styles.label}>{meta.label}</Text>
-                <Text style={styles.chevron}>›</Text>
+                <Ionicons name="chevron-forward" size={18} color={COLORS.textTertiary} style={styles.chevron} />
               </TouchableOpacity>
             );
           })
@@ -100,8 +102,8 @@ const styles = StyleSheet.create({
     padding: SPACING.md,
     marginBottom: SPACING.sm,
   },
-  label: { flex: 1, minWidth: 0, fontSize: 14, fontWeight: '700', color: COLORS.textPrimary },
-  chevron: { fontSize: 22, color: COLORS.textTertiary, fontWeight: '700' },
+  label: { flex: 1, minWidth: 0, fontSize: 14, fontWeight: '700', color: COLORS.textPrimary, lineHeight: 19 },
+  chevron: { marginLeft: 2 },
   empty: { fontSize: 12, color: COLORS.textSecondary, textAlign: 'center', paddingVertical: SPACING.lg },
 });
 

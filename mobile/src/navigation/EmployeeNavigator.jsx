@@ -43,6 +43,7 @@
  */
 
 import React from 'react';
+import { Text } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -100,20 +101,36 @@ const INACTIVE_LABEL = COLORS.textSecondary;
 /**
  * Unselected tile opacity. High enough that every inactive tab keeps its
  * colour identity, low enough that the selected tab is unmistakable (the
- * selected tab is additionally lifted with a shadow + filled glyph + coloured
- * bold label).
+ * selected tab is additionally lifted with a tinted halo + shadow + filled
+ * glyph + coloured bold label).
  */
-const INACTIVE_TILE_OPACITY = 0.55;
-
+const INACTIVE_TILE_OPACITY = 0.62;
 
 /**
- * One shared renderer for all seven tabs - now a colourful gradient tile.
+ * One consistent tile size for every tab on every device. The size no longer
+ * derives from the tab bar's font-scaled `size`, so glyphs stay identical on
+ * Android phones with different densities or large system font settings.
+ */
+const TILE_SIZE = 26;
+
+/**
+ * Soft tinted "pill" background shown behind the SELECTED tab's tile
+ * (~15% of the tab's identity colour). The 8-digit hex alpha is supported by
+ * React Native on Android, iOS and web. Inactive tabs get 'transparent' so
+ * active/inactive tiles share identical geometry - only the tint differs.
+ */
+const activeHalo = (name) => `${getNavIcon(name).tint}26`;
+const INACTIVE_HALO = 'transparent';
+
+/**
+ * One shared renderer for all seven tabs - a colourful gradient tile with a
+ * subtle tinted halo behind the selected one.
  *
  * @param {string} name      Tab route name (key into NAV_ICON_GRADIENTS)
  * @param {string} active    Filled Ionicons glyph, shown when the tab is selected
  * @param {string} outline   Outline Ionicons glyph, shown when it is not
  */
-const tabIcon = (name, active, outline) => ({ focused, size }) => {
+const tabIcon = (name, active, outline) => ({ focused }) => {
   const { from, to } = getNavIcon(name);
   return (
     <GradientIcon
@@ -122,19 +139,56 @@ const tabIcon = (name, active, outline) => ({ focused, size }) => {
       // Same glyph the app already used for this tab - only its presentation
       // changed (white glyph on a gradient tile instead of a tinted glyph).
       name={focused ? active : outline}
-      size={Math.round(size * 1.16)}
+      size={TILE_SIZE}
       active={focused}
       opacity={focused ? 1 : INACTIVE_TILE_OPACITY}
+      haloColor={focused ? activeHalo(name) : INACTIVE_HALO}
     />
   );
 };
 
-/** Label follows the same identity: tab colour when active, neutral when not. */
-const tabLabelStyle = (name) => ({ focused }) => ({
-  fontSize: 10,
-  fontWeight: focused ? '700' : '600',
-  color: focused ? getNavIcon(name).tint : INACTIVE_LABEL,
-});
+/**
+ * Label renderer - readable, never clipped on narrow screens.
+ *
+ * Rules (presentation only; tab names, order and behaviour unchanged):
+ *   WRAP   : up to 2 lines with a real line height - multi-word names
+ *            ("Full & Final", "Daily Master") wrap instead of truncating.
+ *   SHRINK : adjustsFontSizeToFit with a READABLE floor (0.8 ≈ 8px) for long
+ *            single words - never the old 0.65 (6.5px) unreadable shrink.
+ *   CUT    : ellipsizeMode "tail" only as a last resort on very narrow bars.
+ *   WIDTH  : the label stretches across the tab column (minus a hair of
+ *            breathing room) so every pixel of the column is usable text width.
+ *   SCALE  : maxFontSizeMultiplier caps system font scaling so a large-font
+ *            setting can push labels out of the bar.
+ * `text` is the exact visible label the app already showed (a function
+ * tabBarLabel would otherwise fall back to the raw route name).
+ */
+const tabLabel = (text) => ({ focused, color }) => (
+  <Text
+    numberOfLines={2}
+    adjustsFontSizeToFit
+    minimumFontScale={0.8}
+    minFontSizeMultiplier={0.8}
+    maxFontSizeMultiplier={1.2}
+    ellipsizeMode="tail"
+    style={{
+      alignSelf: 'stretch',
+      marginHorizontal: -3,
+      paddingHorizontal: 1,
+      marginTop: 1,
+      minHeight: 24,
+      fontSize: 10,
+      lineHeight: 12,
+      fontWeight: focused ? '700' : '600',
+      letterSpacing: 0,
+      color,
+      textAlign: 'center',
+      textAlignVertical: 'center',
+    }}
+  >
+    {text}
+  </Text>
+);
 
 /** Sirf PIN screens wala inner stack — tabs iske andar hi rehte hain. */
 const EmployeeTabs = () => {
@@ -155,7 +209,10 @@ const EmployeeTabs = () => {
           borderTopColor: COLORS.divider,
           paddingTop: 6,
           paddingBottom: 8 + insets.bottom,
-          height: 64 + insets.bottom,
+          // minHeight (not height): a label that wraps to 2 lines on narrow
+          // screens grows the bar instead of being clipped by a fixed height.
+          // The bottom safe-area inset is still reserved via paddingBottom.
+          minHeight: 64 + insets.bottom,
           // Soft top lift keeps the bar premium without changing layout.
           shadowColor: COLORS.shadow,
           shadowOffset: { width: 0, height: -2 },
@@ -163,9 +220,8 @@ const EmployeeTabs = () => {
           shadowRadius: 8,
           elevation: 8,
         },
-        // 7 tabs share the bar, so the label sits a touch tighter than before to
+        // 7 tabs share the bar, so the label auto-shrinks (see tabLabel) to
         // guarantee the longest label ("Full & Final") and the icon never collide.
-        tabBarLabelStyle: tabLabelStyle(route.name),
         tabBarIconStyle: { marginTop: 2 },
         headerShown: false,
       })}
@@ -175,7 +231,7 @@ const EmployeeTabs = () => {
         name="Dashboard"
         component={EmployeeDashboardScreen}
         options={{
-          tabBarLabel: 'Dashboard',
+          tabBarLabel: tabLabel('Dashboard'),
           tabBarIcon: tabIcon('Dashboard', 'home', 'home-outline'),
         }}
       />
@@ -185,7 +241,7 @@ const EmployeeTabs = () => {
         name="Attendance"
         component={EmployeeAttendanceScreen}
         options={{
-          tabBarLabel: 'Attendance',
+          tabBarLabel: tabLabel('Attendance'),
           tabBarIcon: tabIcon('Attendance', 'calendar', 'calendar-outline'),
         }}
       />
@@ -195,7 +251,7 @@ const EmployeeTabs = () => {
         name="Leave"
         component={EmployeeLeaveScreen}
         options={{
-          tabBarLabel: 'Leave',
+          tabBarLabel: tabLabel('Leave'),
           tabBarIcon: tabIcon('Leave', 'briefcase', 'briefcase-outline'),
         }}
       />
@@ -205,7 +261,7 @@ const EmployeeTabs = () => {
         name="Reports"
         component={EmployeeReportsScreen}
         options={{
-          tabBarLabel: 'Reports',
+          tabBarLabel: tabLabel('Reports'),
           tabBarIcon: tabIcon('Reports', 'bar-chart', 'bar-chart-outline'),
         }}
       />
@@ -215,7 +271,7 @@ const EmployeeTabs = () => {
         name="BdayAnniversary"
         component={EmployeeBdayAnniversaryScreen}
         options={{
-          tabBarLabel: 'Celebrations',
+          tabBarLabel: tabLabel('Celebrations'),
           tabBarIcon: tabIcon('BdayAnniversary', 'gift', 'gift-outline'),
         }}
       />
@@ -225,7 +281,7 @@ const EmployeeTabs = () => {
         name="FullFinal"
         component={EmployeeGratuityScreen}
         options={{
-          tabBarLabel: 'Full & Final',
+          tabBarLabel: tabLabel('Full & Final'),
           tabBarIcon: tabIcon('FullFinal', 'cash', 'cash-outline'),
         }}
       />
@@ -235,7 +291,7 @@ const EmployeeTabs = () => {
         name="Profile"
         component={EmployeeProfileScreen}
         options={{
-          tabBarLabel: 'Profile',
+          tabBarLabel: tabLabel('Profile'),
           tabBarIcon: tabIcon('Profile', 'person', 'person-outline'),
         }}
       />

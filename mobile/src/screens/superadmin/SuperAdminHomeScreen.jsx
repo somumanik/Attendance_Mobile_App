@@ -20,6 +20,7 @@
 
 import React from 'react';
 import { View, Text, ScrollView, StyleSheet, TouchableOpacity } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { ScreenContainer } from '../../components/ScreenContainer';
 import { LogoutButton } from '../../components/LogoutButton';
@@ -64,12 +65,21 @@ export const SuperAdminHomeScreen = () => {
               activeOpacity={0.85}
               onPress={() => navigation.navigate(mod.route)}
             >
-              <GradientIcon from={from} to={to} name={mod.glyph} size={44} glyphRatio={0.5} />
+              {/* Premium icon treatment: the same gradient tile on a soft
+                  tinted halo, matching the bottom-nav identity styling. */}
+              <GradientIcon
+                from={from}
+                to={to}
+                name={mod.glyph}
+                size={40}
+                glyphRatio={0.5}
+                haloColor={`${to}1F`}
+              />
               <View style={styles.moduleText}>
                 <Text style={styles.moduleLabel}>{mod.label}</Text>
                 <Text style={styles.moduleDesc}>{mod.desc}</Text>
               </View>
-              <Text style={styles.chevron}>›</Text>
+              <Ionicons name="chevron-forward" size={18} color={COLORS.textTertiary} style={styles.chevron} />
             </TouchableOpacity>
           );
         })}
@@ -99,9 +109,9 @@ const styles = StyleSheet.create({
     marginBottom: SPACING.md,
   },
   moduleText: { flex: 1, minWidth: 0 },
-  moduleLabel: { fontSize: 14.5, fontWeight: '800', color: COLORS.textPrimary },
-  moduleDesc: { marginTop: 2, fontSize: 11.5, color: COLORS.textSecondary },
-  chevron: { fontSize: 24, color: COLORS.textTertiary, fontWeight: '700' },
+  moduleLabel: { fontSize: 14.5, fontWeight: '800', color: COLORS.textPrimary, lineHeight: 19 },
+  moduleDesc: { marginTop: 2, fontSize: 11.5, color: COLORS.textSecondary, lineHeight: 16 },
+  chevron: { marginLeft: 2 },
   logoutWrap: { marginTop: SPACING.lg },
 });
 

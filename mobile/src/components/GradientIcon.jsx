@@ -72,6 +72,13 @@ export const mixGradientColor = (a, b, t) => {
  * @param {number}  glyphRatio glyph size relative to the tile
  * @param {number}  opacity    whole-tile opacity (used for active vs inactive)
  * @param {boolean} active     active tile -> slight lift/shadow, full colour
+ * @param {string}  haloColor  optional soft tinted background visible as a
+ *                             ring around the tile (premium tab treatment).
+ *                             Pass 'transparent' for the same geometry without
+ *                             a tint. Omitted -> tile fills the whole wrapper
+ *                             exactly as before, so every existing usage is
+ *                             pixel-identical.
+ * @param {number}  haloRadius optional wrapper corner radius override
  * @param {object}  style      extra style for the tile wrapper
  */
 export const GradientIcon = ({
@@ -84,9 +91,18 @@ export const GradientIcon = ({
   glyphRatio = 0.58,
   opacity = 1,
   active = false,
+  haloColor,
+  haloRadius,
   style,
 }) => {
+  // The wrapper always keeps the exact `size` footprint (it sits inside the
+  // tab bar's fixed icon box, which may clip on Android), so the tinted halo
+  // is drawn as a full-wrapper background with the tile inset - never larger
+  // than the icon box. With no halo the tile fills the wrapper as before.
+  const haloPad = haloColor ? Math.max(2, Math.round(size * 0.13)) : 0;
+  const tileSize = size - haloPad * 2;
   const corner = radius != null ? radius : Math.round(size * 0.3);
+  const tileCorner = radius != null ? radius : Math.round(tileSize * 0.3);
 
   // Base vertical gradient -> one slice per band (this is the "gradient").
   const bands = [];
@@ -112,18 +128,19 @@ export const GradientIcon = ({
     <View
       style={[
         styles.wrap,
-        { width: size, height: size, borderRadius: corner, opacity },
+        { width: size, height: size, borderRadius: haloRadius != null ? haloRadius : corner, opacity },
+        haloColor ? { backgroundColor: haloColor } : null,
         active && styles.activeWrap,
         style,
       ]}
     >
-      <View style={[styles.tile, { borderRadius: corner }]}>
+      <View style={[styles.tile, { width: tileSize, height: tileSize, borderRadius: tileCorner }]}>
         <View style={StyleSheet.absoluteFill}>{bands}</View>
         <View pointerEvents="none" style={styles.sheen}>{sheen}</View>
         <View pointerEvents="none" style={styles.glyphWrap}>
           <Ionicons
             name={name}
-            size={Math.max(10, Math.round(size * glyphRatio))}
+            size={Math.max(10, Math.round(tileSize * glyphRatio))}
             color={glyphColor}
           />
         </View>
@@ -133,8 +150,9 @@ export const GradientIcon = ({
 };
 
 const styles = StyleSheet.create({
-  // Outer wrapper carries the shadow so the inner tile can clip its gradient.
-  wrap: { backgroundColor: 'transparent' },
+  // Outer wrapper carries the shadow and (optionally) the tinted halo; the
+  // inner tile keeps its own size and clips its gradient.
+  wrap: { backgroundColor: 'transparent', alignItems: 'center', justifyContent: 'center' },
   activeWrap: {
     elevation: 3,
     shadowColor: '#0F172A',
@@ -143,7 +161,6 @@ const styles = StyleSheet.create({
     shadowRadius: 3,
   },
   tile: {
-    flex: 1,
     overflow: 'hidden',
     alignItems: 'center',
     justifyContent: 'center',

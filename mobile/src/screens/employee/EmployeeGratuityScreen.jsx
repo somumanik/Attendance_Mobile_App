@@ -235,7 +235,7 @@ export const EmployeeGratuityScreen = () => {
 
             <Card style={styles.card}>
               <View style={styles.identityRow}>
-                <Text style={[styles.identityName, { color: theme.textPrimary }]} numberOfLines={1}>{clean(emp.empname) || PLACEHOLDER}</Text>
+                <Text style={[styles.identityName, { color: theme.textPrimary }]} numberOfLines={2}>{clean(emp.empname) || PLACEHOLDER}</Text>
                 <View style={[styles.paycodeChip, { backgroundColor: `${theme.primary}15`, borderColor: `${theme.primary}44` }]}>
                   <Text style={[styles.paycodeText, { color: theme.primary }]}>{clean(emp.paycode)}</Text>
                 </View>
@@ -251,13 +251,13 @@ export const EmployeeGratuityScreen = () => {
 
               <View style={[styles.staticRow, { borderColor: theme.border }]}>
                 <Text style={[styles.rowLabel, { color: theme.textSecondary }]}>Department</Text>
-                <Text style={[styles.rowValue, { color: theme.textPrimary }]} numberOfLines={1}>
+                <Text style={[styles.rowValue, { color: theme.textPrimary }]}>
                   {clean(emp.departmentname || emp.departmentcode) || PLACEHOLDER}
                 </Text>
               </View>
               <View style={[styles.staticRow, { borderColor: theme.border }]}>
                 <Text style={[styles.rowLabel, { color: theme.textSecondary }]}>Designation</Text>
-                <Text style={[styles.rowValue, { color: theme.textPrimary }]} numberOfLines={1}>
+                <Text style={[styles.rowValue, { color: theme.textPrimary }]}>
                   {clean(emp.designation) || PLACEHOLDER}
                 </Text>
               </View>
@@ -327,8 +327,12 @@ export const EmployeeGratuityScreen = () => {
               ) : null}
               <View style={styles.ruleList}>
                 {COMPONENTS.map((c) => (
-                  <View key={c.id} style={styles.ruleRow}>
-                    <Text style={[styles.ruleLabel, { color: theme.textSecondary }]}>{c.label}</Text>
+                  // Stacked label / description layout: the label stays clearly
+                  // readable on its own line and the rule text wraps naturally
+                  // below it - long basis descriptions can never run into the
+                  // label or clip on narrow screens (presentation only).
+                  <View key={c.id} style={[styles.ruleRow, { borderColor: theme.border }]}>
+                    <Text style={[styles.ruleLabel, { color: theme.textPrimary }]}>{c.label}</Text>
                     <Text style={[styles.ruleValue, { color: rules ? theme.textSecondary : theme.textTertiary }]}>
                       {rules ? (RULE_TEXT(rules, c.id) || c.rule) : `${c.rule} — not configured`}
                     </Text>
@@ -336,12 +340,12 @@ export const EmployeeGratuityScreen = () => {
                 ))}
                 {rules ? (
                   <>
-                    <View style={styles.ruleRow}>
-                      <Text style={[styles.ruleLabel, { color: theme.textSecondary }]}>PF</Text>
+                    <View style={[styles.ruleRow, { borderColor: theme.border }]}>
+                      <Text style={[styles.ruleLabel, { color: theme.textPrimary }]}>PF</Text>
                       <Text style={[styles.ruleValue, { color: theme.textSecondary }]}>{rules.pf?.basisText}</Text>
                     </View>
-                    <View style={styles.ruleRow}>
-                      <Text style={[styles.ruleLabel, { color: theme.textSecondary }]}>ESI</Text>
+                    <View style={[styles.ruleRow, { borderColor: theme.border }]}>
+                      <Text style={[styles.ruleLabel, { color: theme.textPrimary }]}>ESI</Text>
                       <Text style={[styles.ruleValue, { color: theme.textSecondary }]}>{rules.esi?.basisText}</Text>
                     </View>
                   </>
@@ -391,10 +395,10 @@ export const EmployeeGratuityScreen = () => {
                 const line = COMPONENT_VALUE(estimate, c.id);
                 return (
                   <View key={c.id} style={[styles.amountRow, { borderColor: theme.border }]}>
-                    <View style={{ flex: 1 }}>
+                    <View style={styles.amountLabelCol}>
                       <Text style={[styles.amountLabel, { color: theme.textSecondary }]}>{c.label}</Text>
                       {line && line.basis ? (
-                        <Text style={{ fontSize: 9.5, color: theme.textTertiary, marginTop: 1 }}>{line.basis}</Text>
+                        <Text style={[styles.amountBasis, { color: theme.textTertiary }]}>{line.basis}</Text>
                       ) : null}
                     </View>
                     <Text style={[styles.amountValue, { color: line ? (line.negative ? theme.error : theme.textPrimary) : theme.textTertiary }]}>
@@ -406,16 +410,16 @@ export const EmployeeGratuityScreen = () => {
               {estimate ? (
                 <>
                   <View style={[styles.amountRow, { borderColor: theme.border }]}>
-                    <View style={{ flex: 1 }}>
+                    <View style={styles.amountLabelCol}>
                       <Text style={[styles.amountLabel, { color: theme.textSecondary }]}>Employee Deductions</Text>
-                      <Text style={{ fontSize: 9.5, color: theme.textTertiary, marginTop: 1 }}>pay elements + employee PF/ESI</Text>
+                      <Text style={[styles.amountBasis, { color: theme.textTertiary }]}>pay elements + employee PF/ESI</Text>
                     </View>
                     <Text style={[styles.amountValue, { color: theme.error }]}>{money(-(estimate.employeeDeductions?.total || 0))}</Text>
                   </View>
                   <View style={[styles.amountRow, { borderColor: theme.border }]}>
-                    <View style={{ flex: 1 }}>
+                    <View style={styles.amountLabelCol}>
                       <Text style={[styles.amountLabel, { color: theme.textSecondary }]}>Employer Contributions (info only)</Text>
-                      <Text style={{ fontSize: 9.5, color: theme.textTertiary, marginTop: 1 }}>NOT part of the payable estimate</Text>
+                      <Text style={[styles.amountBasis, { color: theme.textTertiary }]}>NOT part of the payable estimate</Text>
                     </View>
                     <Text style={[styles.amountValue, { color: theme.textSecondary }]}>{money(estimate.employerContributions?.total || 0)}</Text>
                   </View>
@@ -453,7 +457,9 @@ export const EmployeeGratuityScreen = () => {
 };
 
 const styles = StyleSheet.create({
-  scroll: { padding: 12, paddingBottom: 28 },
+  // Bottom padding clears the bottom navigation / gesture bar on every device,
+  // so "Estimated Full & Final" and the footnote can always be scrolled to.
+  scroll: { padding: 12, paddingBottom: 36 },
   stateBox: { paddingVertical: 40, alignItems: 'center', gap: 10 },
   stateText: { fontSize: 13 },
   errorText: { fontSize: 13 },
@@ -462,13 +468,14 @@ const styles = StyleSheet.create({
   cardHead: { fontSize: 13.5, fontWeight: '800', marginBottom: 8 },
 
   identityRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 10 },
-  identityName: { flex: 1, fontSize: 15.5, fontWeight: '800' },
+  identityName: { flex: 1, minWidth: 0, fontSize: 15.5, fontWeight: '800', lineHeight: 20 },
   paycodeChip: { paddingHorizontal: 10, paddingVertical: 3, borderRadius: 999, borderWidth: 1 },
   paycodeText: { fontSize: 11.5, fontWeight: '800' },
 
   staticRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 8, borderTopWidth: 1, borderTopColor: '#EEE', gap: 10 },
-  rowLabel: { fontSize: 12.5 },
-  rowValue: { fontSize: 12.5, fontWeight: '700', flex: 1, textAlign: 'right' },
+  rowLabel: { fontSize: 12.5, flexShrink: 0 },
+  // Values wrap across lines (never clipped/truncated) and stay right-aligned.
+  rowValue: { fontSize: 12.5, fontWeight: '700', flex: 1, minWidth: 0, textAlign: 'right' },
   readOnlyHint: { fontSize: 10.5, marginTop: 3 },
   inputLabel: { fontSize: 12.5, fontWeight: '700', marginTop: 12 },
   dateInput: {
@@ -478,11 +485,14 @@ const styles = StyleSheet.create({
   warnText: { fontSize: 11, marginTop: 6 },
 
   pendingBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 10, borderRadius: 10, borderWidth: 1 },
-  pendingText: { flex: 1, fontSize: 11.5, fontWeight: '700' },
-  ruleList: { marginTop: 10, gap: 6 },
-  ruleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
-  ruleLabel: { fontSize: 12 },
-  ruleValue: { fontSize: 10.5 },
+  pendingText: { flex: 1, fontSize: 11.5, fontWeight: '700', lineHeight: 16 },
+  // Calculation Rules: stacked label / description rows with divider lines.
+  // The description gets the full row width and wraps across as many lines as
+  // it needs - no fixed heights, no truncation, no horizontal overflow.
+  ruleList: { marginTop: 4 },
+  ruleRow: { paddingVertical: 10, borderTopWidth: 1, gap: 3 },
+  ruleLabel: { fontSize: 12.5, fontWeight: '700', lineHeight: 17 },
+  ruleValue: { fontSize: 11, lineHeight: 16, flexShrink: 1 },
 
   periodRow: { flexDirection: 'row', gap: 8 },
   periodBox: { flex: 1, alignItems: 'center', paddingVertical: 10, borderRadius: 10, borderWidth: 1 },
@@ -493,16 +503,20 @@ const styles = StyleSheet.create({
   salaryNote: { padding: 10, borderRadius: 10, borderWidth: 1, marginBottom: 12 },
   salaryNoteText: { fontSize: 11.5, fontWeight: '700' },
 
-  amountRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 8, borderTopWidth: 1, borderTopColor: '#EEE' },
-  amountLabel: { fontSize: 12.5 },
-  amountValue: { fontSize: 13, fontWeight: '800' },
+  amountRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 10, borderTopWidth: 1, gap: 10 },
+  amountLabelCol: { flex: 1, minWidth: 0 },
+  amountLabel: { fontSize: 12.5, fontWeight: '600', lineHeight: 17 },
+  // Monetary values stay right-aligned and on one line; the label column
+  // (flex: 1 in the JSX) absorbs wrapping so amounts never get pushed off.
+  amountValue: { fontSize: 13, fontWeight: '800', flexShrink: 0, textAlign: 'right' },
+  amountBasis: { fontSize: 10, marginTop: 2, lineHeight: 14, flexShrink: 1 },
 
-  totalRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  totalLabel: { fontSize: 13.5, fontWeight: '800' },
-  totalValue: { fontSize: 17, fontWeight: '800' },
-  totalNote: { fontSize: 10.5, marginTop: 6 },
+  totalRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  totalLabel: { fontSize: 13.5, fontWeight: '800', flexShrink: 1 },
+  totalValue: { fontSize: 17, fontWeight: '800', flexShrink: 0, textAlign: 'right' },
+  totalNote: { fontSize: 10.5, marginTop: 8, lineHeight: 15 },
 
-  footnote: { fontSize: 10.5, textAlign: 'center', marginTop: 10 },
+  footnote: { fontSize: 10.5, textAlign: 'center', marginTop: 12, lineHeight: 15 },
 });
 
 export default EmployeeGratuityScreen;

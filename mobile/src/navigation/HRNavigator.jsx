@@ -26,6 +26,7 @@
  */
 
 import React from 'react';
+import { Text } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -68,10 +69,29 @@ const Stack = createStackNavigator();
  */
 
 /** Unselected tile opacity (kept readable, clearly secondary vs the active tab). */
-const INACTIVE_TILE_OPACITY = 0.55;
+const INACTIVE_TILE_OPACITY = 0.62;
 
-/** Gradient tile renderer for a bottom-nav tab. */
-const tabIcon = (name, focused, active, outline, size) => {
+/**
+ * One consistent tile size for every tab on every device (presentation only) -
+ * independent of the tab bar's font-scaled `size`, so glyphs stay identical on
+ * Android phones with different densities or large system font settings.
+ */
+const TILE_SIZE = 26;
+
+/**
+ * Soft tinted "pill" background shown behind the SELECTED tab's tile (~15% of
+ * the tab's identity colour). 8-digit hex alpha works on Android, iOS and web.
+ * Inactive tabs get 'transparent' so active/inactive tiles share identical
+ * geometry - only the tint differs.
+ */
+const activeHalo = (name) => `${getNavIcon(name).tint}26`;
+const INACTIVE_HALO = 'transparent';
+
+/**
+ * Gradient tile renderer for a bottom-nav tab. Same glyphs as before - only
+ * the presentation is premium-ised (consistent sizing + active tinted halo).
+ */
+const tabIcon = (name, focused, active, outline) => {
   const { from, to } = getNavIcon(name);
   return (
     <GradientIcon
@@ -79,12 +99,56 @@ const tabIcon = (name, focused, active, outline, size) => {
       to={to}
       // Same glyph the app already used - only its presentation changed.
       name={focused ? active : outline}
-      size={Math.round(size * 1.16)}
+      size={TILE_SIZE}
       active={focused}
       opacity={focused ? 1 : INACTIVE_TILE_OPACITY}
+      haloColor={focused ? activeHalo(name) : INACTIVE_HALO}
     />
   );
 };
+
+/**
+ * Label renderer - readable, never clipped on narrow screens.
+ *
+ * Rules (presentation only; tab names, order and behaviour unchanged):
+ *   WRAP   : up to 2 lines with a real line height - multi-word names
+ *            ("Daily Master", "Leave Mgmt") wrap instead of truncating.
+ *   SHRINK : adjustsFontSizeToFit with a READABLE floor (0.8 ≈ 8px) for long
+ *            single words - never the old 0.65 (6.5px) unreadable shrink.
+ *   CUT    : ellipsizeMode "tail" only as a last resort on very narrow bars.
+ *   WIDTH  : the label stretches across the tab column (minus a hair of
+ *            breathing room) so every pixel of the column is usable text width.
+ *   SCALE  : maxFontSizeMultiplier caps system font scaling so a large-font
+ *            setting can push labels out of the bar.
+ * `text` is the exact visible label the app already showed (a function
+ * tabBarLabel would otherwise fall back to the raw route name).
+ */
+const tabLabel = (text) => ({ focused, color }) => (
+  <Text
+    numberOfLines={2}
+    adjustsFontSizeToFit
+    minimumFontScale={0.8}
+    minFontSizeMultiplier={0.8}
+    maxFontSizeMultiplier={1.2}
+    ellipsizeMode="tail"
+    style={{
+      alignSelf: 'stretch',
+      marginHorizontal: -3,
+      paddingHorizontal: 1,
+      marginTop: 1,
+      minHeight: 24,
+      fontSize: 10,
+      lineHeight: 12,
+      fontWeight: focused ? '700' : '600',
+      letterSpacing: 0,
+      color,
+      textAlign: 'center',
+      textAlignVertical: 'center',
+    }}
+  >
+    {text}
+  </Text>
+);
 
 const HRTabs = () => {
   // Server-side authorization is authoritative; this only hides what is not
@@ -104,14 +168,19 @@ const HRTabs = () => {
     <Tab.Navigator
       screenOptions={({ route }) => ({
         tabBarActiveTintColor: getNavIcon(route.name).tint,
-        tabBarInactiveTintColor: COLORS.textTertiary,
+        // Readable neutral for unselected labels (textSecondary, 7.6:1 on
+        // white) - the previous textTertiary (2.6:1) was hard to read.
+        tabBarInactiveTintColor: COLORS.textSecondary,
         tabBarStyle: {
           backgroundColor: COLORS.surface,
           borderTopWidth: 1,
           borderTopColor: COLORS.divider,
           paddingTop: 6,
           paddingBottom: 8 + insets.bottom,
-          height: 64 + insets.bottom,
+          // minHeight (not height): a label that wraps to 2 lines on narrow
+          // screens grows the bar instead of being clipped by a fixed height.
+          // The bottom safe-area inset is still reserved via paddingBottom.
+          minHeight: 64 + insets.bottom,
           // Soft top lift keeps the bar premium without changing layout.
           shadowColor: COLORS.shadow,
           shadowOffset: { width: 0, height: -2 },
@@ -119,11 +188,9 @@ const HRTabs = () => {
           shadowRadius: 8,
           elevation: 8,
         },
-        tabBarLabelStyle: {
-          fontSize: 10,
-          fontWeight: '600',
-          letterSpacing: 0.1,
-        },
+        // Labels auto-shrink (see tabLabel) so long names like "Daily Master"
+        // never truncate on narrow screens; icon size is fixed (see TILE_SIZE).
+        tabBarIconStyle: { marginTop: 2 },
         headerShown: false,
       })}
     >
@@ -132,8 +199,8 @@ const HRTabs = () => {
           name="Dashboard"
           component={HRDashboardScreen}
           options={{
-            tabBarLabel: 'Dashboard',
-            tabBarIcon: ({ focused, size }) => tabIcon('Dashboard', focused, 'speedometer', 'speedometer-outline', size),
+            tabBarLabel: tabLabel('Dashboard'),
+            tabBarIcon: ({ focused }) => tabIcon('Dashboard', focused, 'speedometer', 'speedometer-outline'),
           }}
         />
       ) : null}
@@ -145,8 +212,8 @@ const HRTabs = () => {
           name="Employees"
           component={HREmployeesScreen}
           options={{
-            tabBarLabel: 'Employees',
-            tabBarIcon: ({ focused, size }) => tabIcon('Employees', focused, 'people', 'people-outline', size),
+            tabBarLabel: tabLabel('Employees'),
+            tabBarIcon: ({ focused }) => tabIcon('Employees', focused, 'people', 'people-outline'),
           }}
         />
       ) : null}
@@ -155,8 +222,8 @@ const HRTabs = () => {
           name="Audit"
           component={HRAuditScreen}
           options={{
-            tabBarLabel: 'Audit',
-            tabBarIcon: ({ focused, size }) => tabIcon('Audit', focused, 'search', 'search-outline', size),
+            tabBarLabel: tabLabel('Audit'),
+            tabBarIcon: ({ focused }) => tabIcon('Audit', focused, 'search', 'search-outline'),
           }}
         />
       ) : null}
@@ -165,8 +232,8 @@ const HRTabs = () => {
           name="Analytics"
           component={HRAnalyticsScreen}
           options={{
-            tabBarLabel: 'Analytics',
-            tabBarIcon: ({ focused, size }) => tabIcon('Analytics', focused, 'analytics', 'analytics-outline', size),
+            tabBarLabel: tabLabel('Analytics'),
+            tabBarIcon: ({ focused }) => tabIcon('Analytics', focused, 'analytics', 'analytics-outline'),
           }}
         />
       ) : null}
@@ -175,8 +242,8 @@ const HRTabs = () => {
           name="DailyMaster"
           component={HRDailyMasterScreen}
           options={{
-            tabBarLabel: 'Daily Master',
-            tabBarIcon: ({ focused, size }) => tabIcon('DailyMaster', focused, 'document-text', 'document-text-outline', size),
+            tabBarLabel: tabLabel('Daily Master'),
+            tabBarIcon: ({ focused }) => tabIcon('DailyMaster', focused, 'document-text', 'document-text-outline'),
           }}
         />
       ) : null}
@@ -185,8 +252,8 @@ const HRTabs = () => {
           name="Celebrations"
           component={HRCelebrationsScreen}
           options={{
-            tabBarLabel: 'Celebrations',
-            tabBarIcon: ({ focused, size }) => tabIcon('Celebrations', focused, 'gift', 'gift-outline', size),
+            tabBarLabel: tabLabel('Celebrations'),
+            tabBarIcon: ({ focused }) => tabIcon('Celebrations', focused, 'gift', 'gift-outline'),
           }}
         />
       ) : null}
@@ -195,8 +262,8 @@ const HRTabs = () => {
           name="Marriage"
           component={HRMarriageScreen}
           options={{
-            tabBarLabel: 'Marriage',
-            tabBarIcon: ({ focused, size }) => tabIcon('Marriage', focused, 'heart', 'heart-outline', size),
+            tabBarLabel: tabLabel('Marriage'),
+            tabBarIcon: ({ focused }) => tabIcon('Marriage', focused, 'heart', 'heart-outline'),
           }}
         />
       ) : null}
@@ -210,8 +277,8 @@ const HRTabs = () => {
           name="LeaveMgmt"
           component={HRLeaveManagementScreen}
           options={{
-            tabBarLabel: 'Leave Mgmt',
-            tabBarIcon: ({ focused, size }) => tabIcon('LeaveMgmt', focused, 'calendar', 'calendar-outline', size),
+            tabBarLabel: tabLabel('Leave Mgmt'),
+            tabBarIcon: ({ focused }) => tabIcon('LeaveMgmt', focused, 'calendar', 'calendar-outline'),
           }}
         />
       ) : null}
@@ -222,8 +289,8 @@ const HRTabs = () => {
           name="Salary"
           component={HRSalaryManagementScreen}
           options={{
-            tabBarLabel: 'Salary',
-            tabBarIcon: ({ focused, size }) => tabIcon('Salary', focused, 'cash', 'cash-outline', size),
+            tabBarLabel: tabLabel('Salary'),
+            tabBarIcon: ({ focused }) => tabIcon('Salary', focused, 'cash', 'cash-outline'),
           }}
         />
       ) : null}
@@ -234,8 +301,8 @@ const HRTabs = () => {
           name="Holidays"
           component={HRHolidayManagementScreen}
           options={{
-            tabBarLabel: 'Holidays',
-            tabBarIcon: ({ focused, size }) => tabIcon('Holidays', focused, 'flag', 'flag-outline', size),
+            tabBarLabel: tabLabel('Holidays'),
+            tabBarIcon: ({ focused }) => tabIcon('Holidays', focused, 'flag', 'flag-outline'),
           }}
         />
       ) : null}
@@ -248,8 +315,8 @@ const HRTabs = () => {
           name="More"
           component={HRMoreScreen}
           options={{
-            tabBarLabel: 'More',
-            tabBarIcon: ({ focused, size }) => tabIcon('More', focused, 'ellipsis-horizontal', 'ellipsis-horizontal-outline', size),
+            tabBarLabel: tabLabel('More'),
+            tabBarIcon: ({ focused }) => tabIcon('More', focused, 'ellipsis-horizontal', 'ellipsis-horizontal-outline'),
           }}
         />
       ) : null}

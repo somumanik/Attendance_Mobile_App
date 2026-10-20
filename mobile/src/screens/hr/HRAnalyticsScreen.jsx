@@ -428,7 +428,7 @@ export const HRAnalyticsScreen = () => {
               </TouchableOpacity>
             </View>
 
-            <ScrollView style={styles.modalBody}>
+            <ScrollView style={styles.modalBody} contentContainerStyle={styles.modalScrollContent}>
               {lateLoading ? (
                 <View style={styles.stateBox}>
                   <ActivityIndicator color={COLORS.primary} />
@@ -704,7 +704,11 @@ const styles = StyleSheet.create({
   modalHeaderText: { flex: 1 },
   modalTitle: { fontSize: 15, fontWeight: '800', color: COLORS.textPrimary },
   modalSubtitle: { fontSize: 11, color: COLORS.textTertiary, marginTop: 2 },
-  modalBody: { maxHeight: 460, padding: SPACING.md },
+  // Scrollable modal body: flexShrink keeps it inside the 80% sheet card on
+  // short screens (the old fixed maxHeight could overflow the clipped card and
+  // hide the final row); content bottom padding keeps the last row reachable.
+  modalBody: { flexGrow: 0, flexShrink: 1, padding: SPACING.md },
+  modalScrollContent: { paddingBottom: SPACING.lg, gap: 2 },
   lateRow: {
     paddingVertical: SPACING.sm,
     borderBottomWidth: 1,

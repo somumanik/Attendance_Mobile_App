@@ -35,6 +35,7 @@ import { Button } from '../../components/Button';
 import { MonthNavigator, currentMonthKey } from '../../components/MonthNavigator';
 import { getStatusColor } from '../../utils/format';
 import { useNavigation } from '@react-navigation/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { api } from '../../services/api';
 
 /**
@@ -42,6 +43,9 @@ import { api } from '../../services/api';
  */
 export const HRDashboardScreen = () => {
   const navigation = useNavigation();
+  // Bottom safe-area inset: audit modal scroll padding uses it so the final
+  // attendance record can always scroll clear of the gesture/navigation bar.
+  const insets = useSafeAreaInsets();
 
   const clean = (v) => String(v == null ? '' : v).trim();
 
@@ -701,7 +705,11 @@ const ascendingByDate = (list) => (Array.isArray(list) ? list : [])
               </TouchableOpacity>
             </View>
 
-            <ScrollView style={styles.modalBody} keyboardShouldPersistTaps="handled">
+            <ScrollView
+              style={styles.modalBody}
+              contentContainerStyle={[styles.modalScrollContent, { paddingBottom: SPACING.lg + insets.bottom }]}
+              keyboardShouldPersistTaps="handled"
+            >
               {lateLoading ? (
                 <View style={styles.modalState}>
                   <ActivityIndicator color={COLORS.primary} />
@@ -754,7 +762,11 @@ const ascendingByDate = (list) => (Array.isArray(list) ? list : [])
             <View style={styles.modalMonthBar}>
               <MonthNavigator month={biMonth} onChange={changeBiMonth} />
             </View>
-            <ScrollView style={styles.modalBody} keyboardShouldPersistTaps="handled">
+            <ScrollView
+              style={styles.modalBody}
+              contentContainerStyle={[styles.modalScrollContent, { paddingBottom: SPACING.lg + insets.bottom }]}
+              keyboardShouldPersistTaps="handled"
+            >
               {biDetailLoading ? (
                 <View style={styles.modalState}>
                   <ActivityIndicator color={COLORS.primary} />
@@ -917,15 +929,17 @@ const styles = StyleSheet.create({
   auditStatLabel: { fontSize: 9, color: COLORS.textSecondary },
   auditSectionTitle: { fontSize: 12, fontWeight: '700', color: COLORS.textPrimary, marginTop: 10, marginBottom: 4 },
   auditRow: { fontSize: 11, color: COLORS.textSecondary, paddingVertical: 2 },
-  auditAttRow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 3, borderBottomWidth: 1, borderBottomColor: COLORS.divider },
-  auditAttDate: { width: 74, fontSize: 10, color: COLORS.textSecondary },
-  auditAttCell: { fontSize: 10, color: COLORS.textPrimary },
+  // Rows wrap on narrow screens and the cells shrink, so the status column is
+  // never pushed off the modal edge (presentation only).
+  auditAttRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6, paddingVertical: 3, borderBottomWidth: 1, borderBottomColor: COLORS.divider },
+  auditAttDate: { width: 74, flexShrink: 1, fontSize: 10, color: COLORS.textSecondary },
+  auditAttCell: { fontSize: 10, color: COLORS.textPrimary, flexShrink: 1 },
   // IN dark green, OUT dark red; a missing punch stays neutral.
   auditAttIn: { color: '#166534', fontWeight: '700' },
   auditAttOut: { color: '#991B1B', fontWeight: '700' },
   auditAttTimeNone: { color: COLORS.textTertiary },
   modalMonthBar: { paddingHorizontal: SPACING.md, paddingTop: SPACING.sm },
-  auditAttStatus: { fontSize: 10, fontWeight: '700', marginLeft: 'auto' },
+  auditAttStatus: { fontSize: 10, fontWeight: '700', marginLeft: 'auto', flexShrink: 1, textAlign: 'right' },
 
   // Late Today modal
   modalBackdrop: {
@@ -950,7 +964,16 @@ const styles = StyleSheet.create({
     borderBottomColor: COLORS.border,
   },
   modalTitle: { fontSize: 15, fontWeight: '700', color: COLORS.textPrimary },
-  modalBody: { padding: SPACING.md, maxHeight: 420 },
+  // Audit / Late modal body: the scroll area must fit INSIDE the card's
+  // maxHeight on every screen height. The old fixed `maxHeight: 420` could
+  // exceed the 80%-card on shorter devices - the card clipped the bottom of
+  // the scroll viewport and the last attendance record became unreachable.
+  // flexShrink lets the scroll view compress to the available space instead,
+  // so the records area always scrolls fully within the visible modal.
+  modalBody: { flexGrow: 0, flexShrink: 1, padding: SPACING.md },
+  // Bottom padding is part of the scrollable content, so the FINAL record can
+  // always be scrolled clear of the modal boundary / screen edge.
+  modalScrollContent: { paddingBottom: SPACING.lg, gap: 2 },
   modalState: { alignItems: 'center', paddingVertical: SPACING.lg, gap: 8 },
   lateRow: {
     paddingVertical: SPACING.sm,

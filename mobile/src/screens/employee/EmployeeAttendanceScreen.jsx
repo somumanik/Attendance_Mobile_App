@@ -35,6 +35,7 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { View, Text, ScrollView, StyleSheet, TouchableOpacity, Modal, RefreshControl, ActivityIndicator } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../../theme';
 import { Card, Button, ScreenContainer } from '../../components';
@@ -135,6 +136,9 @@ const LEGEND = [
 export const EmployeeAttendanceScreen = () => {
   const { theme } = useTheme();
   const { userData } = useAuth();
+  // Home-indicator / gesture-nav inset: the day-details sheet must not have its
+  // last row hidden behind the Android navigation bar (presentation only).
+  const insets = useSafeAreaInsets();
   const employeeName = clean(userData?.empname) || 'Employee';
   const paycode = clean(userData?.paycode);
 
@@ -374,6 +378,21 @@ export const EmployeeAttendanceScreen = () => {
   // Weekday header, Monday first (matching the grid).
   const WEEK_HEADER = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
+  /**
+   * PRESENTATION ONLY: the flat 42-cell grid is grouped into 6 week rows so
+   * every row is a plain flex row of 7 equal `flex: 1` cells. The previous
+   * wrap-based `width: ${100/7}%` grid could round each cell's resolved width
+   * up on some device widths/densities, making the 7th cell (Sunday) overflow
+   * the row and wrap out of the grid - the "missing Sunday column" defect.
+   * Row-based flex layout always fills the row exactly, at any screen width or
+   * font scale. No date maths, statuses or data flow change here.
+   */
+  const calendarWeeks = useMemo(() => {
+    const out = [];
+    for (let i = 0; i < calendarCells.length; i += 7) out.push(calendarCells.slice(i, i + 7));
+    return out;
+  }, [calendarCells]);
+
   // Late records joined with the attendance row for shift / formatted In time.
   const lateList = useMemo(() => {
     const list = Array.isArray(data?.lateDetails) ? data.lateDetails : [];
@@ -551,43 +570,55 @@ export const EmployeeAttendanceScreen = () => {
               {/* Weekday header, Monday first (matches the grid) */}
               <View style={styles.calWeekRow}>
                 {WEEK_HEADER.map((w) => (
-                  <Text key={w} style={[styles.calWeekHead, { color: theme.textTertiary }]}>{w}</Text>
+                  <Text key={w} maxFontSizeMultiplier={1.3} style={[styles.calWeekHead, { color: theme.textTertiary }]}>{w}</Text>
                 ))}
               </View>
 
               {calendarCells.length ? (
                 <View style={styles.calGrid}>
-                  {calendarCells.map((c) => {
-                    // Holiday overlay wins: a holiday day is always purple.
-                    const color = c.inMonth ? displayColor(c.row, c.key) : null;
-                    const label = displayStatus(c.row, c.key);
-                    return (
-                      <TouchableOpacity
-                        key={c.key}
-                        style={[styles.calCell, c.inMonth && (c.row || c.isHoliday || c.isLeave) && styles.calCellHas]}
-                        activeOpacity={0.7}
-                        disabled={!(c.row || c.isHoliday || c.isLeave)}
-                        // Exposes the real day + its real status for accessibility.
-                        accessibilityLabel={`${c.key} ${label}`}
-                        onPress={() => (c.row || c.isHoliday || c.isLeave) && setPickedDay(c)}
-                      >
-                        <View style={[styles.calDot, { backgroundColor: color || 'transparent' }]} />
-                        <Text
-                          style={[
-                            styles.calDay,
-                            { color: c.inMonth ? (color || theme.textPrimary) : theme.textTertiary },
-                            c.inMonth && !c.row && !c.isHoliday && !c.isLeave && styles.calDayNeutral,
-                          ]}
-                        >
-                          {c.day}
-                        </Text>
-                        {/* Late is a flag beside the main status, never a replacement. */}
-                        {c.inMonth && c.row && c.row.isLate && !c.isHoliday && !c.isLeave ? <Text style={styles.calLate}>L</Text> : null}
-                        {c.inMonth && c.isHoliday ? <Text style={styles.calHol}>H</Text> : null}
-                        {c.inMonth && c.isLeave && !c.isHoliday ? <Text style={styles.calLv}>LV</Text> : null}
-                      </TouchableOpacity>
-                    );
-                  })}
+                  {calendarWeeks.map((week, wi) => (
+                    // One flex row per week: 7 equal `flex: 1` cells exactly
+                    // match the 7 `flex: 1` weekday headers above, so Sunday
+                    // can never be pushed off the row (see calendarWeeks).
+                    <View key={`week-${wi}`} style={styles.calWeek}>
+                      {week.map((c) => {
+                        // Holiday overlay wins: a holiday day is always purple.
+                        const color = c.inMonth ? displayColor(c.row, c.key) : null;
+                        const label = displayStatus(c.row, c.key);
+                        return (
+                          <TouchableOpacity
+                            key={c.key}
+                            style={[styles.calCell, c.inMonth && (c.row || c.isHoliday || c.isLeave) && styles.calCellHas]}
+                            activeOpacity={0.7}
+                            disabled={!(c.row || c.isHoliday || c.isLeave)}
+                            // Exposes the real day + its real status for accessibility.
+                            accessibilityLabel={`${c.key} ${label}`}
+                            onPress={() => (c.row || c.isHoliday || c.isLeave) && setPickedDay(c)}
+                          >
+                            <View style={[styles.calDot, { backgroundColor: color || 'transparent' }]} />
+                            <Text
+                              numberOfLines={1}
+                              adjustsFontSizeToFit
+                              minimumFontScale={0.7}
+                              minFontSizeMultiplier={0.7}
+                              maxFontSizeMultiplier={1.3}
+                              style={[
+                                styles.calDay,
+                                { color: c.inMonth ? (color || theme.textPrimary) : theme.textTertiary },
+                                c.inMonth && !c.row && !c.isHoliday && !c.isLeave && styles.calDayNeutral,
+                              ]}
+                            >
+                              {c.day}
+                            </Text>
+                            {/* Late is a flag beside the main status, never a replacement. */}
+                            {c.inMonth && c.row && c.row.isLate && !c.isHoliday && !c.isLeave ? <Text style={styles.calLate} maxFontSizeMultiplier={1.3}>L</Text> : null}
+                            {c.inMonth && c.isHoliday ? <Text style={styles.calHol} maxFontSizeMultiplier={1.3}>H</Text> : null}
+                            {c.inMonth && c.isLeave && !c.isHoliday ? <Text style={styles.calLv} maxFontSizeMultiplier={1.3}>LV</Text> : null}
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  ))}
                 </View>
               ) : (
                 <Text style={[styles.empty, { color: theme.textTertiary }]}>Calendar nahi bana paaya.</Text>
@@ -781,7 +812,10 @@ export const EmployeeAttendanceScreen = () => {
                 && graceForDay.remaining.grace1hr === 0
                 && graceForDay.remaining.grace2hr === 0;
               return (
-                <ScrollView contentContainerStyle={styles.sheetScroll} showsVerticalScrollIndicator={false}>
+                <ScrollView
+                  contentContainerStyle={[styles.sheetScroll, { paddingBottom: 16 + insets.bottom }]}
+                  showsVerticalScrollIndicator={false}
+                >
                   <View style={styles.sheetHeader}>
                     <Text style={[styles.sheetTitle, { color: theme.textPrimary }]}>
                       {`${shortDate(pickedDay.key)} (${dayName(pickedDay.key)})`}
@@ -921,7 +955,7 @@ export const EmployeeAttendanceScreen = () => {
 };
 
 const styles = StyleSheet.create({
-  scroll: { padding: 12, paddingBottom: 28 },
+  scroll: { padding: 12, paddingBottom: 36 },
   who: { fontSize: 12, marginBottom: 8, textAlign: 'center' },
   stateBox: { paddingVertical: 40, alignItems: 'center', gap: 10 },
   stateText: { fontSize: 13 },
@@ -940,9 +974,16 @@ const styles = StyleSheet.create({
   hoursLabel: { fontSize: 12 },
   hoursValue: { fontSize: 16, fontWeight: '800' },
   calWeekRow: { flexDirection: 'row', marginBottom: 4 },
-  calWeekHead: { flex: 1, textAlign: 'center', fontSize: 9.5, fontWeight: '700' },
-  calGrid: { flexDirection: 'row', flexWrap: 'wrap' },
-  calCell: { width: `${100 / 7}%`, alignItems: 'center', paddingVertical: 4, borderRadius: 8 },
+  // The header cells and the day cells share the SAME sizing basis (flex: 1),
+  // so all seven weekday columns stay perfectly aligned at any screen width.
+  calWeekHead: { flex: 1, minWidth: 0, textAlign: 'center', fontSize: 9.5, fontWeight: '700' },
+  calGrid: {},
+  calWeek: { flexDirection: 'row' },
+  // flex: 1 per cell (instead of percentage widths in a wrap grid) makes each
+  // week row fill exactly 100% - the Sunday column can never wrap or clip away.
+  // minHeight gives every week row the SAME height whether or not a cell has a
+  // status marker, so the grid reads as an even table on all screen widths.
+  calCell: { flex: 1, minWidth: 0, alignItems: 'center', justifyContent: 'flex-start', paddingVertical: 4, paddingHorizontal: 1, minHeight: 42, borderRadius: 8 },
   calCellHas: {},
   calDot: { width: 14, height: 4, borderRadius: 2, marginBottom: 2 },
   calDay: { fontSize: 12.5, fontWeight: '700' },

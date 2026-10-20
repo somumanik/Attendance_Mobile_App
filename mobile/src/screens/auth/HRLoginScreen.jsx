@@ -105,7 +105,7 @@ export const HRLoginScreen = () => {
               placeholder="••••••••"
               value={password}
               onChangeText={setPassword}
-              secureTextEntry={true}
+              type="password"
               autoComplete="password"
               returnKeyType="go"
               onSubmitEditing={handleLogin}

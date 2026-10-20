@@ -147,7 +147,7 @@ export const EmployeeLoginScreen = () => {
                 placeholder="••••"
                 value={pin}
                 onChangeText={(v) => setPin(v.replace(/\D/g, '').slice(0, 4))}
-                secureTextEntry={true}
+                type="password"
                 keyboardType="number-pad"
                 maxLength={4}
                 autoComplete="off"
@@ -160,7 +160,7 @@ export const EmployeeLoginScreen = () => {
                 placeholder="••••••••"
                 value={password}
                 onChangeText={setPassword}
-                secureTextEntry={true}
+                type="password"
                 autoComplete="password"
                 returnKeyType="go"
                 onSubmitEditing={handleLogin}

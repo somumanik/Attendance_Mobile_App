@@ -27,6 +27,7 @@
 
 import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Keyboard, KeyboardAvoidingView, ScrollView, Platform } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { useTheme } from '../../theme';
 import { useAuth } from '../../hooks/useAuth';
@@ -40,6 +41,11 @@ const SUPERADMIN_ACCENT = '#4F46E5';
  * SuperAdmin Login Screen Component
  */
 export const SuperAdminLoginScreen = () => {
+  // Required by the layout below (paddingTop/Bottom + back-button offset).
+  // This hook call was missing while the `insets.*` usages were added, which
+  // threw "ReferenceError: insets is not defined" on render and crashed the
+  // app the moment this screen opened. Same pattern as all sibling screens.
+  const insets = useSafeAreaInsets();
   const navigation = useNavigation();
   const { theme } = useTheme();
   const { loginSuperAdmin } = useAuth();
@@ -107,7 +113,7 @@ export const SuperAdminLoginScreen = () => {
               placeholder="••••••••"
               value={password}
               onChangeText={setPassword}
-              secureTextEntry={true}
+              type="password"
               autoComplete="password"
               returnKeyType="go"
               onSubmitEditing={handleLogin}

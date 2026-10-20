@@ -23,6 +23,7 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { View, Text, ScrollView, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator, Modal } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, TYPOGRAPHY, SPACING, SHADOWS } from '../../utils/colors';
 import { ScreenContainer } from '../../components/ScreenContainer';
@@ -39,6 +40,9 @@ const SERVER_PAGE_SIZE = 100;
 const clean = (v) => String(v == null ? '' : v).trim();
 
 export const HREmployeesScreen = () => {
+  // Home-indicator / gesture-nav inset: bottom sheets get extra bottom padding
+  // so their final row is never hidden behind the Android navigation bar.
+  const insets = useSafeAreaInsets();
   const [allEmployees, setAllEmployees] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -486,7 +490,11 @@ export const HREmployeesScreen = () => {
                 <Ionicons name="close" size={20} color={COLORS.textSecondary} />
               </TouchableOpacity>
             </View>
-            <ScrollView style={styles.modalBody} keyboardShouldPersistTaps="handled">
+            <ScrollView
+              style={styles.modalBody}
+              contentContainerStyle={styles.modalScrollContent}
+              keyboardShouldPersistTaps="handled"
+            >
               {detailLoading ? (
                 <View style={styles.modalState}>
                   <ActivityIndicator color={COLORS.primary} />
@@ -543,7 +551,11 @@ export const HREmployeesScreen = () => {
               />
             ) : null}
 
-            <ScrollView style={styles.sheetList} keyboardShouldPersistTaps="handled">
+            <ScrollView
+              style={styles.sheetList}
+              contentContainerStyle={[styles.sheetListContent, { paddingBottom: SPACING.md + insets.bottom }]}
+              keyboardShouldPersistTaps="handled"
+            >
               {sheetOptions.map((opt) => {
                 const isSelected = filterSheet && filters[filterSheet.key] === opt.value;
                 return (
@@ -577,7 +589,11 @@ const styles = StyleSheet.create({
   modalCard: { backgroundColor: COLORS.surface, borderRadius: 16, maxHeight: '80%', overflow: 'hidden' },
   modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: SPACING.md, borderBottomWidth: 1, borderBottomColor: COLORS.border },
   modalTitle: { fontSize: 15, fontWeight: '700', color: COLORS.textPrimary },
-  modalBody: { padding: SPACING.md, maxHeight: 420 },
+  // Scrollable modal body: flexShrink keeps it inside the 80% card on short
+  // screens (the old fixed maxHeight could overflow the clipped card and hide
+  // the final row); content bottom padding keeps the last row scrollable clear.
+  modalBody: { flexGrow: 0, flexShrink: 1, padding: SPACING.md },
+  modalScrollContent: { paddingBottom: SPACING.lg, gap: 2 },
   modalState: { alignItems: 'center', paddingVertical: SPACING.lg, gap: 8 },
   actionRow: { flexDirection: 'row', gap: 8, marginTop: 8 },
   actionButton: { flex: 1 },
@@ -681,7 +697,10 @@ const styles = StyleSheet.create({
     color: COLORS.textPrimary,
     fontSize: 13,
   },
-  sheetList: { maxHeight: 380, paddingHorizontal: SPACING.sm, paddingBottom: SPACING.md },
+  // flexShrink (not a fixed maxHeight) keeps the option list inside the 75%
+  // sheet on short screens; content bottom padding clears the gesture bar.
+  sheetList: { flexGrow: 0, flexShrink: 1, paddingHorizontal: SPACING.sm },
+  sheetListContent: { paddingBottom: SPACING.md },
   sheetOption: {
     flexDirection: 'row',
     alignItems: 'center',
