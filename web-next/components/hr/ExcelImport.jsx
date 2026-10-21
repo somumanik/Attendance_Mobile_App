@@ -177,6 +177,14 @@ export default function ExcelImport({ columns, endpoint, templateFilename, title
             {stat('Skipped', summary.skipped ?? 0, 'bg-white/5 border-white/5')}
             {stat('Failed', summary.failed ?? 0, 'bg-rose-500/10 border-rose-500/20')}
           </div>
+          {(summary.warnings || []).length ? (
+            <div className="rounded-2xl border p-3" style={{ borderColor: 'var(--warn)', background: 'var(--warn-soft-bg)' }}>
+              <div className="text-[10px] uppercase font-bold mb-1" style={{ color: 'var(--warn-soft-text)' }}>Warnings ({(summary.warnings || []).length})</div>
+              {(summary.warnings || []).slice(0, 30).map((w, i) => (
+                <p key={i} className="text-[11px] leading-relaxed" style={{ color: 'var(--warn-soft-text)' }}>{w}</p>
+              ))}
+            </div>
+          ) : null}
           {(summary.errors || []).length ? (
             <div className="rounded-2xl border border-white/5 overflow-hidden">
               <div className="px-3 py-2 bg-white/5 text-[10px] uppercase font-bold text-[var(--muted)]">Errors ({(summary.errors || []).length})</div>

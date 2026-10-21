@@ -55,6 +55,17 @@ import {
   listSalaryMaster, listSalaryElements, listSalaryDues,
   createSalaryDue, decideSalaryDue, computeFullFinal,
 } from './salary-service.js';
+// Salary Structure V1: dynamic pay elements + Excel import/export. Extends the
+// SAME shared HR_Salary* tables additively and adds HR_PayElementMaster.
+import {
+  ensureSalaryStructureTables, importSalaryStructure,
+  listSalaryStructureMaster, listSalaryStructureElements, listPayElementMaster,
+  importPayElementMasterRows, buildSalaryStructureReport,
+  SALARY_STRUCTURE_MASTER_COLUMNS, SALARY_STRUCTURE_ELEMENT_COLUMNS, PAY_ELEMENT_MASTER_COLUMNS,
+  createSalaryMasterVersion, updateSalaryMasterVersion, deleteSalaryMasterRows,
+  createElementAssignment, updateElementAssignment, deleteElementAssignments,
+  createPayElementMasterRecord, updatePayElementMasterRecord, deletePayElementMasterRecords,
+} from './salary-structure-service.js';
 // SuperAdmin authentication lives in its OWN isolated module
 // (server/superadmin-auth.js). The HR login path never imports it and it has no
 // database access at all, so adding it cannot change HR or employee behaviour.
@@ -4221,6 +4232,160 @@ app.get('/api/hr/salary/fullfinal/:paycode', authenticate, requireRole('HR'), re
     res.json({ success: true, employee: outcome.employee, salary: outcome.salary, rules: outcome.rules, rulesConfigured: true, estimate: outcome.estimate, disclaimer: outcome.disclaimer });
   } catch (error) { sendDbError(res, error); }
 });
+
+// ---------------------------------------------------------------------------
+// SALARY STRUCTURE V1 (dynamic pay elements + Excel import/export).
+// Same HR role + company-scope rules as the routes above; both the mobile app
+// and the Next.js website read/write these SHARED records. The V1 workbook
+// import accepts the EmployeeSalaryMaster / EmployeePayElements / PayElementMaster
+// sheets and reports Imported / Updated / Skipped / Failed per dataset.
+// ---------------------------------------------------------------------------
+app.post('/api/hr/salary/structure/import', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const body = req.body || {};
+    const master = Array.isArray(body.master) ? body.master : [];
+    const elements = Array.isArray(body.elements) ? body.elements : [];
+    const payElementMaster = Array.isArray(body.payElementMaster) ? body.payElementMaster : [];
+    const total = master.length + elements.length + payElementMaster.length;
+    if (!total) return res.status(400).json({ success: false, message: 'No rows to import.', code: 'NO_ROWS' });
+    if (total > 5000) return res.status(400).json({ success: false, message: 'Please import at most 5000 rows at a time.', code: 'TOO_MANY_ROWS' });
+    const summaries = await importSalaryStructure(pool, {
+      master, elements, payElementMaster, actor: req.user?.sub, companyScope: req.hrCompanyScope,
+    });
+    res.json({ success: true, summaries, columns: {
+      master: SALARY_STRUCTURE_MASTER_COLUMNS,
+      elements: SALARY_STRUCTURE_ELEMENT_COLUMNS,
+      payElementMaster: PAY_ELEMENT_MASTER_COLUMNS,
+    } });
+  } catch (error) { sendDbError(res, error); }
+});
+
+app.get('/api/hr/salary/structure/master', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const rows = await listSalaryStructureMaster(pool, {
+      paycode: req.query?.paycode, search: req.query?.search,
+      from: req.query?.from, to: req.query?.to, limit: req.query?.limit,
+      companyScope: req.hrCompanyScope,
+    });
+    res.json({ success: true, rows, columns: SALARY_STRUCTURE_MASTER_COLUMNS });
+  } catch (error) { sendDbError(res, error); }
+});
+
+app.get('/api/hr/salary/structure/elements', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const rows = await listSalaryStructureElements(pool, {
+      paycode: req.query?.paycode, search: req.query?.search,
+      from: req.query?.from, to: req.query?.to, limit: req.query?.limit,
+      companyScope: req.hrCompanyScope,
+    });
+    res.json({ success: true, rows, columns: SALARY_STRUCTURE_ELEMENT_COLUMNS });
+  } catch (error) { sendDbError(res, error); }
+});
+
+app.get('/api/hr/salary/payelement-master', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const rows = await listPayElementMaster(pool, { search: req.query?.search, limit: req.query?.limit });
+    res.json({ success: true, rows, columns: PAY_ELEMENT_MASTER_COLUMNS });
+  } catch (error) { sendDbError(res, error); }
+});
+
+app.post('/api/hr/salary/payelement-master/import', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+    if (!rows.length) return res.status(400).json({ success: false, message: 'No rows to import.', code: 'NO_ROWS' });
+    if (rows.length > 5000) return res.status(400).json({ success: false, message: 'Please import at most 5000 rows at a time.', code: 'TOO_MANY_ROWS' });
+    await ensureSalaryStructureTables(pool);
+    const summary = { imported: 0, updated: 0, skipped: 0, failed: 0, errors: [], results: [], warnings: [] };
+    await importPayElementMasterRows(pool, { rows, actor: req.user?.sub, summary });
+    res.json({ success: true, summary });
+  } catch (error) { sendDbError(res, error); }
+});
+
+// Dynamic pay-element report (union of the codes actually present in the
+// filtered data). Gross Salary appears only from an explicit GROSS source
+// element - never a sum of positives - and is NOT labelled CTC.
+app.get('/api/hr/salary/structure/report', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const report = await buildSalaryStructureReport(pool, {
+      paycode: req.query?.paycode, search: req.query?.search, asOf: req.query?.asOf,
+      limit: req.query?.limit, companyScope: req.hrCompanyScope,
+    });
+    res.json({ success: true, ...report });
+  } catch (error) { sendDbError(res, error); }
+});
+
+/* Manual CRUD for the three structure tables (Add / Edit / Delete Selected).
+   Same middleware/permission architecture as the imports: HR (module 'salary')
+   + SuperAdmin management surface. The HTTP verbs map onto the existing
+   HR_PERMISSION_RULES (POST=create, PUT=edit, DELETE=delete). */
+app.post('/api/hr/salary/structure/master', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const out = await createSalaryMasterVersion(await getPool(), { input: req.body || {}, actor: req.user?.sub, companyScope: req.hrCompanyScope });
+    res.status(out.success ? 200 : 400).json(out);
+  } catch (error) { sendDbError(res, error); }
+});
+app.put('/api/hr/salary/structure/master/:id', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const out = await updateSalaryMasterVersion(await getPool(), { id: req.params.id, input: req.body || {}, actor: req.user?.sub, companyScope: req.hrCompanyScope });
+    res.status(out.success ? 200 : 400).json(out);
+  } catch (error) { sendDbError(res, error); }
+});
+app.delete('/api/hr/salary/structure/master', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    if (!ids.length) return res.status(400).json({ success: false, message: 'No rows selected.' });
+    const out = await deleteSalaryMasterRows(await getPool(), { ids, actor: req.user?.sub, companyScope: req.hrCompanyScope });
+    res.json(out);
+  } catch (error) { sendDbError(res, error); }
+});
+app.post('/api/hr/salary/structure/elements', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const out = await createElementAssignment(await getPool(), { input: req.body || {}, actor: req.user?.sub, companyScope: req.hrCompanyScope });
+    res.status(out.success ? 200 : 400).json(out);
+  } catch (error) { sendDbError(res, error); }
+});
+app.put('/api/hr/salary/structure/elements/:id', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const out = await updateElementAssignment(await getPool(), { id: req.params.id, input: req.body || {}, actor: req.user?.sub, companyScope: req.hrCompanyScope });
+    res.status(out.success ? 200 : 400).json(out);
+  } catch (error) { sendDbError(res, error); }
+});
+app.delete('/api/hr/salary/structure/elements', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    if (!ids.length) return res.status(400).json({ success: false, message: 'No rows selected.' });
+    const out = await deleteElementAssignments(await getPool(), { ids, actor: req.user?.sub, companyScope: req.hrCompanyScope });
+    res.json(out);
+  } catch (error) { sendDbError(res, error); }
+});
+app.post('/api/hr/salary/payelement-master', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const out = await createPayElementMasterRecord(await getPool(), { input: req.body || {}, actor: req.user?.sub });
+    res.status(out.success ? 200 : 400).json(out);
+  } catch (error) { sendDbError(res, error); }
+});
+app.put('/api/hr/salary/payelement-master/:id', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const out = await updatePayElementMasterRecord(await getPool(), { id: req.params.id, input: req.body || {}, actor: req.user?.sub });
+    res.status(out.success ? 200 : 400).json(out);
+  } catch (error) { sendDbError(res, error); }
+});
+app.delete('/api/hr/salary/payelement-master', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    if (!ids.length) return res.status(400).json({ success: false, message: 'No rows selected.' });
+    const out = await deletePayElementMasterRecords(await getPool(), { ids });
+    res.json(out);
+  } catch (error) { sendDbError(res, error); }
+});
+
+
 
 // ---------------------------------------------------------------------------
 // Marriage anniversary application table (NOT a Savior table).

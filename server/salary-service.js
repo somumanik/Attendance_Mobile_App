@@ -28,6 +28,7 @@
 
 import { sql } from './db.js';
 import { findActiveEmployee, getLeaveBalance, ensureLeaveTables } from './leave-service.js';
+import { validatePayElementCode } from './salary-structure-service.js';
 
 const SALARY_MASTER_TABLE = process.env.HR_SALARY_MASTER_TABLE || 'dbo.HR_SalaryMaster';
 const SALARY_ELEMENT_TABLE = process.env.HR_SALARY_ELEMENT_TABLE || 'dbo.HR_SalaryElement';
@@ -316,12 +317,13 @@ export async function getSalaryConfig(pool) {
  */
 export async function importSalaryMaster(pool, { rows, actor, companyScope }) {
   await ensureSalaryTables(pool);
-  const summary = { imported: 0, updated: 0, skipped: 0, failed: 0, errors: [], results: [] };
+  const summary = { imported: 0, updated: 0, skipped: 0, failed: 0, errors: [], results: [], warnings: [] };
   const list = Array.isArray(rows) ? rows : [];
   if (!list.length) {
     summary.errors.push('No rows found in the file.');
     return summary;
   }
+  const seen = new Map(); // in-file duplicate detection (same key twice in one file)
 
   for (let index = 0; index < list.length; index += 1) {
     const row = list[index] || {};
@@ -379,6 +381,24 @@ export async function importSalaryMaster(pool, { rows, actor, companyScope }) {
       effectivefrom: effective, basicsalary: round2(basic), pfapplicable: pfFlag,
       esiapplicable: esiFlag, pfwage: round2(pfW), esiwage: round2(esiW),
     };
+
+    // In-file duplicates for the same EmployeeCode + EffectiveFrom: identical
+    // rows are reported as duplicates of the first row; conflicting values are
+    // reported and NOT applied (no silent last-wins overwrite).
+    const dupKey = `${upper(employee.paycode)}|${effective}`;
+    const dupSig = JSON.stringify([round2(basic), pfFlag, esiFlag, round2(pfW), round2(esiW)]);
+    if (seen.has(dupKey)) {
+      const prev = seen.get(dupKey);
+      if (prev.sig === dupSig) {
+        summary.skipped += 1;
+        summary.results.push({ ...record, status: 'Skipped', message: `Duplicate of row ${prev.row} in file (same EmployeeCode + EffectiveFrom and values).` });
+      } else {
+        fail(`Conflicts with row ${prev.row} in file for the same EmployeeCode + EffectiveFrom (different salary values) - fix the file and re-import.`);
+      }
+      continue;
+    }
+    seen.set(dupKey, { row: excelRow, sig: dupSig });
+
     await upsertMasterRow(pool, summary, record, { basic, pfFlag, esiFlag, pfW, esiW, actor });
   }
   return summary;
@@ -468,12 +488,13 @@ async function upsertMasterRow(pool, summary, record, v) {
  */
 export async function importSalaryElements(pool, { rows, actor, companyScope }) {
   await ensureSalaryTables(pool);
-  const summary = { imported: 0, updated: 0, skipped: 0, failed: 0, errors: [], results: [] };
+  const summary = { imported: 0, updated: 0, skipped: 0, failed: 0, errors: [], results: [], warnings: [] };
   const list = Array.isArray(rows) ? rows : [];
   if (!list.length) {
     summary.errors.push('No rows found in the file.');
     return summary;
   }
+  const seen = new Map(); // in-file duplicate detection (same key twice in one file)
 
   for (let index = 0; index < list.length; index += 1) {
     const row = list[index] || {};
@@ -529,6 +550,12 @@ export async function importSalaryElements(pool, { rows, actor, companyScope }) 
       continue;
     }
 
+    // Validate PayElementCode against the application Pay Element Master when a
+    // master entry exists. Unknown codes are REPORTED clearly (warnings) and the
+    // row imports with its ORIGINAL code/name - never silently discarded and
+    // never fabricated into the master.
+    await validatePayElementCode(pool, { code: elemCode, name: elemName, excelRow, summary });
+
     const record = {
       row: excelRow, employeeCode: employee.paycode, empname: employee.empname,
       payelementcode: elemCode, payelementname: elemName, payelementtype: elemType,
@@ -536,6 +563,24 @@ export async function importSalaryElements(pool, { rows, actor, companyScope }) 
       percentage, percentagebase: calcType === 'PERCENTAGE' ? pctBase : null,
       effectivefrom: effective,
     };
+
+    // In-file duplicates for the same employee + pay element + effective date:
+    // identical rows are reported as duplicates of the first row; conflicting
+    // values are reported and NOT applied (no silent last-wins overwrite).
+    const dupKey = `${upper(employee.paycode)}|${elemCode}|${effective}`;
+    const dupSig = JSON.stringify([elemName, elemType, calcType, amount === null ? null : round2(amount), percentage, calcType === 'PERCENTAGE' ? pctBase : null]);
+    if (seen.has(dupKey)) {
+      const prev = seen.get(dupKey);
+      if (prev.sig === dupSig) {
+        summary.skipped += 1;
+        summary.results.push({ ...record, status: 'Skipped', message: `Duplicate of row ${prev.row} in file (same employee + pay element + effective date and values).` });
+      } else {
+        fail(`Conflicts with row ${prev.row} in file for the same employee + pay element + effective date (different values) - fix the file and re-import.`);
+      }
+      continue;
+    }
+    seen.set(dupKey, { row: excelRow, sig: dupSig });
+
     await upsertElementRow(pool, summary, record, { actor });
   }
   return summary;

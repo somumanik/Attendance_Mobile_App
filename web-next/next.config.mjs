@@ -12,6 +12,10 @@ const API_TARGET = process.env.API_PROXY_TARGET || 'http://localhost:4000';
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Builds can target a separate dist dir (NEXT_DIST_DIR) so a concurrently
+  // running `next dev` cannot corrupt the build output. Default stays '.next'
+  // (zero behaviour change for existing workflows).
+  distDir: process.env.NEXT_DIST_DIR || '.next',
   // Root repo me dusra package-lock.json hai, isliye Next ko apna folder batate hain
   // (workspace-root warning hatane ke liye).
   outputFileTracingRoot: dir,
