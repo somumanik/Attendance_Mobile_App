@@ -1507,7 +1507,11 @@ export async function importSalaryStructureMasterRows(pool, { rows, actor, compa
     const sameValues = (db) => round2(db.basicsalary) === basicV
       && Boolean(db.pfapplicable) === pfB && Boolean(db.esiapplicable) === esiB
       && round2(db.pfwage) === pfW && round2(db.esiwage) === esiW
-      && clean(db.employeecode) === employeeCode && clean(db.employeenumber) === employeeNumber
+      && clean(db.employeecode) === employeeCode
+      // EmployeeNumber is Navision traceability only - NOT part of the V1
+      // template/export any more, so a blank value means "not specified"
+      // (never a change, never a wipe) exactly like the pay-element importer.
+      && (employeeNumber === '' || clean(db.employeenumber) === employeeNumber)
       && clean(db.locationcode) === locationCode && clean(db.currency) === (currency || '')
       && clean(db.remarks) === remarks;
 
@@ -1535,7 +1539,9 @@ export async function importSalaryStructureMasterRows(pool, { rows, actor, compa
       await params(pool.request()).input('id', sql.Int, existing.recordset[0].id).query(`
         UPDATE ${SALARY_MASTER_TABLE}
         SET basicsalary = @basic, pfapplicable = @pf, esiapplicable = @esi, pfwage = @pfw, esiwage = @esiw,
-            employeecode = @ecode, employeenumber = @enum, locationcode = @loc, currency = @cur, remarks = @rem,
+            employeecode = @ecode,
+            employeenumber = COALESCE(@enum, employeenumber),
+            locationcode = @loc, currency = @cur, remarks = @rem,
             extrafields = COALESCE(@extra, extrafields), updateddate = SYSUTCDATETIME(), updatedby = @by
         WHERE id = @id`);
       summary.updated += 1;
@@ -1741,7 +1747,13 @@ export async function importSalaryStructureElementRows(pool, { rows, actor, comp
       && (db.percentage === null ? null : Number(db.percentage)) === percent
       && (upper(db.percentagebase) || null) === percentBase
       && clean(db.employeecode) === employeeCode && clean(db.locationcode) === locationCode
-      && upper(db.fixedorpercent) === fixedOrPercent && upper(db.addordeduct) === addOrDeduct
+      // Legacy rows keep their classification in CalculationType / PayElementType
+      // only - the file then expresses the SAME record via the accepted legacy
+      // columns, so an unchanged export never rewrites or loses that data.
+      && (upper(db.fixedorpercent) === fixedOrPercent
+        || (!upper(db.fixedorpercent) && upper(db.calculationtype) === legacyCalcFinal))
+      && (upper(db.addordeduct) === addOrDeduct
+        || (!upper(db.addordeduct) && upper(db.payelementtype) === legacyTypeFinal))
       && clean(db.computationtype) === computationType
       && (db.pfapplicable === null || db.pfapplicable === undefined ? null : Boolean(db.pfapplicable)) === flags.PFApplicable
       && (db.ptapplicable === null || db.ptapplicable === undefined ? null : Boolean(db.ptapplicable)) === flags.PTApplicable

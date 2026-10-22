@@ -10,7 +10,8 @@
 // Import previews show before committing; success messages only appear after
 // the server confirms, and every mutation re-fetches (no stale UI).
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import useApiData from '../useApiData';
 import AsyncBox from '../employee/AsyncBox';
 import apiFetch from '../../lib/api';
@@ -23,6 +24,9 @@ const clean = (v) => String(v == null ? '' : v).trim();
 const money = (v) => (v === null || v === undefined || v === '' || Number.isNaN(Number(v)))
   ? '—' : `Rs ${Number(v).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
 const yn = (v) => (v === null || v === undefined ? '—' : (v ? 'Y' : 'N'));
+// Export-only boolean mapping: unknown/unset value = BLANK cell (re-importable).
+// Display tables use yn ('—'); exports never show a placeholder as if it were data.
+const ynB = (v) => (v === null || v === undefined ? '' : v ? 'Y' : 'N');
 
 /* Shared Add/Edit form field contracts (module scope so the modal never
    remounts while typing). optionsKey values resolve against the options map. */
@@ -93,17 +97,49 @@ function CrudForm({ title, fields, values, options, busy, errors, warnings, onCa
   const set = (name, v) => setVals((s) => ({ ...s, [name]: v }));
   const errFor = (name) => (errors || []).find((e) => e.field === name)?.message || '';
   const cls = 'px-3 py-2 rounded-xl bg-[var(--input-bg)] border border-[var(--border)] text-xs text-[var(--text)] outline-none focus:border-[var(--accent)] w-full';
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.55)' }}>
-      <div className="glass-card rounded-3xl p-6 w-full max-w-3xl max-h-[90vh] overflow-y-auto">
-        <h3 className="font-bold text-base text-[var(--text)] mb-3">{title}</h3>
-        {(warnings || []).length ? (
-          <div className="mb-3 rounded-xl p-2" style={{ background: 'var(--warn-soft-bg)' }}>
-            {warnings.map((w, i) => <p key={i} className="text-[10px]" style={{ color: 'var(--warn-soft-text)' }}>{w}</p>)}
-          </div>
-        ) : null}
-        <form onSubmit={(e) => { e.preventDefault(); if (!busy) onSubmit(vals); }}>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+
+  // Background scroll-lock + Escape = Cancel. busy/onCancel refs se padhe jaate
+  // hain taaki effect sirf mount/unmount par chale (lock/restore exactly once).
+  const busyRef = useRef(!!busy);
+  busyRef.current = !!busy;
+  const cancelRef = useRef(onCancel);
+  cancelRef.current = onCancel;
+  useEffect(() => {
+    const prevBody = document.body.style.overflow;
+    const prevHtml = document.documentElement.style.overflow;
+    const prevPad = document.body.style.paddingRight;
+    const scrollbar = window.innerWidth - document.documentElement.clientWidth;
+    document.body.style.overflow = 'hidden';
+    document.documentElement.style.overflow = 'hidden';
+    if (scrollbar > 0) document.body.style.paddingRight = `${scrollbar}px`;
+    const onKey = (e) => {
+      if (e.key === 'Escape' && !busyRef.current) cancelRef.current();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      document.body.style.overflow = prevBody;
+      document.documentElement.style.overflow = prevHtml;
+      document.body.style.paddingRight = prevPad;
+      window.removeEventListener('keydown', onKey);
+    };
+  }, []);
+
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.55)' }} role="dialog" aria-modal="true">
+      {/* Panel viewport ke centre me fixed: header/title aur Save/Cancel pinned,
+          beech ka form body independently scroll hota hai (max-h 90vh). */}
+      <div className="glass-card rounded-3xl w-full max-w-3xl max-h-[90vh] flex flex-col">
+        <div className="p-6 pb-3 shrink-0">
+          <h3 className="font-bold text-base text-[var(--text)]">{title}</h3>
+          {(warnings || []).length ? (
+            <div className="mt-3 rounded-xl p-2" style={{ background: 'var(--warn-soft-bg)' }}>
+              {warnings.map((w, i) => <p key={i} className="text-[10px]" style={{ color: 'var(--warn-soft-text)' }}>{w}</p>)}
+            </div>
+          ) : null}
+        </div>
+        <form onSubmit={(e) => { e.preventDefault(); if (!busy) onSubmit(vals); }} className="flex flex-col min-h-0 flex-1">
+          <div className="flex-1 min-h-0 overflow-y-auto px-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {fields.map((f) => {
               const err = errFor(f.name);
               const opts = f.optionsKey ? (options[f.optionsKey] || []) : [];
@@ -128,8 +164,9 @@ function CrudForm({ title, fields, values, options, busy, errors, warnings, onCa
                 </div>
               );
             })}
+            </div>
           </div>
-          <div className="flex items-center justify-end gap-2 mt-5">
+          <div className="flex items-center justify-end gap-2 p-6 pt-4 shrink-0">
             <button type="button" onClick={onCancel} disabled={busy} className="px-4 py-2 rounded-xl bg-white/5 border border-[var(--border)] text-[var(--text)] text-[11px] font-bold disabled:opacity-40">Cancel</button>
             <button type="submit" disabled={busy} className="px-5 py-2 rounded-xl card-gradient-1 text-white text-[11px] font-bold shadow-lg shadow-indigo-600/30 hover:opacity-95 transition disabled:opacity-50">
               {busy ? 'Saving...' : 'Save'}
@@ -137,7 +174,8 @@ function CrudForm({ title, fields, values, options, busy, errors, warnings, onCa
           </div>
         </form>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -176,6 +214,8 @@ export default function SalaryStructureSection() {
   const [importing, setImporting] = useState(false);
   const [summaries, setSummaries] = useState(null);
   const [importError, setImportError] = useState('');
+  const [tplBusy, setTplBusy] = useState(false);
+  const [tplError, setTplError] = useState('');
 
   async function onFileChosen(e) {
     const f = e.target.files && e.target.files[0];
@@ -225,6 +265,29 @@ export default function SalaryStructureSection() {
     }
   }
 
+  /* Template download PRE-FILLED with the real saved records (read-only fetch
+     through the authorized backend - same filter scope as the exports). The
+     workbook stays fully re-importable: unchanged rows skip, edits update. */
+  async function downloadTemplateWithData() {
+    if (tplBusy) return;
+    setTplBusy(true);
+    setTplError('');
+    try {
+      const [m, e, p] = await Promise.all([
+        apiFetch(`/hr/salary/structure/master${qs({ asOf: '', limit: 5000 })}`),
+        apiFetch(`/hr/salary/structure/elements${qs({ asOf: '', limit: 5000 })}`),
+        apiFetch('/hr/salary/payelement-master?limit=5000'),
+      ]);
+      await downloadStructureTemplate('salary-structure-template.xlsx', {
+        master: m?.rows || [], elements: e?.rows || [], payElementMaster: p?.rows || [],
+      });
+    } catch {
+      setTplError('Real data fetch nahi ho payi — template download nahi hua (blank file serve karke mislead nahi kiya). Filters/API check karke dobara try karein.');
+    } finally {
+      setTplBusy(false);
+    }
+  }
+
   /* ------------------------------ Exports ----------------------------- */
   async function exportMaster() {
     const res = await apiFetch(`/hr/salary/structure/master${qs({ asOf: '', limit: 5000 })}`);
@@ -235,8 +298,8 @@ export default function SalaryStructureSection() {
     await downloadRowsXlsx('employee-salary-master.xlsx', header, rows.map((r) => [
       r.employeecode, r.paycode, r.presentcardno, r.empname, r.companycode,
       r.locationcode, r.departmentcode, r.designation, r.effectivefrom, r.basicsalary,
-      yn(r.pfapplicable), yn(r.esiapplicable), r.pfwage, r.esiwage, r.currency, r.remarks,
-    ]));
+      ynB(r.pfapplicable), ynB(r.esiapplicable), r.pfwage, r.esiwage, r.currency, r.remarks,
+    ]), SHEET_NAMES.master);
   }
 
   async function exportElements() {
@@ -249,11 +312,11 @@ export default function SalaryStructureSection() {
     await downloadRowsXlsx('employee-pay-elements.xlsx', header, rows.map((r) => [
       r.paycode, r.employeecode, r.empname, r.companycode, r.locationcode, r.effectivefrom,
       r.payelementcode, r.payelementname, r.fixedorpercent, r.amount, r.percent,
-      r.computationtype, r.addordeduct, yn(r.pfapplicable), yn(r.ptapplicable), yn(r.esiapplicability),
-      yn(r.applicableforot), yn(r.applicableforc), r.paycadre, yn(r.activepayelement),
-      yn(r.processed), r.payrollpostinggroup, yn(r.leaveencashment), r.remarks,
+      r.computationtype, r.addordeduct, ynB(r.pfapplicable), ynB(r.ptapplicable), ynB(r.esiapplicability),
+      ynB(r.applicableforot), ynB(r.applicableforc), r.paycadre, ynB(r.activepayelement),
+      ynB(r.processed), r.payrollpostinggroup, ynB(r.leaveencashment), r.remarks,
       ...extraKeys.map((k) => (r.extrafields ? r.extrafields[k] : '')),
-    ]));
+    ]), SHEET_NAMES.elements);
   }
 
   async function exportPayElementMaster() {
@@ -267,7 +330,7 @@ export default function SalaryStructureSection() {
       ['PayElementCode', 'Description', 'PayElementName', 'AddDeduct', 'ApplicableForOT', 'ESIApplicable', 'PFApplicable', 'LeaveEncashmentApplicable', 'PayrollPostingGroup', 'Remarks', 'Active'],
       rows.map((r) => [r.payelementcode, r.description, r.payelementname, ad(r.addordeduct),
         ynb(r.applicableforot), ynb(r.esiapplicable), ynb(r.pfapplicable), ynb(r.leaveencashment),
-        r.payrollpostinggroup, r.remarks, ynb(r.active)]));
+        r.payrollpostinggroup, r.remarks, ynb(r.active)]), SHEET_NAMES.payElementMaster);
   }
 
   async function exportReport() {
@@ -282,11 +345,11 @@ export default function SalaryStructureSection() {
       ...codes.map((c) => (r.cells && r.cells[c] != null ? r.cells[c] : '')),
       ...(grossCol.length ? [r.gross != null ? r.gross : ''] : []),
     ]);
-    await downloadRowsXlsx('salary-structure-report.xlsx', header, body);
+    await downloadRowsXlsx('salary-structure-report.xlsx', header, body, 'SalaryStructureReport');
     // Report notes travel with the file so Gross/CTC semantics stay explicit.
     await downloadRowsXlsx('salary-structure-report-notes.xlsx', ['Note'], [
       [rep?.grossRule || ''], [rep?.note || ''], [`Generated for as-of date: ${rep?.asOf || ''}`],
-    ]);
+    ], 'Notes');
   }
 
 
@@ -453,8 +516,8 @@ export default function SalaryStructureSection() {
           <h3 className="font-bold text-base text-[var(--text)] flex items-center gap-2">
             <i className="fas fa-sitemap text-indigo-400"></i> Salary Structure — Excel Template &amp; Import
           </h3>
-          <button type="button" onClick={() => downloadStructureTemplate()} className={btnGhost}>
-            <i className="fas fa-file-arrow-down mr-1"></i>Download Template (.xlsx)
+          <button type="button" onClick={downloadTemplateWithData} disabled={tplBusy} className={btnGhost}>
+            {tplBusy ? <i className="fas fa-spinner fa-spin mr-1"></i> : <i className="fas fa-file-arrow-down mr-1"></i>}Download Template (.xlsx)
           </button>
         </div>
         <p className="text-[11px] text-[var(--muted)] mb-4">
@@ -463,8 +526,15 @@ export default function SalaryStructureSection() {
           <span className="mono text-[var(--text)]">{SHEET_NAMES.payElementMaster}</span> aur ReadMe.
           Import se pehle preview dikhta hai; validation SERVER par hota hai (real employee roster ke against)
           aur Imported / Updated / Skipped / Failed counts backend ke actual response se aate hain.
-          Template me koi example employee row nahi hai — illustrative values kabhi real data import nahi hote.
+          Template abhi saved real records se pre-filled download hota hai (company-scoped, read-only): unchanged rows
+          dubara import par Skipped hote hain (koi duplicate nahi banta), edited rows matching effective-date version
+          ko update karte hain. Koi illustrative/fake row kabhi nahi hoti — unavailable fields blank rehte hain.
         </p>
+        {tplError ? (
+          <p className="text-[11px] rounded-xl px-3 py-2 border bg-rose-500/10 border-rose-500/20 text-rose-300 mb-4">
+            <i className="fas fa-circle-exclamation mr-1"></i>{tplError}
+          </p>
+        ) : null}
 
         <div className="flex items-center gap-3 flex-wrap">
           <label className={`${btnPrimary} cursor-pointer`}>
@@ -602,7 +672,7 @@ export default function SalaryStructureSection() {
         {renderOp('master')}
         <AsyncBox loading={master.loading} error={master.error} onRetry={master.reload} label="Salary master load ho raha hai...">
           {masterRows.length ? (
-            <div className="overflow-x-auto">
+            <div className="table-scroll overflow-x-auto">
               <table className="portal-table">
                 <thead>
                   <tr>
@@ -660,7 +730,7 @@ export default function SalaryStructureSection() {
         {renderOp('elem')}
         <AsyncBox loading={elements.loading} error={elements.error} onRetry={elements.reload} label="Pay elements load ho rahe hain...">
           {elementRows.length ? (
-            <div className="overflow-x-auto">
+            <div className="table-scroll overflow-x-auto">
               <table className="portal-table">
                 <thead>
                   <tr>
@@ -726,7 +796,7 @@ export default function SalaryStructureSection() {
         {renderOp('pem')}
         <AsyncBox loading={payElementMaster.loading} error={payElementMaster.error} onRetry={payElementMaster.reload} label="Pay element master load ho raha hai...">
           {pemRows.length ? (
-            <div className="overflow-x-auto">
+            <div className="table-scroll overflow-x-auto">
               <table className="portal-table">
                 <thead>
                   <tr><th><input type="checkbox" aria-label="Select all pay element master rows" checked={pemRows.length > 0 && pemRows.every((r) => selPem.has(r.id))} onChange={() => toggleAll(setSelPem, pemRows)} /></th><th>Code</th><th>Description</th><th>Name</th><th>Add/Deduct</th><th>OT</th><th>ESI</th><th>PF</th><th>Encash</th><th>Posting Group</th><th>Active</th><th>Remarks</th></tr>

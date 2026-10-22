@@ -54,6 +54,7 @@ import {
   importSalaryMaster, importSalaryElements,
   listSalaryMaster, listSalaryElements, listSalaryDues,
   createSalaryDue, decideSalaryDue, computeFullFinal,
+  listBonusSettlements, recordBonusSettlement, deleteBonusSettlements,
 } from './salary-service.js';
 // Salary Structure V1: dynamic pay elements + Excel import/export. Extends the
 // SAME shared HR_Salary* tables additively and adds HR_PayElementMaster.
@@ -4230,6 +4231,37 @@ app.get('/api/hr/salary/fullfinal/:paycode', authenticate, requireRole('HR'), re
     });
     if (!outcome.ok) return res.status(outcome.status).json({ success: false, message: outcome.message, code: outcome.code });
     res.json({ success: true, employee: outcome.employee, salary: outcome.salary, rules: outcome.rules, rulesConfigured: true, estimate: outcome.estimate, disclaimer: outcome.disclaimer });
+  } catch (error) { sendDbError(res, error); }
+});
+
+// Bonus settlement history - explicit HR records only. Estimating NEVER writes
+// here; overlapping service for the same employee + bonus period is rejected so
+// the same service period can never be settled twice.
+app.get('/api/hr/salary/bonus-settlements', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const rows = await listBonusSettlements(pool, {
+      paycode: req.query?.paycode, periodStart: req.query?.periodStart, periodEnd: req.query?.periodEnd,
+    });
+    res.json({ success: true, rows });
+  } catch (error) { sendDbError(res, error); }
+});
+
+app.post('/api/hr/salary/bonus-settlements', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const outcome = await recordBonusSettlement(pool, { input: req.body || {}, actor: req.user?.sub, companyScope: req.hrCompanyScope });
+    if (!outcome.ok) return res.status(outcome.status).json({ success: false, message: outcome.message, code: outcome.code });
+    res.status(201).json({ success: true, settlement: outcome.settlement });
+  } catch (error) { sendDbError(res, error); }
+});
+
+app.delete('/api/hr/salary/bonus-settlements', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const outcome = await deleteBonusSettlements(pool, { ids: req.body?.ids, companyScope: req.hrCompanyScope });
+    if (!outcome.ok) return res.status(outcome.status).json({ success: false, message: outcome.message, code: outcome.code });
+    res.json({ success: true, deleted: outcome.deleted, results: outcome.results });
   } catch (error) { sendDbError(res, error); }
 });
 

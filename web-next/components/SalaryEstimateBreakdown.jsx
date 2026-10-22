@@ -14,13 +14,16 @@ const money = (v) => (v === null || v === undefined || v === '' || Number.isNaN(
   : `Rs ${Number(v).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
 
 /** One transparent component line: label + calculation basis + amount. */
-function ComponentRow({ label, basis, note, amount, negative }) {
+function ComponentRow({ label, basis, note, amount, negative, details }) {
   const n = Number(amount) || 0;
   return (
     <div className="flex items-start justify-between gap-4 py-2.5 border-b border-[var(--border)] last:border-b-0">
       <div className="min-w-0">
         <p className="text-xs font-semibold text-[var(--text)]">{label}</p>
         {basis ? <p className="text-[10px] text-[var(--muted)] mt-0.5 leading-relaxed">{basis}</p> : null}
+        {(details || []).filter(Boolean).map((d, i) => (
+          <p key={i} className="text-[10px] text-[var(--muted)] mt-0.5 leading-relaxed">{d}</p>
+        ))}
         {note ? <p className="text-[10px] mt-0.5 leading-relaxed" style={{ color: 'var(--warn-soft-text)' }}>{note}</p> : null}
       </div>
       <p className="text-xs font-extrabold whitespace-nowrap" style={{ color: negative ? 'var(--err-soft-text)' : 'var(--text)' }}>
@@ -62,6 +65,21 @@ export default function SalaryEstimateBreakdown({ data }) {
   const est = data?.estimate;
   const period = est?.servicePeriod;
 
+  // Transparency detail lines (all values server-calculated; nothing invented).
+  const b = est?.bonus || {};
+  const bonusDetails = b.enabled === false || !clean(b.basisText) ? [] : [
+    `Configured bonus period: ${clean(b.periodStart) || '(not set)'} to ${clean(b.periodEnd) || '(not set)'}${b.rule === 'FIXED' && Number(b.annualAmount) ? ` · Annual fixed bonus: ${money(b.annualAmount)}` : ''}`,
+    `Eligible service period: ${clean(b.eligibleServiceFrom) || '(none)'} to ${clean(b.eligibleServiceTo) || '(none)'} = ${b.eligibleMonths ?? 0} eligible month(s) · Min-service eligibility: ${b.eligibilityMinMonths ?? 0} month(s) ${b.minServiceMet ? 'MET' : 'NOT met'} (${b.serviceAtLeavingMonths ?? 0} at leaving)`,
+    `Previously settled: ${money(b.previouslySettledAmount || 0)} (${b.previouslySettledCount ?? 0} recorded settlement(s)) · Unsettled eligible period: ${b.unsettledMonths ?? 0} month(s)${(b.unsettledRanges || []).length ? ` (${b.unsettledRanges.map((r) => `${r.from}..${r.to}`).join(', ')})` : ''}`,
+    `Proration basis: ${clean(b.prorationText) || (b.prorate ? 'month/day accrual' : 'full-eligibility rule')}`,
+  ].concat((b.issues || []).map((i) => `Issue: ${i}`));
+  const e2 = est?.leaveEncashment || {};
+  const encDetails = e2.enabled === false || !clean(e2.basisText) ? [] : [
+    `Monthly ${e2.basis === 'GROSS' ? 'gross' : 'basic'} salary used: ${money(e2.monthlyBasisValue)} · Annual gross/basis: ${money(e2.annualBasisValue)}`,
+    `Daily salary formula: monthly x 12 / ${e2.wageDivisor} = ${money(e2.dailySalary)} per day`,
+    `Eligible leave types (${clean(e2.staffGroup) || 'DEFAULT'}): ${(e2.eligibleTypes || []).join(', ') || '(none configured)'} · Eligible unused leave days: ${e2.daysBeforeCap ?? e2.days ?? 0}${e2.maxDays > 0 ? ` · Max-day cap: ${e2.maxDays}${e2.capApplied ? ' (applied)' : ' (not binding)'}` : ' · Max-day cap: 0 (no cap)'}`,
+  ].concat((e2.issues || []).map((i) => `Issue: ${i}`));
+
   return (
     <div className="space-y-4">
       {/* ---- Employee + service summary ---- */}
@@ -102,6 +120,15 @@ export default function SalaryEstimateBreakdown({ data }) {
           <div><p className="text-[10px] uppercase font-bold text-[var(--muted)]">Basic</p><p className="text-sm font-extrabold text-[var(--text)]">{money(est?.salaryUsed?.basic ?? salary.basic)}</p></div>
           <div><p className="text-[10px] uppercase font-bold text-[var(--muted)]">Gross</p><p className="text-sm font-extrabold text-[var(--text)]">{money(est?.salaryUsed?.gross ?? salary.gross)}</p></div>
           <div><p className="text-[10px] uppercase font-bold text-[var(--muted)]">Salary Effective From</p><p className="text-sm font-extrabold mono text-[var(--text)]">{clean(est?.salaryUsed?.effectivefrom ?? salary.effectivefrom) || '—'}</p></div>
+          {(salary.warnings || []).length ? (
+            <div className="w-full">
+              {salary.warnings.map((w, i) => (
+                <p key={i} className="text-[10px] mt-1 leading-relaxed" style={{ color: 'var(--warn-soft-text)' }}>
+                  <i className="fas fa-triangle-exclamation mr-1"></i>{clean(w)}
+                </p>
+              ))}
+            </div>
+          ) : null}
         </div>
       )}
 
@@ -111,8 +138,8 @@ export default function SalaryEstimateBreakdown({ data }) {
           <div className="rounded-2xl border border-[var(--border)] p-4">
             <p className="text-xs font-extrabold text-[var(--text)] mb-2"><i className="fas fa-calculator mr-1" style={{ color: 'var(--accent)' }}></i>Component-wise Breakdown</p>
             <ComponentRow label="Gratuity" basis={est.gratuity?.basisText} note={est.gratuity?.note} amount={est.gratuity?.amount} />
-            <ComponentRow label="Bonus" basis={est.bonus?.basisText} note={est.bonus?.note} amount={est.bonus?.amount} />
-            <ComponentRow label="Leave Encashment" basis={est.leaveEncashment?.basisText} note={est.leaveEncashment?.note} amount={est.leaveEncashment?.amount} />
+            <ComponentRow label="Bonus" basis={est.bonus?.basisText} details={bonusDetails} note={est.bonus?.note} amount={est.bonus?.amount} />
+            <ComponentRow label="Leave Encashment" basis={est.leaveEncashment?.basisText} details={encDetails} note={est.leaveEncashment?.note} amount={est.leaveEncashment?.amount} />
             <ComponentRow label="Notice Pay" basis={est.notice?.basisText} note={est.notice?.note} amount={est.notice?.payAmount} />
             <ComponentRow label="Other Dues (approved)" basis="Approved HR dues/recoveries entries" amount={est.otherDues?.total} />
             <ItemList title="Other dues — items" items={est.otherDues?.items} />

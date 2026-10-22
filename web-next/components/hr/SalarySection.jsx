@@ -193,7 +193,7 @@ export default function SalarySection() {
   const [estBusy, setEstBusy] = useState(false);
 
   async function runEstimate(e) {
-    e.preventDefault();
+    e?.preventDefault?.();
     if (estBusy) return;
     const paycode = clean(estForm.paycode);
     if (!paycode) {
@@ -215,6 +215,71 @@ export default function SalarySection() {
       setEstError(err?.message || 'Estimate load nahi ho paya.');
     } finally {
       setEstBusy(false);
+    }
+  }
+
+  /* ------------------- Bonus settlement history (explicit) ---------------- */
+  const [settlements, setSettlements] = useState([]);
+  const [settleMsg, setSettleMsg] = useState(null);
+  const [settleBusy, setSettleBusy] = useState(false);
+
+  async function loadSettlements(paycode) {
+    if (!clean(paycode)) { setSettlements([]); return; }
+    try {
+      const res = await apiFetch(`/hr/salary/bonus-settlements?paycode=${encodeURIComponent(clean(paycode))}`);
+      setSettlements(res?.rows || []);
+    } catch {
+      setSettlements([]);
+    }
+  }
+
+  useEffect(() => {
+    loadSettlements(estData?.employee?.paycode);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [estData?.employee?.paycode]);
+
+  async function recordSettlement() {
+    const bonus = estData?.estimate?.bonus;
+    if (!bonus?.eligible || !clean(bonus.eligibleServiceFrom) || settleBusy) return;
+    setSettleBusy(true);
+    setSettleMsg(null);
+    try {
+      await apiFetch('/hr/salary/bonus-settlements', {
+        method: 'POST',
+        body: {
+          paycode: clean(estData.employee.paycode),
+          bonusperiodstart: clean(bonus.periodStart),
+          bonusperiodend: clean(bonus.periodEnd),
+          servicestart: clean(bonus.eligibleServiceFrom),
+          serviceend: clean(bonus.eligibleServiceTo),
+          amount: Number(bonus.amount) || 0,
+          note: 'Recorded from the Full & Final estimate screen.',
+        },
+      });
+      setSettleMsg({ ok: true, text: 'Bonus settlement recorded — estimate refresh hone par ab "previously settled" dikhega.' });
+      await loadSettlements(estData.employee.paycode);
+      await runEstimate();
+    } catch (err) {
+      setSettleMsg({ ok: false, text: err?.message || 'Settlement record nahi hua — koi change save nahi hua.' });
+    } finally {
+      setSettleBusy(false);
+    }
+  }
+
+  async function removeSettlement(id) {
+    if (settleBusy) return;
+    if (!window.confirm('Remove this bonus settlement record? The service period becomes unsettled again.')) return;
+    setSettleBusy(true);
+    setSettleMsg(null);
+    try {
+      await apiFetch('/hr/salary/bonus-settlements', { method: 'DELETE', body: { ids: [id] } });
+      setSettleMsg({ ok: true, text: 'Settlement record removed.' });
+      await loadSettlements(estData.employee.paycode);
+      await runEstimate();
+    } catch (err) {
+      setSettleMsg({ ok: false, text: err?.message || 'Remove fail — record abhi bhi maujood hai.' });
+    } finally {
+      setSettleBusy(false);
     }
   }
 
@@ -340,7 +405,7 @@ export default function SalarySection() {
             </div>
             <AsyncBox loading={master.loading} error={master.error} onRetry={master.reload} label="Salary data load ho raha hai...">
               {rows.length ? (
-                <div className="overflow-x-auto">
+                <div className="table-scroll overflow-x-auto">
                   <table className="portal-table">
                     <thead>
                       <tr>
@@ -386,7 +451,7 @@ export default function SalarySection() {
             </div>
             <AsyncBox loading={elements.loading} error={elements.error} onRetry={elements.reload} label="Pay elements load ho rahe hain...">
               {elementRows.length ? (
-                <div className="overflow-x-auto">
+                <div className="table-scroll overflow-x-auto">
                   <table className="portal-table">
                     <thead>
                       <tr>
@@ -531,7 +596,7 @@ export default function SalarySection() {
             <h3 className="font-bold text-base text-[var(--text)] flex items-center gap-2 mb-4"><i className="fas fa-list-check text-sky-400"></i> Added Entries</h3>
             <AsyncBox loading={dues.loading} error={dues.error} onRetry={dues.reload} label="Dues/recoveries load ho rahe hain...">
               {dueRows.length ? (
-                <div className="overflow-x-auto">
+                <div className="table-scroll overflow-x-auto">
                   <table className="portal-table">
                     <thead>
                       <tr>
@@ -621,6 +686,51 @@ export default function SalarySection() {
                 {clean(estData.employee?.empname) || clean(estData.employee?.paycode)} — Estimate
               </h3>
               <SalaryEstimateBreakdown data={estData} />
+
+              {/* ---- Bonus settlement history (explicit HR records only) ---- */}
+              {estData.estimate?.bonus?.enabled ? (
+                <div className="mt-4 rounded-2xl border border-[var(--border)] p-4">
+                  <div className="flex items-center justify-between gap-3 flex-wrap">
+                    <div className="min-w-0">
+                      <p className="text-xs font-extrabold text-[var(--text)]"><i className="fas fa-file-signature mr-1" style={{ color: 'var(--accent)' }}></i>Bonus Settlement History</p>
+                      <p className="text-[10px] text-[var(--muted)] mt-0.5">
+                        Estimate kabhi automatically bonus paid mark nahi karta. Sirf neeche Record karne par woh service settled maani jaati hai.
+                      </p>
+                    </div>
+                    <button type="button" onClick={recordSettlement} disabled={settleBusy || !estData.estimate.bonus.eligible || !(Number(estData.estimate.bonus.amount) > 0)} className={btnGhost}>
+                      <i className="fas fa-stamp mr-1"></i>Record Bonus Settlement ({money(estData.estimate.bonus.amount)})
+                    </button>
+                  </div>
+                  {settleMsg ? <p className={`${msgBox(settleMsg.ok)} mt-3`}>{settleMsg.text}</p> : null}
+                  {settlements.length ? (
+                    <div className="table-scroll overflow-x-auto mt-3">
+                      <table className="portal-table">
+                        <thead>
+                          <tr><th>Bonus Period</th><th>Settled Service</th><th>Amount</th><th>Status</th><th>Recorded By</th><th className="text-right">Action</th></tr>
+                        </thead>
+                        <tbody>
+                          {settlements.map((s) => (
+                            <tr key={s.id}>
+                              <td className="mono">{s.bonusperiodstart} .. {s.bonusperiodend}</td>
+                              <td className="mono">{s.servicestart} .. {s.serviceend}</td>
+                              <td className="font-bold">{money(s.amount)}</td>
+                              <td><span className="badge badge--present">{s.status}</span></td>
+                              <td className="text-[10px] text-[var(--muted)]">{clean(s.createdby) || '—'}</td>
+                              <td className="text-right">
+                                <button type="button" onClick={() => removeSettlement(s.id)} disabled={settleBusy} className="px-2.5 py-1.5 rounded-lg bg-white/5 border border-[var(--border)] text-[var(--text)] text-[10px] font-bold disabled:opacity-40">Remove</button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <p className="text-[11px] text-[var(--muted)] mt-3">
+                      Koi recorded bonus settlement nahi hai — isliye koi bonus pehle paid assume nahi hua (unsettled eligible service hi estimate me hai).
+                    </p>
+                  )}
+                </div>
+              ) : null}
             </div>
           ) : null}
         </>

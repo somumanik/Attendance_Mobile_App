@@ -15,7 +15,11 @@
 .portal-sidebar { background: color-mix(in srgb, var(--surface-solid) 82%, transparent); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border-right: 1px solid var(--border); }
 .portal-header { background: color-mix(in srgb, var(--surface-solid) 70%, transparent); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border-bottom: 1px solid var(--border); }
 .portal-mobile-nav { background: color-mix(in srgb, var(--surface-solid) 95%, transparent); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border-top: 1px solid var(--border); }
-.fade-in { animation: fadeIn .35s ease-out forwards; }
+/* fadeIn: `forwards` fill-mode pe transform persist rehta tha (translateY(0)),
+   jisse <main> position:fixed descendants (modals) ka containing block ban jata
+   tha aur modal page scroll ke saath upar-neeche move karta tha. Fill-mode hata
+   diya gaya — animation ke baad transform none ho jata hai, visual same rehta hai. */
+.fade-in { animation: fadeIn .35s ease-out; }
 @keyframes fadeIn { from { opacity:0; transform: translateY(8px);} to {opacity:1; transform: translateY(0);} }
 .pulse-dot { animation: pulseGlow 2s infinite; }
 @keyframes pulseGlow { 0%,100%{opacity:1;transform:scale(1);} 50%{opacity:.4;transform:scale(1.15);} }
@@ -40,6 +44,16 @@
 .portal-table thead th { padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,.1); color: #94a3b8; text-transform: uppercase; font-size: 10px; letter-spacing: .04em; }
 .portal-table tbody td { padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,.05); color: #e2e8f0; }
 .portal-table tbody tr:hover { background: rgba(99,102,241,.08); }
+
+/* Independent section-wise table scrolling (Salary / data-heavy sections).
+   Har table ka apna scroll container: vertical max-height viewport-based,
+   horizontal scroll preserve, wheel scroll chain page tak nahi jata, aur
+   column headers sticky. Data kam ho to container content jitna hi rehta hai.
+   min-width:0 + max-width:100%: wide table ki min-content width container ko
+   (aur upar layout ko) expand nahi karti — horizontal overflow yahin scroll hota hai. */
+.table-scroll { overflow: auto; max-height: 60vh; overscroll-behavior: contain; min-width: 0; max-width: 100%; }
+.table-scroll .portal-table thead th { position: sticky; top: 0; z-index: 2; background: var(--surface-solid); box-shadow: inset 0 -1px 0 rgba(255,255,255,.12); }
+.table-scroll .portal-table tbody td { background: transparent; }
 .badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 999px; font-size: 10px; font-weight: 700; }
 .badge--present { background: rgba(16,185,129,.15); color: #34d399; border: 1px solid rgba(16,185,129,.3); }
 .badge--absent { background: rgba(244,63,94,.15); color: #fb7185; border: 1px solid rgba(244,63,94,.3); }

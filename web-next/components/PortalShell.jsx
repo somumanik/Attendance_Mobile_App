@@ -198,7 +198,11 @@ export default function PortalShell({ variant = 'employee', user, children }) {
           </div>
         </aside>
 
-        <div className="flex-1 lg:ml-64 flex flex-col min-h-screen pb-20 lg:pb-0">
+        {/* min-w-0: flex items ki automatic minimum size (min-width:auto) wide
+            tables ki min-content width ko poori document width tak faila deti
+            thi (page-level horizontal scrollbar). min-w-0 se overflow table
+            containers par hi scroll hota hai — layout viewport ke andar rehta hai. */}
+        <div className="flex-1 min-w-0 lg:ml-64 flex flex-col min-h-screen pb-20 lg:pb-0">
           <header className="portal-header sticky top-0 z-40 px-6 py-4 flex items-center justify-between">
             <div>
               <h1 className="text-base font-bold text-[var(--text)]">{active.title}</h1>
@@ -220,7 +224,7 @@ export default function PortalShell({ variant = 'employee', user, children }) {
             </div>
           </header>
 
-          <main className="p-4 md:p-6 space-y-6 flex-1 fade-in">{children}</main>
+          <main className="p-4 md:p-6 space-y-6 flex-1 min-w-0 fade-in">{children}</main>
         </div>
       </div>
 

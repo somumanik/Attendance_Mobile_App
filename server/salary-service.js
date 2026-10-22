@@ -34,6 +34,9 @@ const SALARY_MASTER_TABLE = process.env.HR_SALARY_MASTER_TABLE || 'dbo.HR_Salary
 const SALARY_ELEMENT_TABLE = process.env.HR_SALARY_ELEMENT_TABLE || 'dbo.HR_SalaryElement';
 const SALARY_CONFIG_TABLE = process.env.HR_SALARY_CONFIG_TABLE || 'dbo.HR_SalaryConfig';
 const SALARY_DUES_TABLE = process.env.HR_SALARY_DUES_TABLE || 'dbo.HR_SalaryDues';
+// Bonus settlement history (app-managed HR_ table, same auto-create migration
+// pattern as the tables above; the Savior schema itself is never modified).
+const SALARY_BONUS_SETTLEMENT_TABLE = process.env.HR_SALARY_BONUS_SETTLEMENT_TABLE || 'dbo.HR_SalaryBonusSettlement';
 
 export const PAY_ELEMENT_TYPES = ['EARNING', 'DEDUCTION', 'EMPLOYER_CONTRIBUTION'];
 export const CALC_TYPES = ['FIXED', 'PERCENTAGE'];
@@ -125,6 +128,56 @@ function servicePeriod(joinIso, leaveIso) {
   return { years, months, days };
 }
 
+/** Completed calendar months between two ISO dates (partial month not counted).
+ *  2025-12-01 -> 2026-01-01 = 1; 2025-12-15 -> 2026-01-01 = 0. */
+function completedMonthsBetween(fromIso, toIso) {
+  if (!isValidIsoDate(fromIso) || !isValidIsoDate(toIso) || toIso < fromIso) return 0;
+  let m = (yearOf(toIso) - yearOf(fromIso)) * 12 + (Number(toIso.slice(5, 7)) - Number(fromIso.slice(5, 7)));
+  if (Number(toIso.slice(8, 10)) < Number(fromIso.slice(8, 10))) m -= 1;
+  return Math.max(0, m);
+}
+
+/**
+ * DOCUMENTED month/day proration (deterministic): an inclusive date range is
+ * split into calendar-month segments; each segment contributes
+ *   segmentDays / daysInThatCalendarMonth
+ * of one month. Every calendar day is counted EXACTLY ONCE (adjacent segments
+ * share no dates, so boundary dates can never double-count), leap-year February
+ * contributes /29 automatically, and partial months prorate by their real
+ * length. E.g. 01-Dec-2025..31-Oct-2026 = 11.0 months (11 full months + 0).
+ */
+function monthFractionOfRange(fromIso, toIso) {
+  const segments = [];
+  if (!isValidIsoDate(fromIso) || !isValidIsoDate(toIso) || toIso < fromIso) return { months: 0, segments };
+  let cursor = fromIso;
+  while (cursor <= toIso) {
+    const y = yearOf(cursor);
+    const m = Number(cursor.slice(5, 7));
+    const daysInMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    const monthEnd = `${y}-${String(m).padStart(2, '0')}-${String(daysInMonth).padStart(2, '0')}`;
+    const segTo = monthEnd < toIso ? monthEnd : toIso;
+    const segDays = daysBetweenInclusive(cursor, segTo);
+    segments.push({ from: cursor, to: segTo, days: segDays, daysInMonth, fraction: segDays / daysInMonth });
+    cursor = addDays(segTo, 1);
+  }
+  return { months: segments.reduce((s, x) => s + x.fraction, 0), segments };
+}
+
+/** Inclusive range minus already-settled ranges -> remaining (unsettled) ranges. */
+function subtractRanges(fromIso, toIso, covered) {
+  let gaps = [{ from: fromIso, to: toIso }];
+  for (const c of covered || []) {
+    const next = [];
+    for (const g of gaps) {
+      if (c.to < g.from || c.from > g.to) { next.push(g); continue; }
+      if (c.from > g.from) next.push({ from: g.from, to: addDays(c.from, -1) });
+      if (c.to < g.to) next.push({ from: addDays(c.to, 1), to: g.to });
+    }
+    gaps = next;
+  }
+  return gaps.filter((g) => g.from <= g.to);
+}
+
 
 /* ------------------------------------------------------------------ */
 /* Company settlement configuration (ALL rules configurable)            */
@@ -147,16 +200,16 @@ export const DEFAULT_CONFIG = {
   BonusPeriodStart: '',                  // YYYY-MM-DD
   BonusPeriodEnd: '',                    // YYYY-MM-DD
   BonusRule: 'PERCENTAGE_BASIC',         // FIXED | PERCENTAGE_BASIC | PERCENTAGE_GROSS
-  BonusRate: '0',                        // amount (FIXED) or percentage
-  BonusEligibilityMinMonths: '0',        // min service months at period end
-  BonusProrate: 'Y',                     // prorate by eligible days in period
+  BonusRate: '0',                        // annual amount (FIXED) or percentage
+  BonusEligibilityMinMonths: '0',        // min service months at leaving date
+  BonusProrate: 'Y',                     // Y = month/day accrual (annual/12 per eligible month); N = full-eligibility rule
   // Leave encashment (types per staff group; OLA/OLB excluded by default)
   LeaveEncashmentEnabled: 'Y',
   LeaveEncashmentTypesFactory: 'PL,SL,CL',
   LeaveEncashmentTypesOffice: 'PL',
   LeaveEncashmentTypesDefault: 'PL',
   LeaveEncashmentBasis: 'BASIC',         // BASIC | GROSS
-  LeaveEncashmentWageDivisor: '26',
+  LeaveEncashmentWageDivisor: '365',     // days per YEAR: daily salary = monthly basis x 12 / divisor
   LeaveEncashmentMaxDays: '0',           // 0 = no cap
   // Notice pay / recovery
   NoticePeriodDays: '30',
@@ -272,6 +325,22 @@ CREATE TABLE ${SALARY_DUES_TABLE} (
   decisionnote NVARCHAR(500) NULL,
   createdby NVARCHAR(50) NULL,
   updatedat DATETIME2 NOT NULL CONSTRAINT DF_SalDues_Updated DEFAULT SYSUTCDATETIME()
+);
+
+IF OBJECT_ID('${SALARY_BONUS_SETTLEMENT_TABLE}','U') IS NULL
+CREATE TABLE ${SALARY_BONUS_SETTLEMENT_TABLE} (
+  id INT IDENTITY(1,1) PRIMARY KEY,
+  paycode NVARCHAR(50) NOT NULL,
+  bonusperiodstart DATE NOT NULL,
+  bonusperiodend DATE NOT NULL,
+  servicestart DATE NOT NULL,
+  serviceend DATE NOT NULL,
+  amount NUMERIC(12,2) NOT NULL,
+  status NVARCHAR(20) NOT NULL CONSTRAINT DF_SalBonusSettle_Status DEFAULT('Settled'),
+  note NVARCHAR(500) NULL,
+  createdat DATETIME2 NOT NULL CONSTRAINT DF_SalBonusSettle_Created DEFAULT SYSUTCDATETIME(),
+  createdby NVARCHAR(50) NULL,
+  CONSTRAINT UQ_SalBonusSettle UNIQUE (paycode, bonusperiodstart, bonusperiodend, servicestart, serviceend)
 );`);
 
     // Seed config defaults ONCE (only when the table is empty) so an HR-managed
@@ -283,6 +352,16 @@ CREATE TABLE ${SALARY_DUES_TABLE} (
         .join(',\n      ');
       await pool.request().query(`INSERT INTO ${SALARY_CONFIG_TABLE} (configkey, configvalue) VALUES\n      ${rows}`);
     }
+
+    // One-time normalisation: the leave-encashment divisor changed MEANING from
+    // "wage days per month" (daily = monthly / 26) to "days per year"
+    // (daily = monthly x 12 / 365). The legacy stored '26' (the old default) is
+    // migrated to '365' so the engine and the displayed config agree; any other
+    // HR-set value is left untouched.
+    await pool.request().query(`
+      UPDATE ${SALARY_CONFIG_TABLE} SET configvalue = '365', updatedat = SYSUTCDATETIME()
+      WHERE LTRIM(RTRIM(configkey)) = 'LeaveEncashmentWageDivisor'
+        AND (configvalue IS NULL OR LTRIM(RTRIM(configvalue)) IN ('', '26'))`);
     ensureState = true;
   } catch (error) {
     ensureState = `Salary tables unavailable: ${String(error?.message || error || '')}`;
@@ -841,6 +920,122 @@ export async function decideSalaryDue(pool, { id, decision, note, actor, company
 }
 
 /* ------------------------------------------------------------------ */
+/* Bonus settlement history (a bonus is NEVER assumed paid without a    */
+/* recorded settlement; estimates never write anything here).           */
+/* ------------------------------------------------------------------ */
+
+function mapBonusSettlement(row) {
+  return {
+    id: row.id, paycode: clean(row.paycode),
+    bonusperiodstart: toIsoDate(row.bonusperiodstart), bonusperiodend: toIsoDate(row.bonusperiodend),
+    servicestart: toIsoDate(row.servicestart), serviceend: toIsoDate(row.serviceend),
+    amount: round2(row.amount), status: clean(row.status), note: clean(row.note),
+    createdat: row.createdat, createdby: clean(row.createdby),
+  };
+}
+
+/** Settlement records for one employee (optionally scoped to a bonus period). */
+export async function listBonusSettlements(pool, { paycode, periodStart, periodEnd } = {}) {
+  await ensureSalaryTables(pool);
+  const request = pool.request().input('paycode', sql.NVarChar(50), clean(paycode));
+  let where = 'WHERE LTRIM(RTRIM(paycode)) = @paycode';
+  if (isValidIsoDate(periodStart)) { where += ' AND bonusperiodstart = @pstart'; request.input('pstart', sql.Date, periodStart); }
+  if (isValidIsoDate(periodEnd)) { where += ' AND bonusperiodend = @pend'; request.input('pend', sql.Date, periodEnd); }
+  const r = await request.query(`SELECT id, paycode, bonusperiodstart, bonusperiodend,
+    servicestart, serviceend, amount, status, note, createdat, createdby
+    FROM ${SALARY_BONUS_SETTLEMENT_TABLE} ${where}
+    ORDER BY servicestart, id`);
+  return (r.recordset || []).map(mapBonusSettlement);
+}
+
+/**
+ * Record one explicit bonus settlement. Duplicate/overlapping service ranges
+ * for the same employee + bonus period are REJECTED (the same service period
+ * can never be settled twice).
+ */
+export async function recordBonusSettlement(pool, { input = {}, actor, companyScope }) {
+  await ensureSalaryTables(pool);
+  const paycode = clean(input.paycode);
+  const pStart = clean(input.bonusperiodstart);
+  const pEnd = clean(input.bonusperiodend);
+  const sStart = clean(input.servicestart);
+  const sEnd = clean(input.serviceend);
+  const amount = num(input.amount);
+  const fail = (message, code, status = 400) => ({ ok: false, status, code, message });
+  if (!paycode) return fail('Paycode is required.', 'PAYCODE_REQUIRED');
+  if (!isValidIsoDate(pStart) || !isValidIsoDate(pEnd) || pEnd < pStart) return fail('Bonus period start/end must be valid dates (YYYY-MM-DD) with end >= start.', 'INVALID_BONUS_PERIOD');
+  if (!isValidIsoDate(sStart) || !isValidIsoDate(sEnd) || sEnd < sStart) return fail('Covered service start/end must be valid dates (YYYY-MM-DD) with end >= start.', 'INVALID_SERVICE_RANGE');
+  if (sStart < pStart || sEnd > pEnd) return fail('Covered service range must stay inside the bonus period.', 'SERVICE_OUTSIDE_PERIOD');
+  if (amount === null || amount < 0) return fail('Settlement amount must be a number >= 0.', 'INVALID_AMOUNT');
+
+  const er = await pool.request().input('paycode', sql.NVarChar(50), paycode)
+    .query(`SELECT TOP 1 LTRIM(RTRIM(paycode)) AS paycode FROM dbo.tblemployee WHERE LTRIM(RTRIM(paycode)) = @paycode`);
+  if (!er.recordset?.[0]) return fail('Employee not found.', 'EMPLOYEE_NOT_FOUND', 404);
+  const scopeVerdict = await paycodeCompanyAllowed(pool, paycode, companyScope);
+  if (!scopeVerdict.allowed) return fail('Employee belongs to a company outside your access.', 'COMPANY_FORBIDDEN', 403);
+
+  const overlap = await pool.request()
+    .input('paycode', sql.NVarChar(50), paycode)
+    .input('pstart', sql.Date, pStart).input('pend', sql.Date, pEnd)
+    .input('sstart', sql.Date, sStart).input('send', sql.Date, sEnd)
+    .query(`SELECT id, servicestart, serviceend, amount FROM ${SALARY_BONUS_SETTLEMENT_TABLE}
+            WHERE LTRIM(RTRIM(paycode)) = @paycode AND bonusperiodstart = @pstart AND bonusperiodend = @pend
+              AND NOT (serviceend < @sstart OR servicestart > @send)`);
+  if ((overlap.recordset || []).length) {
+    const hit = overlap.recordset[0];
+    return fail(
+      `Bonus service ${toIsoDate(hit.servicestart)}..${toIsoDate(hit.serviceend)} is already settled (record #${hit.id}, Rs ${round2(hit.amount)}) - the same service period cannot be settled twice.`,
+      'BONUS_ALREADY_SETTLED', 409,
+    );
+  }
+
+  try {
+    const ins = await pool.request()
+      .input('paycode', sql.NVarChar(50), paycode)
+      .input('pstart', sql.Date, pStart).input('pend', sql.Date, pEnd)
+      .input('sstart', sql.Date, sStart).input('send', sql.Date, sEnd)
+      .input('amount', sql.Numeric(12, 2), round2(amount))
+      .input('note', sql.NVarChar(500), clean(input.note).slice(0, 500) || null)
+      .input('by', sql.NVarChar(50), clean(actor).slice(0, 50) || null)
+      .query(`INSERT INTO ${SALARY_BONUS_SETTLEMENT_TABLE}
+                (paycode, bonusperiodstart, bonusperiodend, servicestart, serviceend, amount, note, createdby)
+              OUTPUT INSERTED.id
+              VALUES (@paycode, @pstart, @pend, @sstart, @send, @amount, @note, @by)`);
+    const id = ins.recordset?.[0]?.id;
+    const got = await pool.request().input('id', sql.Int, Number(id))
+      .query(`SELECT id, paycode, bonusperiodstart, bonusperiodend, servicestart, serviceend, amount, status, note, createdat, createdby
+              FROM ${SALARY_BONUS_SETTLEMENT_TABLE} WHERE id = @id`);
+    return { ok: true, settlement: mapBonusSettlement(got.recordset[0]) };
+  } catch (error) {
+    if (['2627', '2601'].includes(String(error?.number || ''))) {
+      return fail('This bonus period/service range is already settled - duplicate settlement prevented.', 'BONUS_ALREADY_SETTLED', 409);
+    }
+    throw error;
+  }
+}
+
+/** HR correction path: remove wrongly recorded settlements (by id). */
+export async function deleteBonusSettlements(pool, { ids = [], companyScope }) {
+  await ensureSalaryTables(pool);
+  const list = (Array.isArray(ids) ? ids : []).map(Number).filter((n) => Number.isInteger(n) && n > 0);
+  if (!list.length) return { ok: false, status: 400, code: 'IDS_REQUIRED', message: 'No settlement ids supplied.', results: [] };
+  const results = [];
+  let deleted = 0;
+  for (const id of list) {
+    const got = await pool.request().input('id', sql.Int, id)
+      .query(`SELECT id, paycode FROM ${SALARY_BONUS_SETTLEMENT_TABLE} WHERE id = @id`);
+    const row = got.recordset?.[0];
+    if (!row) { results.push({ id, status: 'Missing', message: 'Settlement record not found.' }); continue; }
+    const scopeVerdict = await paycodeCompanyAllowed(pool, clean(row.paycode), companyScope);
+    if (!scopeVerdict.allowed) { results.push({ id, status: 'Kept', message: 'Employee belongs to a company outside your access.' }); continue; }
+    await pool.request().input('id', sql.Int, id).query(`DELETE FROM ${SALARY_BONUS_SETTLEMENT_TABLE} WHERE id = @id`);
+    deleted += 1;
+    results.push({ id, status: 'Deleted', message: 'Settlement record removed.' });
+  }
+  return { ok: true, deleted, results };
+}
+
+/* ------------------------------------------------------------------ */
 /* Effective-dated salary resolution                                    */
 /* ------------------------------------------------------------------ */
 
@@ -865,19 +1060,40 @@ async function getSalarySnapshot(pool, paycode, asOf) {
     };
   }
 
-  const elemRows = await pool.request()
-    .input('paycode', sql.NVarChar(50), clean(paycode))
-    .input('asof', sql.Date, asOf)
-    .query(`SELECT id, LTRIM(RTRIM(payelementcode)) AS payelementcode, payelementname,
+  // The shared element table also carries the structure model's ActivePayElement
+  // flag. It is read defensively (older schemas may not have the column yet):
+  // only an EXPLICITLY inactive latest version excludes the element.
+  const elemSelect = `SELECT id, LTRIM(RTRIM(payelementcode)) AS payelementcode, payelementname,
                    LTRIM(RTRIM(payelementtype)) AS payelementtype, LTRIM(RTRIM(calculationtype)) AS calculationtype,
-                   amount, percentage, percentagebase, effectivefrom
-            FROM ${SALARY_ELEMENT_TABLE}
+                   amount, percentage, percentagebase, effectivefrom`;
+  const elemTail = `FROM ${SALARY_ELEMENT_TABLE}
             WHERE LTRIM(RTRIM(paycode)) = @paycode AND effectivefrom <= @asof
-            ORDER BY payelementcode, effectivefrom DESC, id DESC`);
+            ORDER BY payelementcode, effectivefrom DESC, id DESC`;
+  let elemRows;
+  try {
+    elemRows = await pool.request()
+      .input('paycode', sql.NVarChar(50), clean(paycode))
+      .input('asof', sql.Date, asOf)
+      .query(`${elemSelect}, activepayelement ${elemTail}`);
+  } catch (_e) {
+    elemRows = await pool.request()
+      .input('paycode', sql.NVarChar(50), clean(paycode))
+      .input('asof', sql.Date, asOf)
+      .query(`${elemSelect} ${elemTail}`);
+  }
   const latestByCode = new Map();
   for (const row of elemRows.recordset || []) {
     const code = clean(row.payelementcode);
     if (!latestByCode.has(code)) latestByCode.set(code, row); // first = latest effective
+  }
+  // Inactive elements (latest applicable version explicitly marked inactive)
+  // are excluded from every calculation - and reported, never silently mixed in.
+  const inactiveSkipped = [];
+  for (const [code, row] of [...latestByCode.entries()]) {
+    if (row.activepayelement === false || row.activepayelement === 0) {
+      inactiveSkipped.push(code);
+      latestByCode.delete(code);
+    }
   }
 
   return {
@@ -889,6 +1105,7 @@ async function getSalarySnapshot(pool, paycode, asOf) {
     esiapplicable: Boolean(m.esiapplicable),
     pfwage: round2(m.pfwage),
     esiwage: round2(m.esiwage),
+    inactiveSkipped,
     elements: [...latestByCode.values()].map((row) => ({
       id: row.id,
       payelementcode: clean(row.payelementcode),
@@ -918,11 +1135,28 @@ function valueOf(el, grossBase, wages) {
   return round2((Number(el.percentage) || 0) / 100 * base);
 }
 
+/**
+ * Pay elements that ARE the employee's basic salary. When one is present among
+ * the earnings, EmployeeSalaryMaster.BasicSalary must NOT be added to the gross
+ * total again (basic is counted exactly once - via the pay element).
+ */
+const BASIC_ELEMENT_CODE_RE = /^(BASIC|BASICSALARY|BASIC_SALARY|BS)$/i;
+const BASIC_ELEMENT_NAME_RE = /^(BASIC|BASIC SALARY)$/i;
+function isBasicElement(el) {
+  return BASIC_ELEMENT_CODE_RE.test(String(el.payelementcode || '').trim())
+    || BASIC_ELEMENT_NAME_RE.test(String(el.payelementname || '').trim());
+}
+
 function computeElementLists(elements, wages) {
   const earnings = elements.filter((e) => e.payelementtype === 'EARNING');
   const nonGross = earnings.filter((e) => !(e.calculationtype === 'PERCENTAGE' && e.percentagebase === 'GROSS'));
   const grossBased = earnings.filter((e) => e.calculationtype === 'PERCENTAGE' && e.percentagebase === 'GROSS');
-  const grossBase = round2(wages.basic + nonGross.reduce((s, e) => s + valueOf(e, 0, wages), 0));
+  // Basic counted ONCE: if a BASIC earning element exists it already carries the
+  // basic salary inside the element sum - the master BasicSalary is then not
+  // added again (that addition was the gross double-count).
+  const basicElement = earnings.find((e) => isBasicElement(e)) || null;
+  const implicitBasic = basicElement ? 0 : wages.basic;
+  const grossBase = round2(implicitBasic + nonGross.reduce((s, e) => s + valueOf(e, 0, wages), 0));
 
   const line = (el, val) => ({
     payelementcode: el.payelementcode, payelementname: el.payelementname,
@@ -937,7 +1171,19 @@ function computeElementLists(elements, wages) {
     ...grossBased.map((el) => line(el, valueOf(el, grossBase, wages))),
   ];
   const earningsTotal = round2(earningsLines.reduce((s, l) => s + l.value, 0));
-  const gross = round2(wages.basic + earningsTotal);
+  const gross = round2(implicitBasic + earningsTotal);
+
+  // Missing / inconsistent data is REPORTED - never papered over with an
+  // invented amount and never fixed by changing stored salary records.
+  const warnings = [];
+  if (basicElement) {
+    const basicVal = earningsLines.find((l) => isBasicElement(l))?.value ?? 0;
+    if (round2(wages.basic) !== round2(basicVal)) {
+      warnings.push(`Inconsistent data: master BasicSalary (${wages.basic}) differs from the BASIC pay element (${basicVal}). Gross counts the BASIC pay element once and does not add the master value again.`);
+    }
+  } else if (!wages.basic) {
+    warnings.push('Missing data: no Basic Salary in the salary master and no BASIC pay element - Gross = earning pay elements only.');
+  }
 
   const deductionLines = elements.filter((e) => e.payelementtype === 'DEDUCTION')
     .map((el) => line(el, valueOf(el, gross, wages)));
@@ -946,6 +1192,9 @@ function computeElementLists(elements, wages) {
 
   return {
     earnings: earningsLines, earningsTotal, gross,
+    basicElementIncluded: !!basicElement,
+    implicitBasic,
+    warnings,
     deductions: deductionLines, deductionsTotal: round2(deductionLines.reduce((s, l) => s + l.value, 0)),
     employer: employerLines, employerTotal: round2(employerLines.reduce((s, l) => s + l.value, 0)),
   };
@@ -1002,7 +1251,7 @@ function buildRules(cfg) {
       rule: upper(cfg.s('BonusRule')), rate: cfg.n('BonusRate'),
       eligibilityMinMonths: cfg.n('BonusEligibilityMinMonths'), prorate: cfg.flag('BonusProrate'),
       basisText: cfg.flag('BonusEnabled')
-        ? `${upper(cfg.s('BonusRule'))} @ ${cfg.n('BonusRate')} for period ${cfg.s('BonusPeriodStart') || '(not set)'} to ${cfg.s('BonusPeriodEnd') || '(not set)'}; min service ${cfg.n('BonusEligibilityMinMonths')} month(s); ${cfg.flag('BonusProrate') ? 'prorated by eligible days' : 'no proration'}`
+        ? `${upper(cfg.s('BonusRule'))} @ ${cfg.n('BonusRate')} for period ${cfg.s('BonusPeriodStart') || '(not set)'} to ${cfg.s('BonusPeriodEnd') || '(not set)'}; min service ${cfg.n('BonusEligibilityMinMonths')} month(s) at leaving date; ${cfg.flag('BonusProrate') ? 'prorated by eligible months (month/day accrual: annual / 12 per eligible month, minus previously settled service)' : 'no proration (full amount for eligible service, minus previously settled)'}`
         : 'Bonus is disabled in the configuration',
     },
     leaveEncashment: {
@@ -1010,7 +1259,7 @@ function buildRules(cfg) {
       typesFactory: cfg.s('LeaveEncashmentTypesFactory'), typesOffice: cfg.s('LeaveEncashmentTypesOffice'),
       typesDefault: cfg.s('LeaveEncashmentTypesDefault'),
       basis: eBasis, wageDivisor: cfg.n('LeaveEncashmentWageDivisor'), maxDays: cfg.n('LeaveEncashmentMaxDays'),
-      basisText: `Encashable leave types per staff group; ${eBasis} / ${cfg.n('LeaveEncashmentWageDivisor')} per day${cfg.n('LeaveEncashmentMaxDays') > 0 ? `; capped at ${cfg.n('LeaveEncashmentMaxDays')} day(s)` : ''}`,
+      basisText: `Encashable leave types per staff group; daily salary = ${eBasis} monthly x 12 / ${cfg.n('LeaveEncashmentWageDivisor')} per day${cfg.n('LeaveEncashmentMaxDays') > 0 ? `; capped at ${cfg.n('LeaveEncashmentMaxDays')} day(s)` : ' (0 = no cap)'}`,
     },
     notice: {
       noticePeriodDays: cfg.n('NoticePeriodDays'), salaryBasis: nBasis, wageDivisor: cfg.n('NoticeWageDivisor'),
@@ -1084,6 +1333,10 @@ export async function computeFullFinal(pool, { paycode, leavingdate, noticeServe
 
   const wages = { basic: snapshot.basic, pfWage: snapshot.pfwage, esiWage: snapshot.esiwage };
   const lists = computeElementLists(snapshot.elements, wages);
+  const salaryWarnings = [...lists.warnings];
+  if ((snapshot.inactiveSkipped || []).length) {
+    salaryWarnings.push(`Inactive pay element(s) excluded from the calculation: ${snapshot.inactiveSkipped.join(', ')} (latest applicable version is marked inactive).`);
+  }
   const salary = {
     available: true,
     basic: snapshot.basic,
@@ -1093,11 +1346,14 @@ export async function computeFullFinal(pool, { paycode, leavingdate, noticeServe
     esiapplicable: snapshot.esiapplicable,
     pfwage: snapshot.pfwage,
     esiwage: snapshot.esiwage,
+    warnings: salaryWarnings,
     breakdown: {
       earnings: lists.earnings, earningsTotal: lists.earningsTotal,
       deductions: lists.deductions, deductionsTotal: lists.deductionsTotal,
       employerContributions: lists.employer, employerTotal: lists.employerTotal,
+      basicElementIncluded: lists.basicElementIncluded,
       gross: lists.gross,
+      warnings: salaryWarnings,
     },
   };
 
@@ -1142,7 +1398,7 @@ async function buildEstimate(pool, ctx) {
       : gratuityEligible ? '' : `Not eligible: ${completedYears} completed year(s) < required ${gQualYears}.`,
   };
 
-  /* ---- Bonus (HR-configured period; never a hardcoded month) ---- */
+  /* ---- Bonus (HR-configured period; documented month/day proration) ---- */
   const bEnabled = cfg.flag('BonusEnabled');
   const bStart = cfg.s('BonusPeriodStart');
   const bEnd = cfg.s('BonusPeriodEnd');
@@ -1152,33 +1408,93 @@ async function buildEstimate(pool, ctx) {
   const bProrate = cfg.flag('BonusProrate');
   const bonus = {
     enabled: bEnabled, periodStart: bStart, periodEnd: bEnd, rule: bRule, rate: bRate,
+    annualAmount: bRule === 'FIXED' ? bRate : 0,
     eligibilityMinMonths: bMinMonths, prorate: bProrate,
-    eligible: false, eligibleDays: 0, serviceMonths: 0, prorateFactor: 1, amount: 0,
-    basisText: '', note: '',
+    serviceAtLeavingMonths: 0, minServiceMet: false,
+    eligible: false, eligibleServiceFrom: '', eligibleServiceTo: '',
+    eligibleMonths: 0, eligibleDays: 0, serviceMonths: 0,
+    monthlyAccrual: 0, prorateFactor: 1,
+    unsettledRanges: [], unsettledMonths: 0,
+    settledRanges: [], previouslySettledAmount: 0, previouslySettledCount: 0,
+    amount: 0, basisText: '', prorationText: '', note: '', issues: [],
   };
   if (!bEnabled) {
     bonus.note = 'Bonus is disabled in the configuration.';
   } else if (!isValidIsoDate(bStart) || !isValidIsoDate(bEnd) || bEnd < bStart) {
     bonus.note = 'Bonus period is not configured by HR yet - no bonus is estimated.';
+  } else if (!isValidIsoDate(dateofjoin)) {
+    bonus.issues.push('Date of Joining is missing on the employee record - eligible service cannot be determined; no bonus is estimated.');
+    bonus.note = 'Missing Date of Joining - bonus cannot be prorated without it.';
   } else {
-    const periodDays = daysBetweenInclusive(bStart, bEnd);
+    // Eligibility uses TOTAL service at the leaving date, so the earlier
+    // unpaid eligible portion is never discarded after the employee crosses
+    // the minimum-service mark (joined mid-period, completes one year later).
+    const serviceAtLeavingMonths = completedMonthsBetween(dateofjoin, leaveIso);
+    const minServiceMet = serviceAtLeavingMonths >= bMinMonths;
+    // Eligible service = employment INSIDE the configured period only - the
+    // period boundaries are never extended or shortened.
     const overlapFrom = dateofjoin > bStart ? dateofjoin : bStart;
     const overlapTo = leaveIso < bEnd ? leaveIso : bEnd;
-    const eligibleDays = overlapTo >= overlapFrom ? daysBetweenInclusive(overlapFrom, overlapTo) : 0;
-    const serviceMonths = Math.max(0,
-      (yearOf(overlapTo) - yearOf(dateofjoin)) * 12 + (Number(overlapTo.slice(5, 7)) - Number(dateofjoin.slice(5, 7))));
-    bonus.eligibleDays = eligibleDays;
-    bonus.serviceMonths = serviceMonths;
-    bonus.eligible = eligibleDays > 0 && serviceMonths >= bMinMonths;
-    bonus.prorateFactor = bProrate && periodDays > 0 ? round2((eligibleDays / periodDays) * 10000) / 10000 : 1;
+    const eligibleRange = overlapTo >= overlapFrom ? { from: overlapFrom, to: overlapTo } : null;
+    const fullRange = monthFractionOfRange(bStart, bEnd);
+    const eligibleMonths = eligibleRange ? monthFractionOfRange(overlapFrom, overlapTo).months : 0;
+    const eligibleDays = eligibleRange ? daysBetweenInclusive(overlapFrom, overlapTo) : 0;
+
+    // Previously settled service - RECORDED settlements only; a bonus is never
+    // assumed paid without a corresponding record.
+    let settled = [];
+    try {
+      settled = await listBonusSettlements(pool, { paycode: employee.paycode, periodStart: bStart, periodEnd: bEnd });
+    } catch (_e) {
+      bonus.issues.push('Bonus settlement history could not be read - previously settled is shown as unverified (0).');
+    }
+    const settledRanges = settled.map((s) => ({ from: s.servicestart, to: s.serviceend, amount: s.amount, id: s.id }));
+    const unsettledRanges = eligibleRange ? subtractRanges(eligibleRange.from, eligibleRange.to, settledRanges) : [];
+    const unsettledMonths = unsettledRanges.reduce((s, r) => s + monthFractionOfRange(r.from, r.to).months, 0);
+    const settledAmount = round2(settled.reduce((s, x) => s + x.amount, 0));
+
     const baseValue = bRule === 'FIXED' ? bRate
       : bRule === 'PERCENTAGE_GROSS' ? round2(bRate / 100 * gross)
       : round2(bRate / 100 * basicUsed);
-    bonus.amount = bonus.eligible ? round2(baseValue * bonus.prorateFactor) : 0;
-    bonus.basisText = `${bRule} @ ${bRate}${bRule !== 'FIXED' ? '%' : ''} = ${baseValue}${bProrate ? ` x prorated ${bonus.prorateFactor} (${eligibleDays}/${periodDays} eligible day(s))` : ''}`;
-    if (!bonus.eligible) {
-      bonus.note = eligibleDays <= 0 ? 'Not employed during the bonus period.' : `Not eligible: service ${serviceMonths} month(s) < required ${bMinMonths}.`;
+    const monthlyAccrual = Math.round((baseValue / 12) * 10000) / 10000; // e.g. 13850 / 12 = 1154.1667
+    const eligible = !!eligibleRange && eligibleMonths > 0 && minServiceMet;
+
+    bonus.serviceAtLeavingMonths = serviceAtLeavingMonths;
+    bonus.minServiceMet = minServiceMet;
+    bonus.eligible = eligible;
+    bonus.eligibleServiceFrom = eligibleRange ? eligibleRange.from : '';
+    bonus.eligibleServiceTo = eligibleRange ? eligibleRange.to : '';
+    bonus.eligibleMonths = Math.round(eligibleMonths * 10000) / 10000;
+    bonus.eligibleDays = eligibleDays;
+    bonus.serviceMonths = serviceAtLeavingMonths;
+    bonus.monthlyAccrual = monthlyAccrual;
+    bonus.unsettledRanges = unsettledRanges.map((r) => ({ from: r.from, to: r.to, months: Math.round(monthFractionOfRange(r.from, r.to).months * 10000) / 10000 }));
+    bonus.unsettledMonths = Math.round(unsettledMonths * 10000) / 10000;
+    bonus.settledRanges = settledRanges;
+    bonus.previouslySettledAmount = settledAmount;
+    bonus.previouslySettledCount = settled.length;
+
+    if (!eligible) {
+      bonus.amount = 0;
+      bonus.prorateFactor = 0;
+      bonus.note = !eligibleRange ? 'Not employed during the bonus period.'
+        : !minServiceMet ? `Not eligible: service ${serviceAtLeavingMonths} month(s) at leaving < required ${bMinMonths} month(s).`
+        : 'No eligible service months inside the bonus period.';
+    } else if (!bProrate) {
+      // Prorate = N: the configured FULL-eligibility rule - the full amount is
+      // awarded to eligible employees; only the already-settled part is
+      // deducted so the same service is never paid twice.
+      bonus.prorateFactor = 1;
+      bonus.amount = round2(Math.max(0, baseValue - settledAmount));
+      bonus.prorationText = `Prorate = N (full-eligibility rule): full ${baseValue}${settledAmount ? ` minus previously settled ${settledAmount}` : ''}`;
+    } else {
+      // Prorate = Y: month/day accrual - baseValue / 12 per eligible month,
+      // charged ONLY on service that has not already been settled.
+      bonus.prorateFactor = fullRange.months > 0 ? Math.round((eligibleMonths / fullRange.months) * 10000) / 10000 : 1;
+      bonus.amount = round2(monthlyAccrual * unsettledMonths);
+      bonus.prorationText = `Prorate = Y (month/day accrual): ${baseValue} / 12 = ${monthlyAccrual} per eligible month x ${bonus.unsettledMonths} unsettled eligible month(s)`;
     }
+    bonus.basisText = `${bRule} @ ${bRate}${bRule !== 'FIXED' ? '%' : ''} = ${baseValue} per year; period ${bStart}..${bEnd}; eligible service ${bonus.eligibleServiceFrom || '(none)'}..${bonus.eligibleServiceTo || '(none)'} = ${bonus.eligibleMonths} month(s); min service ${bMinMonths} month(s) ${minServiceMet ? 'MET' : 'NOT met'} (${serviceAtLeavingMonths} at leaving); previously settled Rs ${settledAmount} (${settled.length} record(s)); unsettled ${bonus.unsettledMonths} month(s); ${bonus.prorationText}`;
   }
 
 
@@ -1192,35 +1508,61 @@ async function buildEstimate(pool, ctx) {
   const encYear = yearOf(leaveIso);
   let encashmentDaysByType = [];
   let encashDays = 0;
+  let encBalanceAvailable = false;
+  const encIssues = [];
   if (eEnabled && encTypes.length) {
-    const balance = await getLeaveBalance(pool, { paycode: employee.paycode, leaveyear: encYear });
-    encashmentDaysByType = encTypes.map((t) => {
-      const row = (balance.types || []).find((x) => upper(x.leavetype) === t);
-      const days = row ? Math.max(0, Number(row.availableBalance) || 0) : 0;
-      return { leavetype: t, days: round2(days) };
-    });
-    encashDays = round2(encashmentDaysByType.reduce((s, x) => s + x.days, 0));
+    try {
+      const balance = await getLeaveBalance(pool, { paycode: employee.paycode, leaveyear: encYear });
+      encBalanceAvailable = true;
+      if (!(balance.types || []).length) {
+        encIssues.push('No leave types are configured - eligible unused leave cannot be determined.');
+      }
+      encashmentDaysByType = encTypes.map((t) => {
+        const row = (balance.types || []).find((x) => upper(x.leavetype) === t);
+        const days = row ? Math.max(0, Number(row.availableBalance) || 0) : 0;
+        return { leavetype: t, days: round2(days), balanceFound: !!row };
+      });
+      encashDays = round2(encashmentDaysByType.reduce((s, x) => s + x.days, 0));
+    } catch (_e) {
+      encIssues.push('Leave balance could not be read - no encashment is estimated and no balance is invented.');
+    }
   }
   const encMaxDays = cfg.n('LeaveEncashmentMaxDays');
   const encAppliedDays = encMaxDays > 0 ? Math.min(encashDays, encMaxDays) : encashDays;
   const encBasis = upper(cfg.s('LeaveEncashmentBasis')) === 'GROSS' ? 'GROSS' : 'BASIC';
-  const encDivisor = cfg.n('LeaveEncashmentWageDivisor') || 26;
+  const encDivisor = cfg.n('LeaveEncashmentWageDivisor') || 365;
   const encBasisValue = encBasis === 'GROSS' ? gross : basicUsed;
+  // Company rule: Daily salary = Monthly basis x 12 / wage divisor (365-day
+  // year), Encashment = Daily salary x eligible unused encashable days. The
+  // daily rate is currency-rounded (2dp) before multiplying so the displayed
+  // values reproduce exactly (40832 x 12 / 365 = 1342.42/day; x 18 = 24163.56).
+  const encAnnual = round2(encBasisValue * 12);
+  const encDaily = round2((encBasisValue * 12) / encDivisor);
   const encashment = {
     enabled: eEnabled,
     staffGroup: groupInfo.group,
     staffGroupSource: groupInfo.source,
     leaveYear: encYear,
     types: encashmentDaysByType,
+    eligibleTypes: encTypes,
+    balanceAvailable: encBalanceAvailable,
     days: encAppliedDays,
     daysBeforeCap: encashDays,
     maxDays: encMaxDays,
+    capApplied: encMaxDays > 0 && encashDays > encMaxDays,
     basis: encBasis,
+    monthlyBasisValue: encBasisValue,
+    annualBasisValue: encAnnual,
     basisValue: encBasisValue,
     wageDivisor: encDivisor,
-    basisText: `${encAppliedDays} day(s) x (${encBasisValue} / ${encDivisor})`,
-    amount: round2(encAppliedDays * (encBasisValue / encDivisor)),
-    note: eEnabled ? (encAppliedDays ? '' : 'No encashable leave balance available.') : 'Leave encashment is disabled in the configuration.',
+    dailySalary: encDaily,
+    formulaText: `Daily salary = ${encBasis} monthly ${encBasisValue} x 12 / ${encDivisor} = ${encDaily}; encashment = ${encDaily} x ${encAppliedDays} eligible unused day(s)`,
+    basisText: `${encAppliedDays} eligible unused day(s) x ${encDaily} daily (${encBasis} monthly ${encBasisValue} x 12 / ${encDivisor})`,
+    amount: round2(encDaily * encAppliedDays),
+    issues: encIssues,
+    note: eEnabled
+      ? (encBalanceAvailable ? (encAppliedDays ? '' : 'No encashable leave balance available.') : 'Leave balance unavailable - encashment is not estimated.')
+      : 'Leave encashment is disabled in the configuration.',
   };
 
   /* ---- Notice pay / recovery ---- */
