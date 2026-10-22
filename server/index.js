@@ -59,7 +59,7 @@ import {
 // Salary Structure V1: dynamic pay elements + Excel import/export. Extends the
 // SAME shared HR_Salary* tables additively and adds HR_PayElementMaster.
 import {
-  ensureSalaryStructureTables, importSalaryStructure,
+  ensureSalaryStructureTables, importSalaryStructure, exportSaviorTemplateSource,
   listSalaryStructureMaster, listSalaryStructureElements, listPayElementMaster,
   importPayElementMasterRows, buildSalaryStructureReport,
   SALARY_STRUCTURE_MASTER_COLUMNS, SALARY_STRUCTURE_ELEMENT_COLUMNS, PAY_ELEMENT_MASTER_COLUMNS,
@@ -4290,6 +4290,19 @@ app.post('/api/hr/salary/structure/import', authenticate, requireRole('HR'), req
       elements: SALARY_STRUCTURE_ELEMENT_COLUMNS,
       payElementMaster: PAY_ELEMENT_MASTER_COLUMNS,
     } });
+  } catch (error) { sendDbError(res, error); }
+});
+
+// Download Template pre-fill source: READ-ONLY export from the genuine Savior
+// SQL Server roster (HR Admin only). Application salary tables are never used
+// as the source; salary fields Savior does not contain come back blank with an
+// explicit report - never fabricated and never zero/'N'.
+app.get('/api/hr/salary/structure/template-source', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const out = await exportSaviorTemplateSource(pool, { companyScope: req.hrCompanyScope });
+    if (!out.ok) return res.status(out.status).json({ success: false, message: out.message });
+    res.json({ success: true, master: out.master, elements: out.elements, payElementMaster: out.payElementMaster, report: out.report });
   } catch (error) { sendDbError(res, error); }
 });
 

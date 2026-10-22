@@ -437,13 +437,13 @@ check('X19. Template workbook keeps its 4 established sheets', !!wbTpl && wbTpl.
 if (wbTpl) {
   const masterGrid = XLSX.utils.sheet_to_json(wbTpl.Sheets['EmployeeSalaryMaster'] || {}, { header: 1, raw: true, defval: '' });
   const tplBody = masterGrid.slice(1).filter((r) => r.join('') !== '');
-  const tplApi = await api('/hr/salary/structure/master?limit=5000');
-  const tplApiRows = (tplApi?.rows || []).length;
-  // The template is now pre-filled with the REAL saved records (same count, no
+  const tplApi = await api('/hr/salary/structure/template-source');
+  const tplApiRows = (tplApi?.master || []).length;
+  // The template is pre-filled from the genuine Savior roster (same count, no
   // fabricated rows) while keeping the established headers import-compatible.
-  check('X20. Template pre-filled with REAL rows (headers preserved, nothing invented)',
+  check('X20. Template pre-filled with REAL Savior roster rows (nothing invented)',
     String(masterGrid[0]?.[0]) === 'EmployeeCode' && tplBody.length === tplApiRows && tplApiRows > 0,
-    `sheetRows=${tplBody.length} apiRows=${tplApiRows}`);
+    `sheetRows=${tplBody.length} saviorRows=${tplApiRows}`);
 }
 
 /* ============================ FILTERS + SELECTION REGRESSION ============================ */
@@ -613,7 +613,9 @@ for (const [w, h] of VIEWPORTS) {
 }
 await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
 await cdp.eval(`${CLICK_TAB}('Structure')`);
-await sleep(800);
+// Tab re-mount refetches the datasets - wait for the tables before measuring.
+await cdp.waitFor(`document.querySelectorAll('div.table-scroll').length >= 3`, 30000);
+await sleep(500);
 const lastCol = await cdp.eval(`(() => {
   const boxes = Array.from(document.querySelectorAll('div.table-scroll'));
   const b = boxes.find((x) => x.scrollWidth > x.clientWidth + 1);

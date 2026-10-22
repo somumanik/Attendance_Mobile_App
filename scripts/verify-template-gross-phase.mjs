@@ -103,20 +103,16 @@ check('B16. Leave Encashment uses its configured basis from the shared breakdown
 const pfItems = (est1.employeeDeductions?.items || []).filter((i) => i.code === 'PF');
 check('B17. PF/ESI keep their existing applicability + wage bases', pfItems.every((i) => near(i.amount, round2((Number(fRestored?.rules?.pf?.rateEmployee) || 0) / 100 * (Number(fRestored?.salary?.pfwage) || 20416)), 0.05)), `pfItems=${pfItems.length} pfWage=${fRestored?.salary?.pfwage}`);
 
-/* ============ C. TEMPLATE AUTO-FILL (real data + safe re-import) ============ */
+/* ============ C. TEMPLATE AUTO-FILL (Savior source-first) ============ */
 const lib = await import(pathToFileURL(path.join(process.cwd(), 'web-next', 'lib', 'salaryStructure.js')).href);
 const XLSX = await import('xlsx');
-const [tM, tE, tP] = await Promise.all([
-  req('/hr/salary/structure/master?limit=5000', { token: HR }),
-  req('/hr/salary/structure/elements?limit=5000', { token: HR }),
-  req('/hr/salary/payelement-master?limit=5000', { token: HR }),
-]);
-const tplData = { master: tM.json?.rows || [], elements: tE.json?.rows || [], payElementMaster: tP.json?.rows || [] };
+const tplSrc = await req('/hr/salary/structure/template-source', { token: HR });
+const tplData = { master: tplSrc.json?.master || [], elements: tplSrc.json?.elements || [], payElementMaster: tplSrc.json?.payElementMaster || [] };
 const wb = await lib.buildStructureWorkbook(tplData);
 const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
 const tplPath = path.join(OUT, 'template-filled.xlsx');
 fs.writeFileSync(tplPath, Buffer.from(buf));
-check('C1. Template workbook downloads with real data', fs.statSync(tplPath).size > 0, `bytes=${fs.statSync(tplPath).size}`);
+check('C1. Template workbook downloads with real Savior roster data', fs.statSync(tplPath).size > 0, `bytes=${fs.statSync(tplPath).size}`);
 
 const rb = XLSX.read(fs.readFileSync(tplPath), { type: 'buffer' });
 check('C2. Sheet names unchanged (import-compatible)', JSON.stringify(rb.SheetNames) === JSON.stringify(['EmployeeSalaryMaster', 'EmployeePayElements', 'PayElementMaster', 'ReadMe']), rb.SheetNames.join(','));
@@ -128,18 +124,18 @@ check('C3. Required column headers preserved', String(gM[0]?.[0]) === 'EmployeeC
 const bodyM = gM.slice(1).filter((r) => r.join('') !== '');
 const bodyE = gE.slice(1).filter((r) => r.join('') !== '');
 const bodyP = gP.slice(1).filter((r) => r.join('') !== '');
-check('C4. EmployeeSalaryMaster sheet contains ALL real salary versions', bodyM.length === tplData.master.length && bodyM.length > 0, `sheet=${bodyM.length} api=${tplData.master.length}`);
-check('C5. EmployeePayElements sheet contains ALL real pay-element rows', bodyE.length === tplData.elements.length && bodyE.length > 0, `sheet=${bodyE.length} api=${tplData.elements.length}`);
-check('C6. PayElementMaster sheet contains ALL real master codes', bodyP.length === tplData.payElementMaster.length && bodyP.length > 0, `sheet=${bodyP.length} api=${tplData.payElementMaster.length}`);
+check('C4. EmployeeSalaryMaster sheet = Savior roster rows (identity source)', bodyM.length === tplData.master.length && bodyM.length > 0, `sheet=${bodyM.length} source=${tplData.master.length}`);
+check('C5. EmployeePayElements stays EMPTY (no Savior pay elements - no fallback)', bodyE.length === 0 && (tplSrc.json?.report?.blankSheets || []).includes('EmployeePayElements'), `rows=${bodyE.length}`);
+check('C6. PayElementMaster stays EMPTY (no Savior pay-element master - no fallback)', bodyP.length === 0, `rows=${bodyP.length}`);
 const mHdr = gM[0].map(String);
 const row1053 = bodyM.find((r) => String(r[mHdr.indexOf('Paycode')]) === '1053');
-const api1053 = tplData.master.find((r) => String(r.paycode) === '1053') || {};
-check('C7. Real employee/salary data mapped to correct columns (1053 example)',
-  !!row1053 && near(Number(row1053[mHdr.indexOf('BasicSalary')]), 20416, 0.01)
-  && String(row1053[mHdr.indexOf('EmployeeName')]) === 'Manik K Chaudhari'
-  && String(row1053[mHdr.indexOf('EffectiveFrom')]).slice(0, 10) === '2026-03-31',
-  `name=${row1053?.[mHdr.indexOf('EmployeeName')]} basic=${row1053?.[mHdr.indexOf('BasicSalary')]}`);
-check('C8. Unavailable fields left blank (no fabricated values)', String(row1053?.[mHdr.indexOf('Remarks')] ?? '') === String(api1053.remarks ?? ''), `remarks='${row1053?.[mHdr.indexOf('Remarks')] ?? ''}'`);
+check('C7. Real Savior identity mapped to correct columns (1053 example)',
+  !!row1053 && String(row1053[mHdr.indexOf('EmployeeName')]) === 'Manik K Chaudhari'
+  && String(row1053[mHdr.indexOf('BasicSalary')] ?? '') === '',
+  `name=${row1053?.[mHdr.indexOf('EmployeeName')]} basic='${row1053?.[mHdr.indexOf('BasicSalary')] ?? ''}'`);
+check('C8. Unavailable salary fields blank (no fabricated values)',
+  ['EffectiveFrom', 'BasicSalary', 'PFApplicable', 'ESIApplicable', 'PFWage', 'ESIWage', 'Currency', 'Remarks'].every((c) => String(row1053?.[mHdr.indexOf(c)] ?? '') === ''),
+  'all blank');
 
 /* ============ D. SAFE RE-IMPORT (edit + round-trip, cleanup included) ============ */
 const rowsFrom = (grid) => {
@@ -164,38 +160,43 @@ const countAll = async () => {
 const countsBefore = await countAll();
 const d1 = await importWb(rowsFrom(gM), rowsFrom(gE), rowsFrom(gP));
 const sm = d1.json?.summaries || {};
-check('D1. Unchanged exported workbook re-imports as all Skipped (idempotent)',
-  d1.status === 200 && (sm.master?.imported ?? -1) === 0 && (sm.master?.updated ?? -1) === 0 && (sm.master?.failed ?? -1) === 0
-  && sm.master?.skipped === bodyM.length && (sm.elements?.failed ?? -1) === 0 && (sm.elements?.updated ?? -1) === 0
-  && (sm.payElementMaster?.failed ?? -1) === 0 && (sm.payElementMaster?.updated ?? -1) === 0,
-  `master i/u/s/f=${sm.master?.imported}/${sm.master?.updated}/${sm.master?.skipped}/${sm.master?.failed}`);
+check('D1. Unchanged workbook import writes NOTHING (rows clearly reported - the sheet is a preparation form)',
+  d1.status === 200 && (sm.master?.imported ?? -1) === 0 && (sm.master?.updated ?? -1) === 0
+  && (sm.master?.failed ?? 0) === bodyM.length,
+  `master i/u/f=${sm.master?.imported}/${sm.master?.updated}/${sm.master?.failed}`);
 const countsAfter = await countAll();
-check('D2. No duplicate rows created by the re-import', countsBefore[0] === countsAfter[0] && countsBefore[1] === countsAfter[1] && countsBefore[2] === countsAfter[2], `before=${countsBefore.join('/')} after=${countsAfter.join('/')}`);
+check('D2. No duplicate rows created by the re-import', countsBefore.join('/') === countsAfter.join('/'), `before=${countsBefore.join('/')} after=${countsAfter.join('/')}`);
 
-const originalRemarks = String(api1053.remarks ?? '');
-const editedRows = rowsFrom(gM).map((r) => ({ ...r }));
-const targetRow = editedRows.find((r) => String(r.Paycode) === '1053' && String(r.EffectiveFrom).slice(0, 10) === '2026-03-31');
-targetRow.Remarks = 'VERIFY-MARKER-RESTORE';
+// HR completes the blank salary fields -> imports as the intended new version.
+const completedRows = rowsFrom(gM).map((r) => ({ ...r }));
+const targetRow = completedRows.find((r) => String(r.Paycode) === '1053');
+targetRow.EffectiveFrom = '2099-01-01';
+targetRow.BasicSalary = 12345;
+targetRow.PFApplicable = 'N';
+targetRow.ESIApplicable = 'N';
+targetRow.Remarks = 'VERIFY-MARKER';
 const d3 = await importWb([targetRow], [], []);
-check('D3. Deliberately edited row -> server reports Updated for the matching version', d3.status === 200 && d3.json?.summaries?.master?.updated === 1, `updated=${d3.json?.summaries?.master?.updated} skipped=${d3.json?.summaries?.master?.skipped}`);
-const afterEdit = await req('/hr/salary/structure/master?paycode=1053&limit=100', { token: HR });
-const editRows = (afterEdit.json?.rows || []).filter((r) => String(r.paycode) === '1053' && String(r.effectivefrom).slice(0, 10) === '2026-03-31');
-check('D4. Edit updated the existing version (no new duplicate row)', editRows.length === 1 && String(editRows[0].remarks) === 'VERIFY-MARKER-RESTORE', `rows=${editRows.length} remarks=${editRows[0]?.remarks}`);
+check('D3. Completed row -> Imported for the (Paycode + EffectiveFrom) version', d3.json?.summaries?.master?.imported === 1, `imported=${d3.json?.summaries?.master?.imported}`);
+const d4 = await importWb([targetRow], [], []);
+check('D4. Identical re-import -> Skipped (duplicate protection)', d4.json?.summaries?.master?.skipped === 1 && d4.json?.summaries?.master?.imported === 0, `skipped=${d4.json?.summaries?.master?.skipped}`);
 
-const restoreRow = { ...targetRow, Remarks: originalRemarks };
-const d5 = await importWb([restoreRow], [], []);
-const afterRestore = await req('/hr/salary/structure/master?paycode=1053&limit=100', { token: HR });
-const restoreRows = (afterRestore.json?.rows || []).filter((r) => String(r.paycode) === '1053' && String(r.effectivefrom).slice(0, 10) === '2026-03-31');
-check('D5. Original value restored after the test (cleanup)', d5.json?.summaries?.master?.updated === 1 && String(restoreRows[0]?.remarks) === originalRemarks, `remarks='${restoreRows[0]?.remarks}'`);
+// Conflicting duplicate rows in one file -> clearly reported, never silently merged.
+const dupA = { ...targetRow, EffectiveFrom: '2099-01-02', BasicSalary: 100 };
+const dupB = { ...dupA, BasicSalary: 200 };
+const d5 = await importWb([dupA, dupB], [], []);
+const conflictErr = ((d5.json?.summaries?.master?.errors || []).map((e) => e.message).join(' | '));
+check('D5. Conflicting duplicate rows clearly reported (never silently merged)',
+  (d5.json?.summaries?.master?.failed ?? 0) === 1 && /Duplicate of row \d+ in file|Conflicts with row/i.test(conflictErr),
+  `failed=${d5.json?.summaries?.master?.failed} msg=${conflictErr.slice(0, 80)}`);
 
-// Conflicting duplicate rows in one file: unchanged row skips, conflicting row FAILS with a clear message.
-const dupA = { ...restoreRow };
-const dupB = { ...restoreRow, Remarks: 'CONFLICT-VALUE' };
-const d6 = await importWb([dupA, dupB], [], []);
-const conflictErr = ((d6.json?.summaries?.master?.errors || []).map((e) => e.message).join(' | '));
-check('D6. Conflicting duplicate rows clearly reported (never silently merged)',
-  (d6.json?.summaries?.master?.failed ?? 0) === 1 && /Duplicate of row \d+ in file|Conflicts with row/i.test(conflictErr),
-  `failed=${d6.json?.summaries?.master?.failed} msg=${conflictErr.slice(0, 80)}`);
+// Cleanup: remove both test versions, restore the exact prior state.
+const afterAll = await req('/hr/salary/structure/master?paycode=1053&limit=100', { token: HR });
+const testIds = (afterAll.json?.rows || [])
+  .filter((r) => ['2099-01-01', '2099-01-02'].includes(String(r.effectivefrom).slice(0, 10)))
+  .map((r) => r.id);
+await req('/hr/salary/structure/master', { method: 'DELETE', token: HR, body: { ids: testIds } });
+const countsFinal = await countAll();
+check('D6. Test rows cleaned up (database restored)', countsFinal.join('/') === countsBefore.join('/'), `final=${countsFinal.join('/')}`);
 
 /* ============ E. SHARED-BACKEND PARITY (website + mobile one engine) ============ */
 // Both clients call the same computeFullFinal: GET /api/employee/fullfinal

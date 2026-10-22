@@ -1,0 +1,15 @@
+{
+  "headers": {
+    "x-nextjs-stale-time": "300",
+    "x-nextjs-prerender": "1",
+    "x-next-cache-tags": "_N_T_/layout,_N_T_/login/layout,_N_T_/login/superadmin/layout,_N_T_/login/superadmin/page,_N_T_/login/superadmin"
+  },
+  "routeCache": {
+    "key": "/route-cache/APP_PAGE/fbce1f7f084908feea616809b5750a47811a45d63674ed44f7757632b4cc4c39/$/login/superadmin",
+    "owner": {
+      "kind": "APP_PAGE",
+      "sourceRoute": "/login/superadmin/page"
+    },
+    "isFallback": false
+  }
+}

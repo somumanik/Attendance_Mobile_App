@@ -92,8 +92,8 @@ export const READ_ME_ROWS = [
   ['BasicSalary', 'Optional on EmployeeSalaryMaster (kept for Full & Final accuracy). When blank, 0 is stored for that version and the import reports a warning.'],
   ['Gross Salary', 'Shown in the dynamic report only when an explicit GROSS pay element provides the source value. Never computed by summing positive amounts; NOT a CTC figure.'],
   ['Unknown columns', 'Any column not listed here is preserved in the row extra-fields metadata and reported as a warning - never silently discarded.'],
-  ['Pre-filled data', 'The data sheets are pre-populated with the REAL saved records the signed-in HR Admin is authorized to see (read-only download). Edit rows as needed and import: unchanged rows import as Skipped (no duplicates are created), edited rows update the matching (Paycode + EffectiveFrom [+ Pay Element Code]) version, and historical versions are preserved.'],
-  ['Examples', 'No illustrative/example rows are ever added. Every value comes from existing saved records; unavailable fields are left blank (a blank is never treated as zero unless zero is the stored value).'],
+  ['Pre-filled data', 'The EmployeeSalaryMaster sheet is pre-filled from the genuine Savior SQL Server employee roster (dbo.tblemployee: Paycode, BiometricCode, EmployeeName, CompanyCode, LocationCode, Department, Designation; EmployeeCode via the established paycode mapping). Salary fields that Savior does not contain (EffectiveFrom, BasicSalary, PF/ESI applicability and wages, Currency, Remarks) are left BLANK - enter them from an authoritative payroll source before import. EmployeePayElements and PayElementMaster are pre-filled only when genuine Savior payroll sources exist (currently none); application-imported salary tables are never used as the source.'],
+  ['Examples', 'No illustrative/example rows are ever added. Every populated value comes from an existing Savior record; unavailable fields are left blank (a blank is never treated as zero unless zero is the stored value).'],
 ];
 
 function triggerDownload(blob, filename) {

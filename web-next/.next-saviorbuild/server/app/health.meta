@@ -1,0 +1,15 @@
+{
+  "headers": {
+    "x-nextjs-stale-time": "300",
+    "x-nextjs-prerender": "1",
+    "x-next-cache-tags": "_N_T_/layout,_N_T_/health/layout,_N_T_/health/page,_N_T_/health"
+  },
+  "routeCache": {
+    "key": "/route-cache/APP_PAGE/bf53908e412e4006a12647718a212d74a5ca9ee40f94c55c235802cd5dc2e9e9/$/health",
+    "owner": {
+      "kind": "APP_PAGE",
+      "sourceRoute": "/health/page"
+    },
+    "isFallback": false
+  }
+}

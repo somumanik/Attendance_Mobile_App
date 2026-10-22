@@ -216,6 +216,7 @@ export default function SalaryStructureSection() {
   const [importError, setImportError] = useState('');
   const [tplBusy, setTplBusy] = useState(false);
   const [tplError, setTplError] = useState('');
+  const [tplNotice, setTplNotice] = useState(null);
 
   async function onFileChosen(e) {
     const f = e.target.files && e.target.files[0];
@@ -272,17 +273,19 @@ export default function SalaryStructureSection() {
     if (tplBusy) return;
     setTplBusy(true);
     setTplError('');
+    setTplNotice(null);
     try {
-      const [m, e, p] = await Promise.all([
-        apiFetch(`/hr/salary/structure/master${qs({ asOf: '', limit: 5000 })}`),
-        apiFetch(`/hr/salary/structure/elements${qs({ asOf: '', limit: 5000 })}`),
-        apiFetch('/hr/salary/payelement-master?limit=5000'),
-      ]);
+      // SOURCE-FIRST: the pre-fill comes from the genuine Savior SQL Server
+      // roster through the common backend (read-only). The application's
+      // HR_Salary* tables are NEVER used as the source; salary fields Savior
+      // does not contain stay BLANK and are reported explicitly.
+      const src = await apiFetch('/hr/salary/structure/template-source');
       await downloadStructureTemplate('salary-structure-template.xlsx', {
-        master: m?.rows || [], elements: e?.rows || [], payElementMaster: p?.rows || [],
+        master: src?.master || [], elements: src?.elements || [], payElementMaster: src?.payElementMaster || [],
       });
+      setTplNotice(src?.report || null);
     } catch {
-      setTplError('Real data fetch nahi ho payi — template download nahi hua (blank file serve karke mislead nahi kiya). Filters/API check karke dobara try karein.');
+      setTplError('Savior database se data fetch nahi ho paya — template download nahi hua (blank ya application-data fallback serve karke mislead nahi kiya). Backend/API check karke dobara try karein.');
     } finally {
       setTplBusy(false);
     }
@@ -526,14 +529,26 @@ export default function SalaryStructureSection() {
           <span className="mono text-[var(--text)]">{SHEET_NAMES.payElementMaster}</span> aur ReadMe.
           Import se pehle preview dikhta hai; validation SERVER par hota hai (real employee roster ke against)
           aur Imported / Updated / Skipped / Failed counts backend ke actual response se aate hain.
-          Template abhi saved real records se pre-filled download hota hai (company-scoped, read-only): unchanged rows
-          dubara import par Skipped hote hain (koi duplicate nahi banta), edited rows matching effective-date version
-          ko update karte hain. Koi illustrative/fake row kabhi nahi hoti — unavailable fields blank rehte hain.
+          Template abhi <strong>SAVIOR SQL Server ke actual employee roster</strong> (dbo.tblemployee) se pre-filled
+          download hota hai (read-only, company-scoped). Savior me employee-wise salary/pay-element data available
+          na hone par woh fields blank rehte hain — application ki imported salary tables kabhi fallback source nahi
+          banti. Unchanged rows dubara import par duplicate nahi bante; edited/completed rows matching
+          (Paycode + EffectiveFrom) version ko update karte hain.
         </p>
         {tplError ? (
           <p className="text-[11px] rounded-xl px-3 py-2 border bg-rose-500/10 border-rose-500/20 text-rose-300 mb-4">
             <i className="fas fa-circle-exclamation mr-1"></i>{tplError}
           </p>
+        ) : null}
+        {tplNotice ? (
+          <div className="text-[11px] rounded-xl px-3 py-2 border mb-4" style={{ background: 'var(--warn-soft-bg)', borderColor: 'var(--warn)', color: 'var(--warn-soft-text)' }}>
+            <p className="font-bold"><i className="fas fa-circle-info mr-1"></i>Source: {tplNotice.source} — {tplNotice.employees} employee record(s) exported.</p>
+            {tplNotice.unavailableFields?.length ? (
+              <p className="mt-1">
+                Blank fields (no Savior source): <span className="mono">{tplNotice.unavailableFields.join(', ')}</span>. {tplNotice.unavailableReason}
+              </p>
+            ) : null}
+          </div>
         ) : null}
 
         <div className="flex items-center gap-3 flex-wrap">

@@ -1868,6 +1868,101 @@ export async function importSalaryStructure(pool, { master, elements, payElement
 }
 
 /* ------------------------------------------------------------------ */
+/* SOURCE-FIRST TEMPLATE PREFILL (read-only Savior SQL Server export)   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Pre-fill source for the Download Template workbook. READ-ONLY.
+ *
+ * Source-to-template mapping (verified against the real SAVIOR921 schema):
+ *   EmployeeSalaryMaster sheet
+ *     EmployeeCode  <- HR_EmployeeCodeMapping.employeecode (by paycode; the
+ *                      ESTABLISHED identity mapping - dbo.tblemployee has no
+ *                      employee-code column). Blank when no mapping exists.
+ *     Paycode       <- dbo.tblemployee.paycode (authoritative identity)
+ *     BiometricCode <- dbo.tblemployee.presentcardno
+ *     EmployeeName  <- dbo.tblemployee.empname
+ *     CompanyCode   <- dbo.tblemployee.companycode
+ *     LocationCode  <- dbo.tblemployee.LocationName (Savior stores the location
+ *                      as a name - direct source value)
+ *     Department    <- dbo.tblemployee.departmentcode
+ *     Designation   <- dbo.tblemployee.designation
+ *     EffectiveFrom / BasicSalary / PFApplicable / PFWage / ESIApplicable /
+ *     ESIWage / Currency / Remarks
+ *                   <- UNAVAILABLE: Savior has no employee-wise salary master
+ *                      source (payrollinterface / tblpayoutinterface are
+ *                      attendance-day interfaces without salary amounts and
+ *                      contain 0 rows). Left BLANK - never zero, never 'N',
+ *                      never taken from the application HR_Salary* tables.
+ *   EmployeePayElements / PayElementMaster sheets
+ *                   <- UNAVAILABLE: no genuine employee-wise pay-element or
+ *                      pay-element-master source exists in Savior. Exported
+ *                      EMPTY (headers only) - rows are never manufactured.
+ *
+ * This function NEVER reads the application salary tables (HR_SalaryMaster /
+ * HR_SalaryElement / HR_PayElementMaster) and NEVER writes to the database.
+ */
+export async function exportSaviorTemplateSource(pool, { companyScope } = {}) {
+  const scope = companyScopeFragment('e', companyScope);
+  if (scope.denied) return { ok: false, status: 403, message: 'No company access assigned.' };
+
+  // Established identity relationship: paycode -> Navision EmployeeCode.
+  const codeMap = new Map();
+  try {
+    const mapR = await pool.request().query(
+      `SELECT LTRIM(RTRIM(paycode)) AS paycode, LTRIM(RTRIM(employeecode)) AS employeecode
+       FROM ${EMPLOYEE_CODE_MAPPING_TABLE}`,
+    );
+    for (const m of mapR.recordset || []) codeMap.set(clean(m.paycode), clean(m.employeecode));
+  } catch (_e) { /* mapping unavailable -> EmployeeCode stays blank */ }
+
+  const r = await pool.request().query(`
+    SELECT LTRIM(RTRIM(e.paycode)) AS paycode,
+           LTRIM(RTRIM(e.empname)) AS empname,
+           LTRIM(RTRIM(e.presentcardno)) AS presentcardno,
+           LTRIM(RTRIM(e.companycode)) AS companycode,
+           LTRIM(RTRIM(e.departmentcode)) AS departmentcode,
+           LTRIM(RTRIM(e.designation)) AS designation,
+           LTRIM(RTRIM(e.LocationName)) AS locationname
+    FROM dbo.tblemployee e
+    WHERE ISNULL(LTRIM(RTRIM(e.active)), 'Y') <> 'N'${scope.fragment}
+    ORDER BY LTRIM(RTRIM(e.paycode))`);
+
+  const master = (r.recordset || []).map((row) => {
+    const paycode = clean(row.paycode);
+    return {
+      employeecode: codeMap.get(paycode) || '',
+      paycode,
+      presentcardno: clean(row.presentcardno),
+      empname: clean(row.empname),
+      companycode: clean(row.companycode),
+      locationcode: clean(row.locationname),
+      departmentcode: clean(row.departmentcode),
+      designation: clean(row.designation),
+      // No Savior salary source -> blank (never fabricated).
+      effectivefrom: '', basicsalary: '', pfapplicable: null, esiapplicable: null,
+      pfwage: '', esiwage: '', currency: '', remarks: '',
+    };
+  });
+
+  return {
+    ok: true,
+    master,
+    elements: [],
+    payElementMaster: [],
+    report: {
+      source: 'Savior SQL Server - dbo.tblemployee roster (EmployeeCode via the established paycode identity mapping)',
+      employees: master.length,
+      populatedSheets: ['EmployeeSalaryMaster (identity fields only)'],
+      blankSheets: ['EmployeePayElements', 'PayElementMaster'],
+      unavailableFields: ['EffectiveFrom', 'BasicSalary', 'PFApplicable', 'PFWage', 'ESIApplicable', 'ESIWage', 'Currency', 'Remarks'],
+      unavailableReason: 'Savior SQL Server has no employee-wise salary master or pay-element tables (payrollinterface and tblpayoutinterface are attendance-day interfaces and contain 0 rows). These fields must be entered manually or obtained from an authoritative payroll source. The application HR_Salary* tables were NOT used as a fallback.',
+      inspectedTables: ['tblemployee', 'tblDesignation', 'tblcategory', 'tblcompany', 'tbldepartment', 'tbldivision', 'tblgrade', 'payrollinterface', 'tblpayoutinterface', 'tblOTslab', 'tblcanteen', 'tblleaveencashment', 'tblleaveledger', 'tblleavemaster', 'tblleavepolicy'],
+    },
+  };
+}
+
+/* ------------------------------------------------------------------ */
 /* Lists (shared read model for BOTH platforms and every export)        */
 /* ------------------------------------------------------------------ */
 

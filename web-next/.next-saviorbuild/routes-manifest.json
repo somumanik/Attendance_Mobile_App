@@ -1,0 +1,233 @@
+{
+  "version": 3,
+  "pages404": true,
+  "caseSensitive": false,
+  "basePath": "",
+  "redirects": [
+    {
+      "source": "/:path+/",
+      "destination": "/:path+",
+      "internal": true,
+      "statusCode": 308,
+      "regex": "^(?:/((?:[^/]+?)(?:/(?:[^/]+?))*))/$"
+    }
+  ],
+  "headers": [],
+  "rewrites": {
+    "beforeFiles": [],
+    "afterFiles": [
+      {
+        "source": "/api/:path*",
+        "destination": "http://localhost:4000/api/:path*",
+        "regex": "^/api(?:/((?:[^/]+?)(?:/(?:[^/]+?))*))?(?:/)?$"
+      }
+    ],
+    "fallback": []
+  },
+  "dynamicRoutes": [],
+  "staticRoutes": [
+    {
+      "page": "/",
+      "regex": "^/(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/(?:/)?$"
+    },
+    {
+      "page": "/_not-found",
+      "regex": "^/_not\\-found(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/_not\\-found(?:/)?$"
+    },
+    {
+      "page": "/employee",
+      "regex": "^/employee(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/employee(?:/)?$"
+    },
+    {
+      "page": "/employee/attendance",
+      "regex": "^/employee/attendance(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/employee/attendance(?:/)?$"
+    },
+    {
+      "page": "/employee/celebrations",
+      "regex": "^/employee/celebrations(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/employee/celebrations(?:/)?$"
+    },
+    {
+      "page": "/employee/fullfinal",
+      "regex": "^/employee/fullfinal(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/employee/fullfinal(?:/)?$"
+    },
+    {
+      "page": "/employee/leave",
+      "regex": "^/employee/leave(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/employee/leave(?:/)?$"
+    },
+    {
+      "page": "/employee/password",
+      "regex": "^/employee/password(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/employee/password(?:/)?$"
+    },
+    {
+      "page": "/employee/pin",
+      "regex": "^/employee/pin(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/employee/pin(?:/)?$"
+    },
+    {
+      "page": "/employee/profile",
+      "regex": "^/employee/profile(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/employee/profile(?:/)?$"
+    },
+    {
+      "page": "/employee/reports",
+      "regex": "^/employee/reports(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/employee/reports(?:/)?$"
+    },
+    {
+      "page": "/health",
+      "regex": "^/health(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/health(?:/)?$"
+    },
+    {
+      "page": "/hr",
+      "regex": "^/hr(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/hr(?:/)?$"
+    },
+    {
+      "page": "/hr/analytics",
+      "regex": "^/hr/analytics(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/hr/analytics(?:/)?$"
+    },
+    {
+      "page": "/hr/audit",
+      "regex": "^/hr/audit(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/hr/audit(?:/)?$"
+    },
+    {
+      "page": "/hr/celebrations",
+      "regex": "^/hr/celebrations(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/hr/celebrations(?:/)?$"
+    },
+    {
+      "page": "/hr/credentials",
+      "regex": "^/hr/credentials(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/hr/credentials(?:/)?$"
+    },
+    {
+      "page": "/hr/daily",
+      "regex": "^/hr/daily(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/hr/daily(?:/)?$"
+    },
+    {
+      "page": "/hr/email",
+      "regex": "^/hr/email(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/hr/email(?:/)?$"
+    },
+    {
+      "page": "/hr/employees",
+      "regex": "^/hr/employees(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/hr/employees(?:/)?$"
+    },
+    {
+      "page": "/hr/holidays",
+      "regex": "^/hr/holidays(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/hr/holidays(?:/)?$"
+    },
+    {
+      "page": "/hr/leave",
+      "regex": "^/hr/leave(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/hr/leave(?:/)?$"
+    },
+    {
+      "page": "/hr/marriage",
+      "regex": "^/hr/marriage(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/hr/marriage(?:/)?$"
+    },
+    {
+      "page": "/hr/salary",
+      "regex": "^/hr/salary(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/hr/salary(?:/)?$"
+    },
+    {
+      "page": "/login",
+      "regex": "^/login(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/login(?:/)?$"
+    },
+    {
+      "page": "/login/employee",
+      "regex": "^/login/employee(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/login/employee(?:/)?$"
+    },
+    {
+      "page": "/login/employee/forgot",
+      "regex": "^/login/employee/forgot(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/login/employee/forgot(?:/)?$"
+    },
+    {
+      "page": "/login/employee/reset",
+      "regex": "^/login/employee/reset(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/login/employee/reset(?:/)?$"
+    },
+    {
+      "page": "/login/employee/setup",
+      "regex": "^/login/employee/setup(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/login/employee/setup(?:/)?$"
+    },
+    {
+      "page": "/login/hr",
+      "regex": "^/login/hr(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/login/hr(?:/)?$"
+    },
+    {
+      "page": "/login/superadmin",
+      "regex": "^/login/superadmin(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/login/superadmin(?:/)?$"
+    }
+  ],
+  "dataRoutes": [],
+  "rsc": {
+    "header": "rsc",
+    "varyHeader": "rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch",
+    "prefetchHeader": "next-router-prefetch",
+    "didPostponeHeader": "x-nextjs-postponed",
+    "contentTypeHeader": "text/x-component",
+    "suffix": ".rsc",
+    "prefetchSuffix": ".prefetch.rsc",
+    "prefetchSegmentHeader": "next-router-segment-prefetch",
+    "prefetchSegmentSuffix": ".segment.rsc",
+    "prefetchSegmentDirSuffix": ".segments"
+  },
+  "rewriteHeaders": {
+    "pathHeader": "x-nextjs-rewritten-path",
+    "queryHeader": "x-nextjs-rewritten-query"
+  }
+}
