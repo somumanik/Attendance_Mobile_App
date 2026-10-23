@@ -12,5 +12,9 @@ export default async function SuperAdminLayout({ children }) {
   if (user?.role === 'HR') redirect('/hr');
   if (user?.role !== 'SUPERADMIN') redirect('/login/superadmin');
 
-  return <SuperAdminShell>{children}</SuperAdminShell>;
+  return (
+    <SuperAdminShell userName={user.displayname || user.username || ''}>
+      {children}
+    </SuperAdminShell>
+  );
 }
