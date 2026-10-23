@@ -2501,12 +2501,28 @@ app.get('/api/me', authenticate, async (req, res) => {
         const pool = await getPool();
         await ensureAdminAccessTables(pool);
         const permissions = await getEffectivePermissions(pool, req.user.sub);
+        // Additive identity fields (Phase 3): the logged-in account's saved
+        // display name (fallback: username) and its REAL company assignments.
+        // These are informational for the UI — enforcement stays server-side.
+        let displayname = '';
+        let companies = null;
+        try {
+          const dn = await pool.request().input('u', sql.VarChar(50), req.user.sub)
+            .query(`SELECT TOP 1 LTRIM(RTRIM(ISNULL(displayname, ''))) AS displayname FROM dbo.HR_AdminUser WHERE username = @u`);
+          displayname = String(dn.recordset?.[0]?.displayname || '').trim();
+          companies = await getCompanyScope(pool, req.user.sub);
+        } catch (e) {
+          console.error('[ME_HR_IDENTITY_ERROR]', e && (e.message || e).toString().slice(0, 200));
+        }
         return res.json({
           role: 'HR',
+          username: req.user.sub,
+          displayname: displayname || req.user.sub,
           permissions,
           modules: MODULE_CATALOG,
           actions: ACTION_KEYS,
           bootstrap: isBootstrapHr(req.user.sub) === true,
+          companies,
         });
       }
     } catch (error) {
@@ -2515,8 +2531,23 @@ app.get('/api/me', authenticate, async (req, res) => {
     return res.json({ role: 'HR' });
   }
   if (req.user.role === 'SUPERADMIN') {
+    // Additive identity field (Phase 3): saved display name with username fallback.
+    let displayname = req.user.sub;
+    try {
+      if (process.env.DB_SERVER && process.env.DB_DATABASE && process.env.DB_USER && process.env.DB_PASSWORD) {
+        const pool = await getPool();
+        await ensureAdminAccessTables(pool);
+        const dn = await pool.request().input('u', sql.VarChar(50), req.user.sub)
+          .query(`SELECT TOP 1 LTRIM(RTRIM(ISNULL(displayname, ''))) AS displayname FROM dbo.HR_SuperAdminUser WHERE username = @u`);
+        displayname = String(dn.recordset?.[0]?.displayname || '').trim() || req.user.sub;
+      }
+    } catch (e) {
+      console.error('[ME_SA_IDENTITY_ERROR]', e && (e.message || e).toString().slice(0, 200));
+    }
     return res.json({
       role: 'SUPERADMIN',
+      username: req.user.sub,
+      displayname,
       fullAccess: true,
       modules: MODULE_CATALOG.concat(SUPERADMIN_ONLY_MODULES.map((key) => ({ key, label: key }))),
       actions: ACTION_KEYS,

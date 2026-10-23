@@ -5,6 +5,7 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
+import { useHrAccess } from './hr/HrAccess';
 
 const CONFIG = {
   employee: {
@@ -27,18 +28,18 @@ const CONFIG = {
     headerRole: 'hr',
     headerSub: 'HR Administrator Portal • master SQL database',
     items: [
-      { href: '/hr', label: 'Executive Overview', title: 'Executive Overview', short: 'Overview', icon: 'fa-th-large', color: 'text-indigo-400' },
-      { href: '/hr/employees', label: 'All Employees Roster', title: 'All Employees Roster', short: 'Roster', icon: 'fa-users', color: 'text-emerald-400' },
-      { href: '/hr/audit', label: 'Single Employee Audit', title: 'Single Employee Audit', short: 'Audit', icon: 'fa-user-check', color: 'text-purple-400' },
-      { href: '/hr/analytics', label: 'Category-wise Analytics', title: 'Category-wise Analytics', short: 'Analytics', icon: 'fa-layer-group', color: 'text-amber-400' },
-      { href: '/hr/daily', label: 'Daily Master Report', title: 'Daily Master Report', short: 'Daily Master', icon: 'fa-calendar-day', color: 'text-rose-400' },
-      { href: '/hr/celebrations', label: 'Birthdays & Anniversaries', title: 'Birthdays & Anniversaries', short: 'Celebrations', icon: 'fa-cake-candles', color: 'text-pink-400' },
-      { href: '/hr/marriage', label: 'Marriage Anniversary', title: 'Marriage Anniversary', short: 'Marriage', icon: 'fa-file-excel', color: 'text-teal-400' },
-      { href: '/hr/email', label: 'Email Configuration', title: 'Email Configuration', short: 'Email', icon: 'fa-envelope', color: 'text-violet-400' },
-      { href: '/hr/leave', label: 'Leave Management', title: 'Leave Management', short: 'Leave', icon: 'fa-clipboard-check', color: 'text-sky-400' },
-      { href: '/hr/salary', label: 'Salary / Full & Final', title: 'Salary / Full & Final', short: 'Salary', icon: 'fa-money-bill-wave', color: 'text-emerald-400' },
-      { href: '/hr/holidays', label: 'Holiday Management', title: 'Holiday Management', short: 'Holidays', icon: 'fa-calendar-days', color: 'text-rose-400' },
-      { href: '/hr/credentials', label: 'Employee Credential Management', title: 'Employee Credential Management', short: 'Credentials', icon: 'fa-id-badge', color: 'text-cyan-400' },
+      { href: '/hr', module: 'dashboard', label: 'Executive Overview', title: 'Executive Overview', short: 'Overview', icon: 'fa-th-large', color: 'text-indigo-400' },
+      { href: '/hr/employees', module: 'employees', label: 'All Employees Roster', title: 'All Employees Roster', short: 'Roster', icon: 'fa-users', color: 'text-emerald-400' },
+      { href: '/hr/audit', module: 'audit', label: 'Single Employee Audit', title: 'Single Employee Audit', short: 'Audit', icon: 'fa-user-check', color: 'text-purple-400' },
+      { href: '/hr/analytics', module: 'analytics', label: 'Category-wise Analytics', title: 'Category-wise Analytics', short: 'Analytics', icon: 'fa-layer-group', color: 'text-amber-400' },
+      { href: '/hr/daily', module: 'dailymaster', label: 'Daily Master Report', title: 'Daily Master Report', short: 'Daily Master', icon: 'fa-calendar-day', color: 'text-rose-400' },
+      { href: '/hr/celebrations', module: 'celebrations', label: 'Birthdays & Anniversaries', title: 'Birthdays & Anniversaries', short: 'Celebrations', icon: 'fa-cake-candles', color: 'text-pink-400' },
+      { href: '/hr/marriage', module: 'marriage', label: 'Marriage Anniversary', title: 'Marriage Anniversary', short: 'Marriage', icon: 'fa-file-excel', color: 'text-teal-400' },
+      { href: '/hr/email', module: 'email', label: 'Email Configuration', title: 'Email Configuration', short: 'Email', icon: 'fa-envelope', color: 'text-violet-400' },
+      { href: '/hr/leave', module: 'leave', label: 'Leave Management', title: 'Leave Management', short: 'Leave', icon: 'fa-clipboard-check', color: 'text-sky-400' },
+      { href: '/hr/salary', module: 'salary', label: 'Salary / Full & Final', title: 'Salary / Full & Final', short: 'Salary', icon: 'fa-money-bill-wave', color: 'text-emerald-400' },
+      { href: '/hr/holidays', module: 'holidays', label: 'Holiday Management', title: 'Holiday Management', short: 'Holidays', icon: 'fa-calendar-days', color: 'text-rose-400' },
+      { href: '/hr/credentials', module: 'credentials', label: 'Employee Credential Management', title: 'Employee Credential Management', short: 'Credentials', icon: 'fa-id-badge', color: 'text-cyan-400' },
     ],
   },
 };
@@ -122,10 +123,20 @@ function SyncGuideModal({ variant, onClose }) {
 export default function PortalShell({ variant = 'employee', user, children }) {
   const pathname = usePathname();
   const cfg = CONFIG[variant] || CONFIG.employee;
-  const active = cfg.items.find((it) => it.href === pathname) || cfg.items[0];
+  // Phase 3: HR nav items are filtered by the account's SAVED permissions
+  // (Visible/Hidden + View), and 'more'-placed modules move into a More group.
+  const hrAccess = useHrAccess();
+  const isHr = variant === 'hr';
+  const visibleItems = isHr
+    ? (cfg.items || []).filter((it) => hrAccess.isVisible(it.module) && hrAccess.can(it.module, 'view'))
+    : cfg.items;
+  const primaryItems = isHr ? visibleItems.filter((it) => hrAccess.placement(it.module) !== 'more') : visibleItems;
+  const moreItems = isHr ? visibleItems.filter((it) => hrAccess.placement(it.module) === 'more') : [];
+  const active = visibleItems.find((it) => it.href === pathname) || primaryItems[0] || { title: '', href: '/' };
   const [syncOpen, setSyncOpen] = useState(false);
   const [lastSync, setLastSync] = useState(null);
   const [syncState, setSyncState] = useState('checking'); // checking | connected | disconnected
+  const [moreOpen, setMoreOpen] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -176,7 +187,7 @@ export default function PortalShell({ variant = 'employee', user, children }) {
               </div>
             </div>
             <nav className="space-y-1.5">
-              {cfg.items.map((it) => {
+              {primaryItems.map((it) => {
                 const isActive = pathname === it.href;
                 return (
                   <Link key={it.href} href={it.href} className={`sidebar-item flex items-center gap-3 px-3.5 py-2.5 rounded-xl cursor-pointer text-xs font-semibold ${isActive ? 'active' : ''}`} aria-current={isActive ? 'page' : undefined}>
@@ -184,6 +195,26 @@ export default function PortalShell({ variant = 'employee', user, children }) {
                   </Link>
                 );
               })}
+              {moreItems.length ? (
+                <div className="pt-2">
+                  <button type="button" onClick={() => setMoreOpen((v) => !v)} className="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl cursor-pointer text-xs font-bold text-[var(--muted)] hover:text-[var(--text)]" aria-expanded={moreOpen}>
+                    <i className="fas fa-ellipsis w-4"></i> More
+                    <i className={`fas ${moreOpen ? 'fa-chevron-up' : 'fa-chevron-down'} ml-auto text-[9px]`}></i>
+                  </button>
+                  {moreOpen ? (
+                    <div className="space-y-1 mt-1">
+                      {moreItems.map((it) => {
+                        const isActive = pathname === it.href;
+                        return (
+                          <Link key={it.href} href={it.href} className={`sidebar-item flex items-center gap-3 px-3.5 py-2.5 rounded-xl cursor-pointer text-xs font-semibold ${isActive ? 'active' : ''}`} aria-current={isActive ? 'page' : undefined}>
+                            <i className={`fas ${it.icon} w-4 ${it.color}`}></i> {it.label}
+                          </Link>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
             </nav>
           </div>
           <div className="p-4 rounded-2xl bg-[var(--surface)] border border-[var(--border)] text-xs">
@@ -207,7 +238,9 @@ export default function PortalShell({ variant = 'employee', user, children }) {
             <div>
               <h1 className="text-base font-bold text-[var(--text)]">{active.title}</h1>
               {cfg.headerRole === 'hr' ? (
-                <p className="text-xs text-[var(--muted)]">{cfg.headerSub}</p>
+                <p className="text-xs text-[var(--muted)] truncate max-w-[60vw]">
+                  Signed in as: <span className="text-[var(--accent-soft)] font-bold">{hrAccess.name || '—'}</span>
+                </p>
               ) : (
                 <p className="text-xs text-[var(--muted)]">
                   Logged in as: <span className="text-[var(--accent-soft)] font-bold">{name || '—'}</span> • Employee ID:{' '}
@@ -230,7 +263,7 @@ export default function PortalShell({ variant = 'employee', user, children }) {
 
       <nav className="portal-mobile-nav lg:hidden fixed bottom-0 left-0 right-0 z-40">
         <div className="flex justify-around py-2 overflow-x-auto">
-          {cfg.items.map((it) => {
+          {primaryItems.map((it) => {
             const isActive = pathname === it.href;
             return (
               <Link key={it.href} href={it.href} className={`flex flex-col items-center gap-0.5 px-2 py-1 text-[9px] font-semibold ${isActive ? 'text-[var(--text)]' : 'text-[var(--muted)]'}`}>

@@ -6,6 +6,7 @@ import { useState } from 'react';
 import useApiData from '../useApiData';
 import AsyncBox from '../employee/AsyncBox';
 import apiFetch from '../../lib/api';
+import { HrCan } from './HrAccess';
 import { prettyDate } from '../../lib/format';
 import { yearsCompleted } from '../../lib/hr';
 import MarriageImportModal from './MarriageImportModal';
@@ -46,9 +47,11 @@ export default function MarriageSection() {
             <h3 className="font-bold text-base text-[var(--text)] flex items-center gap-2"><i className="fas fa-ring text-teal-400"></i> Marriage Anniversary Register</h3>
             <p className="text-xs text-[var(--muted)]">HR application table • matching key: paycode / presentcardno</p>
           </div>
-          <button type="button" onClick={() => setShowImport(true)} className="px-3.5 py-2 rounded-xl bg-teal-600/20 border border-teal-500/30 text-teal-300 hover:bg-teal-600/30 text-[11px] font-bold transition">
-            <i className="fas fa-file-excel mr-1"></i>Import Excel
-          </button>
+          <HrCan module="marriage" action="edit">
+            <button type="button" onClick={() => setShowImport(true)} className="px-3.5 py-2 rounded-xl bg-teal-600/20 border border-teal-500/30 text-teal-300 hover:bg-teal-600/30 text-[11px] font-bold transition">
+              <i className="fas fa-file-excel mr-1"></i>Import Excel
+            </button>
+          </HrCan>
         </div>
 
         {msg ? <p className="text-xs text-[var(--accent-soft)] mb-3">{msg}</p> : null}
@@ -73,9 +76,11 @@ export default function MarriageSection() {
                       <td className="mono text-[10px]">{m.importedby || '—'}</td>
                       <td className="text-[10px]">{prettyDate(m.updateddate || m.createddate)}</td>
                       <td className="text-center">
-                        <button type="button" onClick={() => remove(m.paycode)} disabled={busy === m.paycode} className="px-2.5 py-1 rounded-lg bg-rose-500/15 border border-rose-500/30 text-rose-300 hover:bg-rose-500/25 text-[11px] font-bold transition disabled:opacity-50">
-                          <i className="fas fa-trash mr-1"></i>Remove
-                        </button>
+                        <HrCan module="marriage" action="delete">
+                          <button type="button" onClick={() => remove(m.paycode)} disabled={busy === m.paycode} className="px-2.5 py-1 rounded-lg bg-rose-500/15 border border-rose-500/30 text-rose-300 hover:bg-rose-500/25 text-[11px] font-bold transition disabled:opacity-50">
+                            <i className="fas fa-trash mr-1"></i>Remove
+                          </button>
+                        </HrCan>
                       </td>
                     </tr>
                   );

@@ -24,6 +24,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import useApiData from '../useApiData';
 import apiFetch from '../../lib/api';
+import { HrCan } from './HrAccess';
 import { prettyDate, currentMonthKey, shiftMonth, prettyMonth } from '../../lib/format';
 
 const clean = (v) => String(v == null ? '' : v).trim();
@@ -456,9 +457,11 @@ export default function HolidaysSection() {
             <button type="button" onClick={() => load(true)} disabled={refreshing} className={btnGhost} aria-label="Refresh holidays">
               <i className={`fas fa-rotate mr-1 ${refreshing ? 'fa-spin' : ''}`}></i>Refresh
             </button>
-            <button type="button" onClick={() => openForm()} className={btnPrimary}>
-              <i className="fas fa-plus mr-1"></i>Add Holiday
-            </button>
+            <HrCan module="holidays" action="create">
+              <button type="button" onClick={() => openForm()} className={btnPrimary}>
+                <i className="fas fa-plus mr-1"></i>Add Holiday
+              </button>
+            </HrCan>
           </div>
         </div>
 
@@ -660,39 +663,45 @@ export default function HolidaysSection() {
                           >
                             <i className="fas fa-circle-info"></i>
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => toggleActive(h)}
-                            disabled={busyId === h.id}
-                            className={`px-2.5 py-1 rounded-lg border text-[11px] font-bold transition disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 ${
-                              isActive
-                                ? 'bg-amber-500/15 border-amber-500/30 text-amber-300 hover:bg-amber-500/25'
-                                : 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25'
-                            }`}
-                            aria-label={isActive ? `Deactivate ${clean(h.holidayname)}` : `Activate ${clean(h.holidayname)}`}
-                            title={isActive ? 'Deactivate' : 'Activate'}
-                          >
-                            {busyId === h.id ? <i className="fas fa-spinner fa-spin"></i> : <i className={`fas ${isActive ? 'fa-eye-slash' : 'fa-eye'}`}></i>}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => openForm(h)}
-                            className="px-2.5 py-1 rounded-lg bg-sky-500/15 border border-sky-500/30 text-sky-300 hover:bg-sky-500/25 text-[11px] font-bold transition focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"
-                            aria-label={`Edit ${clean(h.holidayname)}`}
-                            title="Edit"
-                          >
-                            <i className="fas fa-pen"></i>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => remove(h)}
-                            disabled={busyId === h.id}
-                            className="px-2.5 py-1 rounded-lg bg-rose-500/15 border border-rose-500/30 text-rose-300 hover:bg-rose-500/25 text-[11px] font-bold transition disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"
-                            aria-label={`Delete ${clean(h.holidayname)}`}
-                            title="Delete"
-                          >
-                            <i className="fas fa-trash"></i>
-                          </button>
+                          <HrCan module="holidays" action="edit">
+                            <button
+                              type="button"
+                              onClick={() => toggleActive(h)}
+                              disabled={busyId === h.id}
+                              className={`px-2.5 py-1 rounded-lg border text-[11px] font-bold transition disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 ${
+                                isActive
+                                  ? 'bg-amber-500/15 border-amber-500/30 text-amber-300 hover:bg-amber-500/25'
+                                  : 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25'
+                              }`}
+                              aria-label={isActive ? `Deactivate ${clean(h.holidayname)}` : `Activate ${clean(h.holidayname)}`}
+                              title={isActive ? 'Deactivate' : 'Activate'}
+                            >
+                              {busyId === h.id ? <i className="fas fa-spinner fa-spin"></i> : <i className={`fas ${isActive ? 'fa-eye-slash' : 'fa-eye'}`}></i>}
+                            </button>
+                          </HrCan>
+                          <HrCan module="holidays" action="edit">
+                            <button
+                              type="button"
+                              onClick={() => openForm(h)}
+                              className="px-2.5 py-1 rounded-lg bg-sky-500/15 border border-sky-500/30 text-sky-300 hover:bg-sky-500/25 text-[11px] font-bold transition focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"
+                              aria-label={`Edit ${clean(h.holidayname)}`}
+                              title="Edit"
+                            >
+                              <i className="fas fa-pen"></i>
+                            </button>
+                          </HrCan>
+                          <HrCan module="holidays" action="delete">
+                            <button
+                              type="button"
+                              onClick={() => remove(h)}
+                              disabled={busyId === h.id}
+                              className="px-2.5 py-1 rounded-lg bg-rose-500/15 border border-rose-500/30 text-rose-300 hover:bg-rose-500/25 text-[11px] font-bold transition disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"
+                              aria-label={`Delete ${clean(h.holidayname)}`}
+                              title="Delete"
+                            >
+                              <i className="fas fa-trash"></i>
+                            </button>
+                          </HrCan>
                         </div>
                       </td>
                     </tr>
@@ -713,10 +722,12 @@ export default function HolidaysSection() {
           footer={(
             <>
               <button type="button" onClick={() => { setFormOpen(false); setEditing(null); }} disabled={saving} className={btnGhost}>Cancel</button>
-              <button type="button" onClick={save} disabled={saving} className={btnPrimary}>
-                {saving ? <i className="fas fa-spinner fa-spin mr-1"></i> : <i className="fas fa-check mr-1"></i>}
-                {editing ? 'Save Changes' : 'Add Holiday'}
-              </button>
+              <HrCan module="holidays" action={editing ? 'edit' : 'create'}>
+                <button type="button" onClick={save} disabled={saving} className={btnPrimary}>
+                  {saving ? <i className="fas fa-spinner fa-spin mr-1"></i> : <i className="fas fa-check mr-1"></i>}
+                  {editing ? 'Save Changes' : 'Add Holiday'}
+                </button>
+              </HrCan>
             </>
           )}
         >

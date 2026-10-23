@@ -21,6 +21,7 @@ import SalaryEstimateBreakdown from '../SalaryEstimateBreakdown';
 import SalaryStructureSection from './SalaryStructureSection';
 import apiFetch from '../../lib/api';
 import { SALARY_MASTER_COLUMNS, SALARY_ELEMENT_COLUMNS, downloadCsv } from '../../lib/excelImport';
+import { HrCan } from './HrAccess';
 
 const clean = (v) => String(v == null ? '' : v).trim();
 const money = (v) => (v === null || v === undefined || v === '' || Number.isNaN(Number(v)))
@@ -361,6 +362,7 @@ export default function SalarySection() {
 
       {/* ============================== IMPORT ============================== */}
       {tab === 'import' ? (
+        <HrCan module="salary" action="import">
         <div className="glass-card rounded-3xl p-6">
           <h3 className="font-bold text-base text-[var(--text)] flex items-center gap-2 mb-1"><i className="fas fa-file-excel text-teal-400"></i> Excel Import</h3>
           <p className="text-[11px] text-[var(--muted)] mb-4">
@@ -386,10 +388,8 @@ export default function SalarySection() {
             />
           </div>
         </div>
+        </HrCan>
       ) : null}
-
-
-
       {/* =========================== SALARY DATA ============================ */}
       {tab === 'data' ? (
         <>
@@ -398,9 +398,11 @@ export default function SalarySection() {
               <h3 className="font-bold text-base text-[var(--text)] flex items-center gap-2"><i className="fas fa-coins text-emerald-400"></i> Salary Master</h3>
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-[11px] text-[var(--muted)]">{rows.length} row(s) · har effective-date version preserved</span>
-                <button type="button" onClick={exportMaster} disabled={!rows.length} className={btnGhost}>
-                  <i className="fas fa-file-csv mr-1"></i>Export CSV
-                </button>
+                <HrCan module="salary" action="export">
+                  <button type="button" onClick={exportMaster} disabled={!rows.length} className={btnGhost}>
+                    <i className="fas fa-file-csv mr-1"></i>Export CSV
+                  </button>
+                </HrCan>
               </div>
             </div>
             <AsyncBox loading={master.loading} error={master.error} onRetry={master.reload} label="Salary data load ho raha hai...">
@@ -444,9 +446,11 @@ export default function SalarySection() {
               <h3 className="font-bold text-base text-[var(--text)] flex items-center gap-2"><i className="fas fa-list-ul text-sky-400"></i> Pay Elements</h3>
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-[11px] text-[var(--muted)]">{elementRows.length} element(s)</span>
-                <button type="button" onClick={exportElements} disabled={!elementRows.length} className={btnGhost}>
+                <HrCan module="salary" action="export">
+                  <button type="button" onClick={exportElements} disabled={!elementRows.length} className={btnGhost}>
                   <i className="fas fa-file-csv mr-1"></i>Export CSV
                 </button>
+                </HrCan>
               </div>
             </div>
             <AsyncBox loading={elements.loading} error={elements.error} onRetry={elements.reload} label="Pay elements load ho rahe hain...">
@@ -491,9 +495,11 @@ export default function SalarySection() {
         <div className="glass-card rounded-3xl p-6">
           <div className="flex items-center justify-between gap-3 flex-wrap mb-1">
             <h3 className="font-bold text-base text-[var(--text)] flex items-center gap-2"><i className="fas fa-sliders text-violet-400"></i> Settlement Rules</h3>
-            <button type="button" onClick={saveRules} disabled={savingRules} className={btnPrimary}>
-              {savingRules ? <i className="fas fa-spinner fa-spin mr-1"></i> : <i className="fas fa-floppy-disk mr-1"></i>}Save Rules
-            </button>
+            <HrCan module="salary" action="edit">
+              <button type="button" onClick={saveRules} disabled={savingRules} className={btnPrimary}>
+                {savingRules ? <i className="fas fa-spinner fa-spin mr-1"></i> : <i className="fas fa-floppy-disk mr-1"></i>}Save Rules
+              </button>
+            </HrCan>
           </div>
           <p className="text-[11px] text-[var(--muted)] mb-3">
             Gratuity, bonus period, encashment, notice, PF aur ESI ke rules — sab kuch configurable (koi formula/month hardcoded nahi).
@@ -537,9 +543,11 @@ export default function SalarySection() {
           </AsyncBox>
           <div className="flex items-center justify-between gap-3 flex-wrap mt-5">
             {rulesMsg ? <p className={`${msgBox(rulesMsg.ok)} flex-1`}><i className={`fas ${rulesMsg.ok ? 'fa-circle-check' : 'fa-circle-exclamation'} mr-1`}></i>{rulesMsg.text}</p> : <span />}
-            <button type="button" onClick={saveRules} disabled={savingRules} className={btnPrimary}>
-              {savingRules ? <i className="fas fa-spinner fa-spin mr-1"></i> : <i className="fas fa-floppy-disk mr-1"></i>}Save Rules
-            </button>
+            <HrCan module="salary" action="edit">
+              <button type="button" onClick={saveRules} disabled={savingRules} className={btnPrimary}>
+                {savingRules ? <i className="fas fa-spinner fa-spin mr-1"></i> : <i className="fas fa-floppy-disk mr-1"></i>}Save Rules
+              </button>
+            </HrCan>
           </div>
         </div>
       ) : null}
@@ -584,9 +592,11 @@ export default function SalarySection() {
                 <input id="due-amount" className={`${inputCls} mono`} inputMode="decimal" value={dueForm.amount} onChange={(e) => setDueForm({ ...dueForm, amount: e.target.value })} placeholder="0.00" />
               </div>
               <div className="sm:col-span-2 lg:col-span-3 flex justify-end">
+              <HrCan module="salary" action="create">
                 <button type="submit" disabled={dueBusy} className={btnPrimary}>
                   {dueBusy ? <i className="fas fa-spinner fa-spin mr-1"></i> : <i className="fas fa-plus mr-1"></i>}Add Entry
                 </button>
+              </HrCan>
               </div>
             </form>
           </div>
@@ -622,12 +632,16 @@ export default function SalarySection() {
                           <td className="text-center">
                             {clean(d.status) === 'Pending' ? (
                               <span className="inline-flex items-center gap-2">
-                                <button type="button" onClick={() => decideDue(d, 'Approved')} disabled={!!decidingId} className="px-2.5 py-1.5 rounded-lg bg-emerald-600 text-white text-[10px] font-bold transition hover:opacity-90 disabled:opacity-40">
-                                  {decidingId === d.id ? <i className="fas fa-spinner fa-spin"></i> : 'Approve'}
-                                </button>
-                                <button type="button" onClick={() => decideDue(d, 'Rejected')} disabled={!!decidingId} className="px-2.5 py-1.5 rounded-lg bg-white/5 border border-[var(--border)] text-[var(--text)] text-[10px] font-bold transition hover:bg-white/10 disabled:opacity-40">
-                                  Reject
-                                </button>
+                                <HrCan module="salary" action="approve">
+                                  <button type="button" onClick={() => decideDue(d, 'Approved')} disabled={!!decidingId} className="px-2.5 py-1.5 rounded-lg bg-emerald-600 text-white text-[10px] font-bold transition hover:opacity-90 disabled:opacity-40">
+                                    {decidingId === d.id ? <i className="fas fa-spinner fa-spin"></i> : 'Approve'}
+                                  </button>
+                                </HrCan>
+                                <HrCan module="salary" action="approve">
+                                  <button type="button" onClick={() => decideDue(d, 'Rejected')} disabled={!!decidingId} className="px-2.5 py-1.5 rounded-lg bg-white/5 border border-[var(--border)] text-[var(--text)] text-[10px] font-bold transition hover:bg-white/10 disabled:opacity-40">
+                                    Reject
+                                  </button>
+                                </HrCan>
                               </span>
                             ) : '—'}
                           </td>
@@ -697,9 +711,11 @@ export default function SalarySection() {
                         Estimate kabhi automatically bonus paid mark nahi karta. Sirf neeche Record karne par woh service settled maani jaati hai.
                       </p>
                     </div>
-                    <button type="button" onClick={recordSettlement} disabled={settleBusy || !estData.estimate.bonus.eligible || !(Number(estData.estimate.bonus.amount) > 0)} className={btnGhost}>
-                      <i className="fas fa-stamp mr-1"></i>Record Bonus Settlement ({money(estData.estimate.bonus.amount)})
-                    </button>
+                    <HrCan module="salary" action="create">
+                      <button type="button" onClick={recordSettlement} disabled={settleBusy || !estData.estimate.bonus.eligible || !(Number(estData.estimate.bonus.amount) > 0)} className={btnGhost}>
+                        <i className="fas fa-stamp mr-1"></i>Record Bonus Settlement ({money(estData.estimate.bonus.amount)})
+                      </button>
+                    </HrCan>
                   </div>
                   {settleMsg ? <p className={`${msgBox(settleMsg.ok)} mt-3`}>{settleMsg.text}</p> : null}
                   {settlements.length ? (
@@ -717,7 +733,9 @@ export default function SalarySection() {
                               <td><span className="badge badge--present">{s.status}</span></td>
                               <td className="text-[10px] text-[var(--muted)]">{clean(s.createdby) || '—'}</td>
                               <td className="text-right">
-                                <button type="button" onClick={() => removeSettlement(s.id)} disabled={settleBusy} className="px-2.5 py-1.5 rounded-lg bg-white/5 border border-[var(--border)] text-[var(--text)] text-[10px] font-bold disabled:opacity-40">Remove</button>
+                                <HrCan module="salary" action="delete">
+                                  <button type="button" onClick={() => removeSettlement(s.id)} disabled={settleBusy} className="px-2.5 py-1.5 rounded-lg bg-white/5 border border-[var(--border)] text-[var(--text)] text-[10px] font-bold disabled:opacity-40">Remove</button>
+                                </HrCan>
                               </td>
                             </tr>
                           ))}

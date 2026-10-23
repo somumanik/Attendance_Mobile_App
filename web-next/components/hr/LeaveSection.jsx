@@ -11,6 +11,7 @@ import apiFetch from '../../lib/api';
 import { prettyDate } from '../../lib/format';
 import ExcelImport from './ExcelImport';
 import { LEAVE_COLUMNS, downloadCsv } from '../../lib/excelImport';
+import { HrCan } from './HrAccess';
 
 function currentFyLabel() {
   const d = new Date();
@@ -283,7 +284,9 @@ export default function LeaveSection() {
             <h3 className="font-bold text-sm text-[var(--text)]">Leave Balances · {leaveYearLabel}</h3>
             <div className="flex items-center gap-2">
               <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search name / code / paycode" className="px-3 py-2 rounded-xl bg-[var(--input-bg)] border border-[var(--border)] text-xs text-[var(--text)] outline-none focus:border-[var(--accent)] w-full sm:w-64" />
-              <button type="button" onClick={exportBalances} disabled={!filteredEmp.length} className={btnGhost}><i className="fas fa-file-csv mr-1"></i>Export CSV</button>
+              <HrCan module="leave" action="export">
+                <button type="button" onClick={exportBalances} disabled={!filteredEmp.length} className={btnGhost}><i className="fas fa-file-csv mr-1"></i>Export CSV</button>
+              </HrCan>
             </div>
           </div>
           <AsyncBox loading={balances.loading} error={balances.error} onRetry={balances.reload} label="Balances load ho rahe hain...">
@@ -342,8 +345,12 @@ export default function LeaveSection() {
                         <td className="text-center">
                           {r.status === 'Pending' ? (
                             <div className="flex justify-center gap-1.5">
-                              <button type="button" onClick={() => decide(r.id, 'Approved')} disabled={busyId === r.id} className="px-2.5 py-1 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25 text-[11px] font-bold transition disabled:opacity-50">{busyId === r.id ? <i className="fas fa-spinner fa-spin mr-1"></i> : <i className="fas fa-check mr-1"></i>}Approve</button>
-                              <button type="button" onClick={() => decide(r.id, 'Rejected')} disabled={busyId === r.id} className="px-2.5 py-1 rounded-lg bg-rose-500/15 border border-rose-500/30 text-rose-300 hover:bg-rose-500/25 text-[11px] font-bold transition disabled:opacity-50"><i className="fas fa-xmark mr-1"></i>Reject</button>
+                              <HrCan module="leave" action="approve">
+                                <button type="button" onClick={() => decide(r.id, 'Approved')} disabled={busyId === r.id} className="px-2.5 py-1 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25 text-[11px] font-bold transition disabled:opacity-50">{busyId === r.id ? <i className="fas fa-spinner fa-spin mr-1"></i> : <i className="fas fa-check mr-1"></i>}Approve</button>
+                              </HrCan>
+                              <HrCan module="leave" action="approve">
+                                <button type="button" onClick={() => decide(r.id, 'Rejected')} disabled={busyId === r.id} className="px-2.5 py-1 rounded-lg bg-rose-500/15 border border-rose-500/30 text-rose-300 hover:bg-rose-500/25 text-[11px] font-bold transition disabled:opacity-50"><i className="fas fa-xmark mr-1"></i>Reject</button>
+                              </HrCan>
                             </div>
                           ) : <span className="text-[var(--muted)] text-[11px]">—</span>}
                         </td>
@@ -364,7 +371,9 @@ export default function LeaveSection() {
             <h3 className="font-bold text-sm text-[var(--text)]">Opening Balances · {openingBalances.data?.leaveyear || fy}</h3>
             <div className="flex items-center gap-2">
               <input value={obSearch} onChange={(e) => setObSearch(e.target.value)} placeholder="Search code / paycode / name / type" className="px-3 py-2 rounded-xl bg-[var(--input-bg)] border border-[var(--border)] text-xs text-[var(--text)] outline-none focus:border-[var(--accent)] w-full sm:w-64" />
-              <button type="button" onClick={openAddOb} className="px-4 py-2 rounded-xl bg-indigo-600 text-white text-[11px] font-bold transition hover:bg-indigo-500"><i className="fas fa-plus mr-1"></i>Add Opening Balance</button>
+              <HrCan module="leave" action="create">
+                <button type="button" onClick={openAddOb} className="px-4 py-2 rounded-xl bg-indigo-600 text-white text-[11px] font-bold transition hover:bg-indigo-500"><i className="fas fa-plus mr-1"></i>Add Opening Balance</button>
+              </HrCan>
             </div>
           </div>
           {obMsg ? <p className={`text-xs mb-3 px-3 py-2 rounded-xl border ${obMsg.ok ? 'text-emerald-300 bg-emerald-500/10 border-emerald-500/20' : 'text-rose-300 bg-rose-500/10 border-rose-500/20'}`}>{obMsg.text}</p> : null}
@@ -384,8 +393,12 @@ export default function LeaveSection() {
                         <td className="font-bold">{r.openingBalance}</td>
                         <td className="text-center">
                           <div className="flex justify-center gap-1.5">
-                            <button type="button" onClick={() => openEditOb(r)} disabled={obBusy} className="px-2.5 py-1 rounded-lg bg-sky-500/15 border border-sky-500/30 text-sky-300 hover:bg-sky-500/25 text-[11px] font-bold transition disabled:opacity-50"><i className="fas fa-pen mr-1"></i>Edit</button>
-                            <button type="button" onClick={() => deleteOb(r)} disabled={obBusy} className="px-2.5 py-1 rounded-lg bg-rose-500/15 border border-rose-500/30 text-rose-300 hover:bg-rose-500/25 text-[11px] font-bold transition disabled:opacity-50"><i className="fas fa-trash mr-1"></i>Delete</button>
+                            <HrCan module="leave" action="edit">
+                              <button type="button" onClick={() => openEditOb(r)} disabled={obBusy} className="px-2.5 py-1 rounded-lg bg-sky-500/15 border border-sky-500/30 text-sky-300 hover:bg-sky-500/25 text-[11px] font-bold transition disabled:opacity-50"><i className="fas fa-pen mr-1"></i>Edit</button>
+                            </HrCan>
+                            <HrCan module="leave" action="delete">
+                              <button type="button" onClick={() => deleteOb(r)} disabled={obBusy} className="px-2.5 py-1 rounded-lg bg-rose-500/15 border border-rose-500/30 text-rose-300 hover:bg-rose-500/25 text-[11px] font-bold transition disabled:opacity-50"><i className="fas fa-trash mr-1"></i>Delete</button>
+                            </HrCan>
                           </div>
                         </td>
                       </tr>
@@ -400,6 +413,7 @@ export default function LeaveSection() {
         </div>
       ) : null}
       {tab === 'import' ? (
+        <HrCan module="leave" action="import">
         <div className="glass-card rounded-3xl p-6">
           <h3 className="font-bold text-base text-[var(--text)] flex items-center gap-2 mb-4"><i className="fas fa-file-excel text-teal-400"></i> Excel Import — Opening Balances</h3>
           <ExcelImport
@@ -425,6 +439,7 @@ export default function LeaveSection() {
             onImported={() => { openingBalances.reload(); balances.reload(); }}
           />
         </div>
+        </HrCan>
       ) : null}
       {tab === 'rules' ? (
         <div className="space-y-4">
@@ -445,8 +460,12 @@ export default function LeaveSection() {
                           <td>{t.active !== false ? <span className="badge badge--present">Active</span> : <span className="badge badge--neutral">Inactive</span>}</td>
                           <td className="text-center">
                             <div className="flex justify-center gap-1.5">
+                            <HrCan module="leave" action="edit">
                               <button type="button" onClick={() => toggleType(t, t.active === false)} disabled={typeAction === t.leavetype} className="px-2.5 py-1 rounded-lg bg-white/5 border border-[var(--border)] text-[var(--text)] text-[11px] font-bold transition hover:bg-white/10 disabled:opacity-50">{typeAction === t.leavetype ? <i className="fas fa-spinner fa-spin mr-1"></i> : null}{t.active !== false ? 'Deactivate' : 'Activate'}</button>
+                            </HrCan>
+                            <HrCan module="leave" action="delete">
                               <button type="button" onClick={() => deleteType(t)} disabled={typeAction === t.leavetype} className="px-2.5 py-1 rounded-lg bg-rose-500/15 border border-rose-500/30 text-rose-300 hover:bg-rose-500/25 text-[11px] font-bold transition disabled:opacity-50"><i className="fas fa-trash mr-1"></i>Delete</button>
+                            </HrCan>
                             </div>
                           </td>
                         </tr>
@@ -466,7 +485,9 @@ export default function LeaveSection() {
               <div><label className="block text-[10px] uppercase font-bold text-[var(--muted)] mb-1">Code</label><input value={typeForm.leavetype} onChange={(e) => setTypeForm({ ...typeForm, leavetype: e.target.value })} required className={inputCls} placeholder="e.g. ML" /></div>
               <div><label className="block text-[10px] uppercase font-bold text-[var(--muted)] mb-1">Name</label><input value={typeForm.typename} onChange={(e) => setTypeForm({ ...typeForm, typename: e.target.value })} required className={inputCls} placeholder="Maternity Leave" /></div>
               <div><label className="block text-[10px] uppercase font-bold text-[var(--muted)] mb-1">Sort Order</label><input value={typeForm.sortorder} onChange={(e) => setTypeForm({ ...typeForm, sortorder: e.target.value })} className={inputCls} placeholder="10" /></div>
-              <button type="submit" disabled={typeBusy} className="px-4 py-2 rounded-xl bg-indigo-600 text-white text-[11px] font-bold transition hover:bg-indigo-500 disabled:opacity-50">{typeBusy ? <i className="fas fa-spinner fa-spin mr-1"></i> : <i className="fas fa-plus mr-1"></i>}Add Type</button>
+              <HrCan module="leave" action="create">
+                <button type="submit" disabled={typeBusy} className="px-4 py-2 rounded-xl bg-indigo-600 text-white text-[11px] font-bold transition hover:bg-indigo-500 disabled:opacity-50">{typeBusy ? <i className="fas fa-spinner fa-spin mr-1"></i> : <i className="fas fa-plus mr-1"></i>}Add Type</button>
+              </HrCan>
             </form>
           </div>
           <div className="glass-card rounded-3xl p-6">

@@ -154,16 +154,12 @@ export default function AuditSection() {
   // Hinglish: Grace "used" = configured limit - jo bacha hai (graceRemaining).
   const graceUsedOf = (key) => Math.max(0, Number(graceLimits[key] || 0) - Number(grace[key] ?? 0));
   const staffGraceEligible = graceElig ? graceElig.isStaff === true : null; // null = unknown (legacy)
-  /* Hinglish: Section visibility — eligible STAFF ke liye hamesha dikhta hai
-     (0 usage par bhi "0/2 used" dikhna chahiye). Non-STAFF par sirf real late rows
-     ke liye, aur unpar staff-grace block kabhi nahi (unhe grace milti hi nahi).
-     Legacy response (eligibility unknown) me purana condition chalta hai. */
-  const hasLateRows = lateDetails.length > 0;
-  const graceSectionVisible = fresh && (staffGraceEligible === true
-    ? true
-    : staffGraceEligible === false
-      ? hasLateRows
-      : (hasLateRows || Number(grace.grace30min) < 2 || Number(grace.grace1hr) < 1 || Number(grace.grace2hr) < 1));
+  /* PHASE (audit fix): the Late Arrival Details section is shown for EVERY
+     category whenever the audit data is loaded. Grace eligibility only decides
+     WHICH grace sub-block renders below (used/limit vs the non-applicable
+     message) — never whether the section shows. A category ineligible for staff
+     grace still shows its complete Late Occurrences (or an explicit empty state). */
+  const graceSectionVisible = fresh;
   // PHASE 6.2A — employee header ka current shift (shared audit response ka `shift`
   // object; resolveEmployeeShift se aata hai — code + real start/end timings).
   const shiftInfo = fresh && auditData?.shift && typeof auditData.shift === 'object' ? auditData.shift : null;

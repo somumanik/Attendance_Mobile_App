@@ -68,7 +68,7 @@ export const getState = () => state;
 // HR and SuperAdmin accounts carry just a role; employees carry their record.
 const userFromMe = (me) => (
   me?.role === USER_ROLES.HR || me?.role === USER_ROLES.SUPERADMIN
-    ? { role: me.role }
+    ? { role: me.role, username: me.username || null, displayname: me.displayname || me.username || null }
     : me?.employee || null
 );
 

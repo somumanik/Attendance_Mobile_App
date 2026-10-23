@@ -36,15 +36,12 @@ export default function AuditModal({ paycode, onClose }) {
   const graceLimits = (graceElig && graceElig.limits) || { grace30min: 2, grace1hr: 1, grace2hr: 1 };
   const graceUsedOf = (key) => Math.max(0, Number(graceLimits[key] || 0) - Number(grace[key] ?? 0));
   const staffGraceEligible = graceElig ? graceElig.isStaff === true : null;
-  // Hinglish: Eligible STAFF ke liye ye section hamesha dikhta hai (0 usage par bhi
-  // "0/2 used"). Non-STAFF par sirf real late rows ke liye, aur unpar staff-grace
-  // block kabhi nahi (unhe grace milti hi nahi). Legacy response me purana condition.
-  const hasLateRows = (lateDetails || []).length > 0;
-  const hasGrace = staffGraceEligible === true
-    ? true
-    : staffGraceEligible === false
-      ? hasLateRows
-      : (hasLateRows || Number(grace.grace30min) < 2 || Number(grace.grace1hr) < 1 || Number(grace.grace2hr) < 1);
+  // PHASE (audit fix): the Late Arrival Details section is shown for EVERY category
+  // (Late Occurrences + Monthly Staff Grace Used). Grace eligibility only decides
+  // WHICH grace sub-block renders below (used/limit vs the non-applicable message)
+  // — never whether the section shows. A category ineligible for staff grace still
+  // shows its complete Late Occurrences (or an explicit empty state).
+  const hasGrace = true;
 
   const graceLabel = (d) => {
     if (d.isFinalLate) return d.graceUsed == null ? 'No grace — FINAL LATE' : 'FINAL LATE';
@@ -73,7 +70,7 @@ export default function AuditModal({ paycode, onClose }) {
 
   const modal = (
     <div role="dialog" aria-modal="true" aria-labelledby="audit-heading" className="exec-view fixed inset-0 z-[60] flex items-center justify-center p-4" style={{ background: 'rgba(4,3,13,.82)', backdropFilter: 'blur(8px)' }} onClick={onClose}>
-      <div className="pop-in glass rounded-3xl w-full max-w-3xl flex flex-col overflow-hidden shadow-2xl" style={{ maxHeight: 'calc(100dvh - 32px)' }} onClick={(e) => e.stopPropagation()}>
+      <div className="pop-in glass rounded-3xl w-full max-w-5xl flex flex-col overflow-hidden shadow-2xl" style={{ maxHeight: 'calc(100dvh - 32px)' }} onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-5 py-4 border-b border-white/10 shrink-0">
           <h3 id="audit-heading" className="font-bold text-base text-[var(--text)] flex items-center gap-2">
             <span className="w-9 h-9 rounded-xl bg-indigo-500/20 text-indigo-400 flex items-center justify-center shrink-0"><i className="fas fa-id-badge"></i></span>

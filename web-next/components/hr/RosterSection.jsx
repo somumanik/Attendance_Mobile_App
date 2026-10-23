@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react';
 import useApiData from '../useApiData';
 import AsyncBox from '../employee/AsyncBox';
 import { prettyDate } from '../../lib/format';
+import { HrCan } from './HrAccess';
 import AuditModal from './AuditModal';
 
 function Select({ label, value, onChange, options, placeholder }) {
@@ -100,7 +101,9 @@ export default function RosterSection() {
           <Select label="Marital" value={marital} onChange={(v) => { setMarital(v); setPage(1); }} options={(f.maritalStatuses || []).map((m) => ({ value: m, label: m === 'Y' ? 'Married' : m === 'N' ? 'Unmarried' : m }))} placeholder="All Marital Statuses" />
           <Select label="Status" value={active} onChange={(v) => { setActive(v); setPage(1); }} options={(f.statuses || []).map((s) => ({ value: s, label: s === 'Y' ? 'Active' : s === 'N' ? 'Inactive' : s }))} placeholder="All Employee Statuses" />
           <button onClick={clearFilters} className="px-3.5 py-2 rounded-xl bg-indigo-600/20 border border-indigo-500/30 text-indigo-300 hover:bg-indigo-600/30 text-[11px] font-bold transition"><i className="fas fa-filter-circle-xmark mr-1"></i>Clear Filters</button>
-          <button onClick={exportCSV} className="px-3.5 py-2 rounded-xl bg-emerald-600/20 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-600/30 text-[11px] font-bold transition"><i className="fas fa-file-csv mr-1"></i>Export</button>
+          <HrCan module="employees" action="export">
+            <button onClick={exportCSV} className="px-3.5 py-2 rounded-xl bg-emerald-600/20 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-600/30 text-[11px] font-bold transition"><i className="fas fa-file-csv mr-1"></i>Export</button>
+          </HrCan>
         </div>
       </div>
       <AsyncBox loading={loading} error={error} onRetry={reload} label="Roster load ho raha hai...">

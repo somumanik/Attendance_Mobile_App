@@ -235,6 +235,12 @@ export const HRAuditScreen = ({ route }) => {
   const attendance = useMemo(() => ascendingByDate(audit?.attendance), [audit]);
   const lateDetails = Array.isArray(audit?.lateDetails) ? audit.lateDetails : [];
   const grace = audit?.graceRemaining || {};
+  // Grace eligibility + configured limits come from the SHARED backend
+  // (computeMonthlyLateForEmployee's graceEligibility) — never hardcoded here.
+  const graceElig = audit?.graceEligibility && typeof audit.graceEligibility === 'object' ? audit.graceEligibility : null;
+  const graceLimits = (graceElig && graceElig.limits) || { grace30min: 2, grace1hr: 1, grace2hr: 1 };
+  const graceUsedOf = (key) => Math.max(0, Number(graceLimits[key] || 0) - Number(grace[key] ?? 0));
+  const staffGraceEligible = graceElig ? graceElig.isStaff === true : null;
   const emp = audit?.employee || selected || {};
 
   return (
@@ -318,8 +324,11 @@ export const HRAuditScreen = ({ route }) => {
               ))}
             </View>
 
-            {/* Late arrival details + monthly grace (existing audit data) */}
-            {lateDetails.length > 0 || grace.grace30min !== undefined ? (
+            {/* Late arrival details + monthly grace (existing audit data) — PHASE
+                (audit fix): the section is shown for EVERY category (Late
+                Occurrences + Monthly Staff Grace Used). Grace eligibility only
+                changes which grace sub-block renders, never section visibility. */}
+            {true ? (
               <View style={styles.card}>
                 <Text style={[styles.sectionTitle, TYPOGRAPHY.h4]}>Late Arrival Details (Monthly Grace Consumption)</Text>
 
@@ -345,23 +354,27 @@ export const HRAuditScreen = ({ route }) => {
                   <Text style={styles.hint}>No late occurrences this month</Text>
                 )}
 
-                {grace.grace30min !== undefined ? (
-                  <View style={styles.graceBox}>
-                    <Text style={styles.graceTitle}>Monthly Staff Grace Used</Text>
-                    <View style={styles.graceRow}>
-                      <Text style={styles.graceLabel}>30-min grace (2 per month)</Text>
-                      <Text style={styles.graceValue}>{2 - Number(grace.grace30min || 0)}/2</Text>
-                    </View>
-                    <View style={styles.graceRow}>
-                      <Text style={styles.graceLabel}>1-hr grace (1 per month)</Text>
-                      <Text style={styles.graceValue}>{1 - Number(grace.grace1hr || 0)}/1</Text>
-                    </View>
-                    <View style={styles.graceRow}>
-                      <Text style={styles.graceLabel}>2-hr grace (1 per month)</Text>
-                      <Text style={styles.graceValue}>{1 - Number(grace.grace2hr || 0)}/1</Text>
-                    </View>
-                  </View>
-                ) : null}
+                <View style={styles.graceBox}>
+                  <Text style={styles.graceTitle}>Monthly Staff Grace Used</Text>
+                  {staffGraceEligible !== false ? (
+                    <>
+                      <View style={styles.graceRow}>
+                        <Text style={styles.graceLabel}>30-min grace ({graceLimits.grace30min} per month)</Text>
+                        <Text style={styles.graceValue}>{graceUsedOf('grace30min')}/{graceLimits.grace30min}</Text>
+                      </View>
+                      <View style={styles.graceRow}>
+                        <Text style={styles.graceLabel}>1-hr grace ({graceLimits.grace1hr} per month)</Text>
+                        <Text style={styles.graceValue}>{graceUsedOf('grace1hr')}/{graceLimits.grace1hr}</Text>
+                      </View>
+                      <View style={styles.graceRow}>
+                        <Text style={styles.graceLabel}>2-hr grace ({graceLimits.grace2hr} per month)</Text>
+                        <Text style={styles.graceValue}>{graceUsedOf('grace2hr')}/{graceLimits.grace2hr}</Text>
+                      </View>
+                    </>
+                  ) : (
+                    <Text style={styles.hint}>Not applicable — ye employee STAFF category ka nahi hai, isliye monthly staff grace rules apply nahi hote. Sab late occurrences FINAL LATE count hote hain.</Text>
+                  )}
+                </View>
               </View>
             ) : null}
 
