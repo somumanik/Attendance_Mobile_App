@@ -25,7 +25,7 @@ const LINKS = [
 export default function SuperAdminShell({ children }) {
   const pathname = usePathname();
   return (
-    <div className="emp-shell">
+    <div className="emp-shell emp-shell--wide">
       <header className="emp-header">
         <div className="emp-header__id">
           <span className="emp-header__name">SuperAdmin Console</span>

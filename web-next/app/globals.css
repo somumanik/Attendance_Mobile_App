@@ -663,6 +663,16 @@ body {
   padding: 20px 16px 44px;
 }
 
+/* SuperAdmin Console — wider content area (~85-90% of viewport on desktop,
+   balanced side margins). SCOPED modifier: only SuperAdminShell uses it, so the
+   Employee portal / HR gate (.emp-shell base) keep their original width. Small
+   screens keep the base full-width behaviour (no horizontal overflow). */
+@media (min-width: 1100px) {
+  .emp-shell--wide {
+    max-width: min(90vw, 2200px);
+  }
+}
+
 .emp-header {
   display: flex;
   align-items: center;

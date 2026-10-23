@@ -11,13 +11,16 @@ export const metadata = {
   description: 'Savior Attendance website (Next.js). Existing Express backend aur mobile app unchanged hain.',
 };
 
-const themeInitScript = `(function(){try{var t=localStorage.getItem('attendance_theme');if(t){document.documentElement.setAttribute('data-theme',t);}}catch(e){}})();`;
+const themeInitScript = `(function(){try{var t=localStorage.getItem('attendance_theme');document.documentElement.setAttribute('data-theme',t||'purple');}catch(e){document.documentElement.setAttribute('data-theme','purple');}})();`;
 
 export default function RootLayout({ children }) {
   return (
-    <html lang="en" data-theme="purple">
+    <html lang="en">
       <body>
-        {/* Theme preference paint se pehle apply karo (FOUC avoid karne ke liye). */}
+        {/* Theme preference ko paint se pehle apply karo (FOUC avoid). data-theme
+            deliberately React ke JSX me NAHI hai — isse server HTML aur pehla client
+            render match karte hain (hydration mismatch nahi), aur theme ka single
+            source of truth localStorage (fallback: purple) rehta hai. */}
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
         {children}
       </body>
