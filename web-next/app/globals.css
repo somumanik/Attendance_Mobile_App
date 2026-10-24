@@ -897,16 +897,244 @@ body {
   text-align: right;
 }
 
-/* Celebrations buckets */
-.cel-bucket { margin-bottom: 12px; }
+/* ===========================================================================
+   Employee Celebrations tab — page-scoped styles (sirf /employee/celebrations).
+   THEME INTEGRATION: surface/text/border/accent colors WEBSITE KE EXISTING
+   theme tokens se aate hain (--surface, --surface-solid, --border, --text,
+   --muted, --accent, --on-accent, --accent-border) — Theme Selector ke chaaron
+   themes (Dark Purple / Light Professional / Midnight Blue / Emerald Dark) ke
+   saath data-theme + CSS variables se bina reload ke match karte hain.
+   Celebration category accents (pink / gold / red) page-scoped tokens hain:
+   --celv-pink / --celv-gold / --celv-red — har theme me vivid aur readable;
+   --celv-on-accent solid accent badge ka ink hai.
+   =========================================================================== */
+.celv {
+  /* Base = Dark Purple (SSR me data-theme nahi hota; :root default purple hai).
+     --celv-chip-bg/ink: active filter pill — site accent family me, AA-contrast ke
+     liye theme ke hisaab se accent/accent-2 + on-accent ink choose kiya gaya. */
+  --celv-pink: #f472b6;
+  --celv-gold: #fbbf24;
+  --celv-red: #fb7185;
+  --celv-on-accent: #0f172a;
+  --celv-chip-bg: var(--accent-2);
+  --celv-chip-ink: #ffffff;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 16px;
+}
 
-.cel-bucket__label {
-  font-size: 0.72rem;
-  font-weight: 800;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+[data-theme='purple'] .celv,
+[data-theme='blue'] .celv,
+[data-theme='emerald'] .celv {
+  --celv-pink: #f472b6;
+  --celv-gold: #fbbf24;
+  --celv-red: #fb7185;
+  --celv-on-accent: #0f172a;
+}
+
+[data-theme='purple'] .celv,
+[data-theme='blue'] .celv {
+  --celv-chip-bg: var(--accent-2);
+  --celv-chip-ink: #ffffff;
+}
+
+[data-theme='emerald'] .celv {
+  --celv-chip-bg: var(--accent);
+  --celv-chip-ink: var(--on-accent);
+}
+
+[data-theme='light'] .celv {
+  --celv-pink: #db2777;
+  --celv-gold: #b45309;
+  --celv-red: #e11d48;
+  --celv-on-accent: #ffffff;
+  --celv-chip-bg: var(--accent);
+  --celv-chip-ink: #ffffff;
+}
+
+@media (max-width: 640px) {
+  .celv { padding: 12px; }
+}
+
+/* Filter chips: All / Today / This Week / This Month / Upcoming */
+.celv__filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.celv__chip {
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-solid);
   color: var(--muted);
-  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 700;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background .15s ease, border-color .15s ease, color .15s ease;
+}
+
+.celv__chip:hover { border-color: var(--accent-border); color: var(--text); }
+
+.celv__chip--active,
+.celv__chip--active:hover {
+  background: var(--celv-chip-bg);
+  border-color: var(--celv-chip-bg);
+  color: var(--celv-chip-ink);
+}
+
+/* Sections: Birthdays (pink) / Work Anniversaries (gold) / Marriage (red) */
+.celv__section { margin-bottom: 18px; }
+
+.celv__sec-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.celv__sec-icon {
+  width: 18px;
+  text-align: center;
+  font-size: 16px;
+  color: var(--celv-accent);
+}
+
+.celv__sec-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--text);
+}
+
+.celv__sec-count {
+  min-width: 28px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--celv-accent);
+  background: color-mix(in srgb, var(--celv-accent) 12%, transparent);
+}
+
+/* Employee cards — desktop par responsive grid, mobile par single column. */
+.celv__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+  gap: 8px;
+}
+
+@media (max-width: 420px) {
+  .celv__grid { grid-template-columns: 1fr; }
+}
+
+.celv-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: var(--surface-solid);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px;
+}
+
+.celv-card__icon {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  color: var(--celv-accent);
+  background: color-mix(in srgb, var(--celv-accent) 10%, transparent);
+}
+
+.celv-card__body { flex: 1; min-width: 0; }
+
+.celv-card__name {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.celv-card__role {
+  margin: 2px 0 0;
+  font-size: 11.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.celv-card__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 5px;
+}
+
+.celv-card__chip {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--celv-accent);
+  background: color-mix(in srgb, var(--celv-accent) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--celv-accent) 30%, transparent);
+}
+
+.celv-card__sub { font-size: 11px; color: color-mix(in srgb, var(--muted) 85%, transparent); }
+
+.celv-card__right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  min-width: 46px;
+}
+
+.celv-card__day { font-size: 11px; font-weight: 700; color: color-mix(in srgb, var(--muted) 85%, transparent); }
+.celv-card__in { font-size: 10.5px; color: color-mix(in srgb, var(--muted) 85%, transparent); }
+
+.celv-card__today {
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--celv-accent);
+  color: var(--celv-on-accent);
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: .02em;
+}
+
+.celv__empty {
+  padding: 16px;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--surface-solid) 45%, transparent);
+}
+
+.celv__footnote {
+  margin: 4px 0 0;
+  text-align: center;
+  font-size: 11px;
+  color: color-mix(in srgb, var(--muted) 85%, transparent);
 }
 
 .role-grid {
