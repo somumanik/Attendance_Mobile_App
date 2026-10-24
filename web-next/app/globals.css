@@ -818,33 +818,36 @@ body {
 .rpt-actions { display: flex; justify-content: center; margin-top: 12px; }
 
 /* ===========================================================================
-   Employee Portal SIDEBAR POLISH — scoped ONLY to the employee variant
+   Employee Portal SIDEBAR SPACING — scoped ONLY to the employee variant
    (.portal-sidebar--employee / .emp-nav-list are rendered exclusively by the
    employee PortalShell variant). HR Admin and SuperAdmin sidebars are untouched.
-   Width stays w-64; items get moderately more height/padding, consistent
-   icon-text spacing and full readable labels.
+   Width stays w-64; nav items get comfortable vertical padding + min height,
+   a consistent Dashboard→Profile gap, relaxed icon↔label spacing and readable
+   full labels. The scoped max-height/overflow guard keeps the bottom LIVE SQL
+   SYNC panel safe on short viewports (scrolls instead of overlapping).
    =========================================================================== */
+.portal-sidebar--employee {
+  max-height: 100vh;
+  overflow-y: auto;
+}
 .portal-sidebar--employee .sidebar-item {
-  padding: 12px 14px;
-  gap: 12px;
-  font-size: 12.5px;
-  line-height: 1.35;
+  padding: 14px 16px;
+  min-height: 50px;
+  gap: 13px;
+  font-size: 13px;
+  line-height: 1.4;
   white-space: nowrap;
 }
 .portal-sidebar--employee .sidebar-item i {
-  width: 18px;
-  font-size: 13.5px;
+  width: 20px;
+  font-size: 15.5px;
   text-align: center;
   flex-shrink: 0;
-}
-.portal-sidebar--employee .sidebar-item:hover,
-.portal-sidebar--employee .sidebar-item.active {
-  padding-left: 13px; /* keep text aligned despite the 4px active accent border */
 }
 .emp-nav-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
 }
 
 
