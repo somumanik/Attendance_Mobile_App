@@ -817,6 +817,36 @@ body {
 .rpt-notes li { font-size: 11.5px; color: var(--muted); line-height: 1.5; }
 .rpt-actions { display: flex; justify-content: center; margin-top: 12px; }
 
+/* ===========================================================================
+   Employee Portal SIDEBAR POLISH — scoped ONLY to the employee variant
+   (.portal-sidebar--employee / .emp-nav-list are rendered exclusively by the
+   employee PortalShell variant). HR Admin and SuperAdmin sidebars are untouched.
+   Width stays w-64; items get moderately more height/padding, consistent
+   icon-text spacing and full readable labels.
+   =========================================================================== */
+.portal-sidebar--employee .sidebar-item {
+  padding: 12px 14px;
+  gap: 12px;
+  font-size: 12.5px;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+.portal-sidebar--employee .sidebar-item i {
+  width: 18px;
+  font-size: 13.5px;
+  text-align: center;
+  flex-shrink: 0;
+}
+.portal-sidebar--employee .sidebar-item:hover,
+.portal-sidebar--employee .sidebar-item.active {
+  padding-left: 13px; /* keep text aligned despite the 4px active accent border */
+}
+.emp-nav-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 
 /* Input field with leading icon */
 .field__wrap--icon .field__input {

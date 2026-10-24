@@ -171,11 +171,14 @@ export default function PortalShell({ variant = 'employee', user, children }) {
 
   const name = String(user?.name || '');
   const code = String(user?.code || '');
+  // Employee-Portal-only sidebar polish scope (Task A): the class is added ONLY
+  // for the employee variant, so the HR Admin sidebar markup stays identical.
+  const isEmployeeVariant = variant === 'employee';
 
   return (
     <div className="gradient-bg min-h-screen text-[var(--text)]">
       <div className="flex">
-        <aside className="portal-sidebar w-64 min-h-screen p-4 hidden lg:flex lg:flex-col lg:justify-between fixed z-30">
+        <aside className={`portal-sidebar${isEmployeeVariant ? ' portal-sidebar--employee' : ''} w-64 min-h-screen p-4 hidden lg:flex lg:flex-col lg:justify-between fixed z-30`}>
           <div>
             <div className="flex items-center gap-3 mb-8 px-2 py-1">
               <div className={`w-10 h-10 rounded-xl ${cfg.brand.grad} flex items-center justify-center shadow-lg ${cfg.brand.glow}`}>
@@ -186,7 +189,7 @@ export default function PortalShell({ variant = 'employee', user, children }) {
                 <p className="text-[10px] font-semibold text-[var(--accent-soft)]">{cfg.brand.sub}</p>
               </div>
             </div>
-            <nav className="space-y-1.5">
+            <nav className={isEmployeeVariant ? 'emp-nav-list' : 'space-y-1.5'}>
               {primaryItems.map((it) => {
                 const isActive = pathname === it.href;
                 return (
