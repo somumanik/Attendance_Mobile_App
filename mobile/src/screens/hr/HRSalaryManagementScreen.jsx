@@ -43,6 +43,7 @@ import {
   getHrFullFinal, SALARY_MASTER_COLUMNS, SALARY_ELEMENT_COLUMNS,
   normaliseSalaryMasterRow, normaliseSalaryElementRow,
 } from '../../services/salary';
+import { HRSalaryStructureSection } from './HRSalaryStructureSection';
 
 const clean = (v) => String(v == null ? '' : v).trim();
 const PLACEHOLDER = '—';
@@ -277,6 +278,7 @@ export const HRSalaryManagementScreen = () => {
     ['rules', 'Rules', 'options'],
     ['dues', 'Dues', 'swap-horizontal'],
     ['estimate', 'Estimate', 'calculator'],
+    ['structure', 'Structure', 'layers'],
   ];
 
   const renderImportSummary = () => {
@@ -298,6 +300,9 @@ export const HRSalaryManagementScreen = () => {
             </View>
           ))}
         </View>
+        {(s.warnings || []).length ? (
+          <Text style={styles.hint}>{`Warning (${s.warnings.length}): ${s.warnings.slice(0, 2).join(' | ')}${s.warnings.length > 2 ? ' ...' : ''}`}</Text>
+        ) : null}
         {Array.isArray(s.results) && s.results.length ? (
           <Text style={styles.hint}>{s.results.length} row(s) processed. Details:</Text>
         ) : null}
@@ -337,19 +342,22 @@ export const HRSalaryManagementScreen = () => {
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
-        {loading ? (
+        {loading && activeTab !== 'structure' ? (
           <View style={styles.stateBox}>
             <ActivityIndicator size="large" color={COLORS.primary} />
             <Text style={styles.stateText}>Loading salary data...</Text>
           </View>
         ) : null}
 
-        {!loading && error ? (
+        {!loading && error && activeTab !== 'structure' ? (
           <View style={styles.errorBox}>
             <Text style={styles.errorText}><Ionicons name="alert-circle" size={13} /> {error}</Text>
             <Button title="Retry" onPress={() => load(false)} variant="outline" size="small" />
           </View>
         ) : null}
+
+        {/* =========================== STRUCTURE (V1) =========================== */}
+        {activeTab === 'structure' ? <HRSalaryStructureSection /> : null}
 
         {/* ============================ IMPORT ============================ */}
         {!loading && !error && activeTab === 'import' ? (

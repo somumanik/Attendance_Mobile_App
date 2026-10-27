@@ -71,7 +71,7 @@
         <i class="fas fa-fingerprint text-4xl text-white"></i>
       </div>
       <h1 class="text-3xl font-extrabold tracking-tight bg-gradient-to-r from-white via-indigo-100 to-indigo-300 bg-clip-text text-transparent">Attendance Portal</h1>
-      <p class="text-indigo-200/70 text-sm font-medium mt-1">Savior Biometric SQL Server • Self Service &amp; HR Admin</p>
+      <p class="text-indigo-200/70 text-sm font-medium mt-1">Savior Biometric Server • Self Service &amp; HR Admin</p>
       <div class="inline-flex items-center gap-2 mt-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-xs text-emerald-400 font-medium">
         <span class="pulse-dot w-2 h-2 bg-emerald-400 rounded-full"></span>
         <span id="loginDbStatus">Savior Biometric SQL DB: Online</span>
@@ -4980,11 +4980,11 @@ function updateSyncBadge(){
   if (liveMode === 'live') {
     if (empTxt) empTxt.textContent = 'Live SQL • ' + t;
     if (hrTxt)  hrTxt.textContent  = 'Live SQL Synced • ' + t;
-    if (login)  login.textContent  = 'Savior Biometric SQL DB: Connected';
+    if (login)  login.textContent  = 'Savior Biometric DB: Connected';
   } else {
     if (empTxt) empTxt.textContent = 'SQL API unavailable • ' + t;
     if (hrTxt)  hrTxt.textContent  = 'SQL API unavailable • ' + t;
-    if (login)  login.textContent  = 'Savior Biometric SQL DB: Not connected';
+    if (login)  login.textContent  = 'Savior Biometric DB: Not connected';
   }
 }
 

@@ -46,7 +46,7 @@ import {
 // so the storage backend can be swapped later (Phase J section 7 keeps the seam
 // ready for a future Navision integration - no Navision code exists here).
 // Attendance, holiday and HR login paths do not import it.
-import { ensureLeaveTables, getLeaveProvider, listLeaveTypes, leaveYearLabel, currentLeaveYearStart, listEmployeeOptions } from './leave-service.js';
+import { ensureLeaveTables, getLeaveProvider, listLeaveTypes, leaveYearLabel, currentLeaveYearStart, listEmployeeOptions, listApprovedLeaveForPopulation } from './leave-service.js';
 // Phase K: salary configuration/import + Full & Final estimation engine.
 // Same discipline as leave-service: application-owned HR_Salary* tables only.
 import {
@@ -54,11 +54,35 @@ import {
   importSalaryMaster, importSalaryElements,
   listSalaryMaster, listSalaryElements, listSalaryDues,
   createSalaryDue, decideSalaryDue, computeFullFinal,
+  listBonusSettlements, recordBonusSettlement, deleteBonusSettlements,
 } from './salary-service.js';
+// Salary Structure V1: dynamic pay elements + Excel import/export. Extends the
+// SAME shared HR_Salary* tables additively and adds HR_PayElementMaster.
+import {
+  ensureSalaryStructureTables, importSalaryStructure, exportSaviorTemplateSource,
+  listSalaryStructureMaster, listSalaryStructureElements, listPayElementMaster,
+  importPayElementMasterRows, buildSalaryStructureReport,
+  SALARY_STRUCTURE_MASTER_COLUMNS, SALARY_STRUCTURE_ELEMENT_COLUMNS, PAY_ELEMENT_MASTER_COLUMNS,
+  createSalaryMasterVersion, updateSalaryMasterVersion, deleteSalaryMasterRows,
+  createElementAssignment, updateElementAssignment, deleteElementAssignments,
+  createPayElementMasterRecord, updatePayElementMasterRecord, deletePayElementMasterRecords,
+} from './salary-structure-service.js';
 // SuperAdmin authentication lives in its OWN isolated module
 // (server/superadmin-auth.js). The HR login path never imports it and it has no
 // database access at all, so adding it cannot change HR or employee behaviour.
 import { isSuperAdminConfigured, verifySuperAdminLogin } from './superadmin-auth.js';
+// WhatsApp Attendance Messaging lives in ONE isolated module (server/whatsapp-provider.js)
+// — same discipline as email-provider.js. Credential storage, encryption, Cloud API
+// transport and webhook signature verification never leak into this file.
+import {
+  WHATSAPP_MODES,
+  ensureWhatsAppProviderColumns,
+  getWhatsAppProviderSettings,
+  publicWhatsAppProviderStatus,
+  saveWhatsAppProviderSettings,
+  sendWhatsAppTemplate,
+  verifyWhatsAppWebhookSignature,
+} from './whatsapp-provider.js';
 // HR Admin accounts + per-module/action permissions (SuperAdmin console).
 // Application-owned tables only; the env HR/SA accounts remain the bootstrap.
 import {
@@ -69,6 +93,11 @@ import {
   isBootstrapHr, validateAdminPassword,
   getCompanyScope, setCompanyScope, listCompanyCodes, employeeCompany, companyInScope,
 } from './admin-access.js';
+// HR Admin Reports Excel export. `xlsx` (SheetJS) is ALREADY a root dependency
+// (used by the mobile Marriage import and the website Employee Reports export),
+// so no new package is introduced. Server-side generation keeps the export under
+// the SAME server-side company/module authorisation as every report API.
+import * as XLSX from 'xlsx';
 
 const app = express();
 const port = Number(process.env.PORT || process.env.API_PORT || 4000);
@@ -81,6 +110,29 @@ const devEmployeePaycode = process.env.DEV_EMPLOYEE_PAYCODE;
 const devEmployeePassword = process.env.DEV_EMPLOYEE_PASSWORD;
 
 app.use(cors({ origin: process.env.FRONTEND_ORIGIN?.split(',').filter(Boolean) || true }));
+// Meta WhatsApp Cloud API webhook (delivery/read/failed status callbacks): PUBLIC,
+// no JWT. Registered BEFORE express.json() so the RAW body bytes are available for
+// HMAC-SHA256 signature verification. It only RECORDS statuses into the application
+// log; it never sends messages and never touches Savior tables.
+app.post('/api/whatsapp/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  try {
+    const pool = await getPool();
+    await ensureWhatsAppTables(pool); // create config table before provider columns
+    const settings = await getWhatsAppProviderSettings(pool);
+    if (!settings.appSecret) return res.status(503).json({ success: false, message: 'Webhook app secret not configured.' });
+    const signature = req.headers['x-hub-signature-256'];
+    const raw = Buffer.isBuffer(req.body) ? req.body : Buffer.from(String(req.body || ''));
+    if (!verifyWhatsAppWebhookSignature(raw, signature, settings.appSecret)) {
+      return res.status(401).json({ success: false, message: 'Invalid webhook signature.' });
+    }
+    const payload = safeJsonParse(raw);
+    await recordWhatsAppWebhookStatuses(pool, payload);
+    return res.status(200).send('EVENT_RECEIVED');
+  } catch (error) {
+    console.error('[WHATSAPP_WEBHOOK]', (error && error.message || error).toString().slice(0, 300));
+    return res.status(500).send('ERROR');
+  }
+});
 app.use(express.json({ limit: '2mb' }));
 
 function isValidIsoDate(value) {
@@ -203,6 +255,7 @@ const SUPERADMIN_MANAGEMENT_PATHS = [
   '/api/hr/filters',               // filter metadata used by the management screens
   '/api/hr/salary',                // Salary / Full & Final (+ imports)
   '/api/email',                    // Email management / configuration
+  '/api/whatsapp',                 // WhatsApp attendance messaging (FREE_MANUAL / Cloud API)
   '/api/superadmin',               // HR Admin + SuperAdmin account management (SuperAdmin-only)
 ];
 
@@ -227,6 +280,9 @@ const HR_PERMISSION_RULES = [
   // ---- Email Management
   { methods: ['GET'], re: /^\/api\/email\//, module: 'email', action: 'view' },
   { methods: ['POST', 'PUT', 'PATCH'], re: /^\/api\/email\//, module: 'email', action: 'email' },
+  // ---- WhatsApp Attendance Messaging (same module/action pattern as Email)
+  { methods: ['GET'], re: /^\/api\/whatsapp\//, module: 'whatsapp', action: 'view' },
+  { methods: ['POST', 'PUT', 'PATCH', 'DELETE'], re: /^\/api\/whatsapp\//, module: 'whatsapp', action: 'email' },
   // ---- Employee Credential Management
   { methods: ['GET'], re: /^\/api\/hr\/employee\/credentials/, module: 'credentials', action: 'view' },
   { methods: ['POST'], re: /^\/api\/hr\/employee\/credentials/, module: 'credentials', action: 'edit' },
@@ -272,6 +328,19 @@ const HR_PERMISSION_RULES = [
   { methods: ['GET'], re: /^\/api\/marriage-anniversary$/, module: 'marriage', action: 'view', legacy: true },
   { methods: ['POST'], re: /^\/api\/marriage-anniversary\/(validate|import)$/, module: 'marriage', action: 'edit', legacy: true },
   { methods: ['DELETE'], re: /^\/api\/marriage-anniversary\//, module: 'marriage', action: 'delete', legacy: true },
+  // ---- HR Admin Reports (Reports & Analytics tab). Same Phase 4.4 additive
+  // convention (`legacy: true`): an account with no stored row for this section
+  // keeps the historical behaviour, while an explicit stored row enforces the
+  // SuperAdmin-configured View / Export flags on the SERVER. The Excel export is
+  // gated on the `export` action (listed FIRST so it wins over the generic view
+  // rule) AND, via `requiresView`, on the module's View permission — the console
+  // documents Export as subject to View and to company scope. Company isolation
+  // is enforced separately by enforceHrAccess + the server-built scope clause in
+  // every report query.
+  { methods: ['GET'], re: /^\/api\/hr\/reports\/export$/, module: 'reports', action: 'export', legacy: true, requiresView: true },
+  { methods: ['GET'], re: /^\/api\/hr\/reports\/absent-miss\/export$/, module: 'reports', action: 'export', legacy: true, requiresView: true },
+  { methods: ['GET'], re: /^\/api\/hr\/reports\/absent-miss\//, module: 'reports', action: 'view', legacy: true },
+  { methods: ['GET'], re: /^\/api\/hr\/reports\//, module: 'reports', action: 'view', legacy: true },
 ];
 
 /** First matching permission rule for this request, or null (not gated). */
@@ -302,19 +371,30 @@ function enforceHrModulePermission(req, res, next, rule) {
          `visible === false` can never be true for existing data, so this change is
          behaviour-preserving for existing accounts while making Hidden block DATA
          (not just the tab) for every section. */
-      return moduleAllowed(pool, username, rule.module, rule.action, rule.legacy === true);
+      const allowed = await moduleAllowed(pool, username, rule.module, rule.action, rule.legacy === true);
+      if (!allowed) return false;
+      /* `requiresView` (opt-in, used by the Master Reports export rule): an action
+         is only granted when the SAME module's View permission is also granted —
+         the console documents Export as subject to View and to company scope.
+         Rules without this flag behave exactly as before. */
+      if (rule.requiresView === true) {
+        const viewAllowed = await moduleAllowed(pool, username, rule.module, 'view', rule.legacy === true);
+        return viewAllowed ? true : 'VIEW_REQUIRED';
+      }
+      return true;
     })
     .then((allowed) => {
-      if (allowed) return next();
+      if (allowed === true) return next();
       /* Phase 4.4.2 — name the EXACT setting to enable so the operator can fix it in the
          SuperAdmin console, instead of a vague message. No internals are exposed. */
       const ACTION_LABEL = { view: 'View', create: 'Add', edit: 'Edit', delete: 'Delete', import: 'Import', export: 'Export', approve: 'Approve', email: 'Email' };
+      const missingAction = allowed === 'VIEW_REQUIRED' ? 'view' : rule.action;
       return res.status(403).json({
         success: false,
         code: 'PERMISSION_DENIED',
         module: rule.module,
-        action: rule.action,
-        message: `Your HR Admin account is not permitted to ${rule.action} the ${rule.module} module. Enable "${ACTION_LABEL[rule.action] || rule.action}" for the "${rule.module}" section for this account in the SuperAdmin console (HR Admin Accounts).`,
+        action: missingAction,
+        message: `Your HR Admin account is not permitted to ${missingAction} the ${rule.module} module. Enable "${ACTION_LABEL[missingAction] || missingAction}" for the "${rule.module}" section for this account in the SuperAdmin console (HR Admin Accounts).`,
       });
     })
     .catch((error) => sendDbError(res, error));
@@ -2489,12 +2569,28 @@ app.get('/api/me', authenticate, async (req, res) => {
         const pool = await getPool();
         await ensureAdminAccessTables(pool);
         const permissions = await getEffectivePermissions(pool, req.user.sub);
+        // Additive identity fields (Phase 3): the logged-in account's saved
+        // display name (fallback: username) and its REAL company assignments.
+        // These are informational for the UI — enforcement stays server-side.
+        let displayname = '';
+        let companies = null;
+        try {
+          const dn = await pool.request().input('u', sql.VarChar(50), req.user.sub)
+            .query(`SELECT TOP 1 LTRIM(RTRIM(ISNULL(displayname, ''))) AS displayname FROM dbo.HR_AdminUser WHERE username = @u`);
+          displayname = String(dn.recordset?.[0]?.displayname || '').trim();
+          companies = await getCompanyScope(pool, req.user.sub);
+        } catch (e) {
+          console.error('[ME_HR_IDENTITY_ERROR]', e && (e.message || e).toString().slice(0, 200));
+        }
         return res.json({
           role: 'HR',
+          username: req.user.sub,
+          displayname: displayname || req.user.sub,
           permissions,
           modules: MODULE_CATALOG,
           actions: ACTION_KEYS,
           bootstrap: isBootstrapHr(req.user.sub) === true,
+          companies,
         });
       }
     } catch (error) {
@@ -2503,8 +2599,23 @@ app.get('/api/me', authenticate, async (req, res) => {
     return res.json({ role: 'HR' });
   }
   if (req.user.role === 'SUPERADMIN') {
+    // Additive identity field (Phase 3): saved display name with username fallback.
+    let displayname = req.user.sub;
+    try {
+      if (process.env.DB_SERVER && process.env.DB_DATABASE && process.env.DB_USER && process.env.DB_PASSWORD) {
+        const pool = await getPool();
+        await ensureAdminAccessTables(pool);
+        const dn = await pool.request().input('u', sql.VarChar(50), req.user.sub)
+          .query(`SELECT TOP 1 LTRIM(RTRIM(ISNULL(displayname, ''))) AS displayname FROM dbo.HR_SuperAdminUser WHERE username = @u`);
+        displayname = String(dn.recordset?.[0]?.displayname || '').trim() || req.user.sub;
+      }
+    } catch (e) {
+      console.error('[ME_SA_IDENTITY_ERROR]', e && (e.message || e).toString().slice(0, 200));
+    }
     return res.json({
       role: 'SUPERADMIN',
+      username: req.user.sub,
+      displayname,
       fullAccess: true,
       modules: MODULE_CATALOG.concat(SUPERADMIN_ONLY_MODULES.map((key) => ({ key, label: key }))),
       actions: ACTION_KEYS,
@@ -3821,6 +3932,977 @@ app.get('/api/hr/filters', authenticate, requireRole('HR'), requireDbConfig, asy
   } catch (error) { sendDbError(res, error); }
 });
 
+// ---------------------------------------------------------------------------
+// HR ADMIN REPORTS — the "Reports & Analytics" tab (company-wise report security)
+// ---------------------------------------------------------------------------
+// Data sources (all EXISTING, read-only — the Savior schema is never modified):
+//   dbo.tblemployee                employee master (company/category/department)
+//   dbo.tbltimeregister            processed attendance register (report rows)
+//   dbo.tblemployeeshiftmaster     current shift assignment (shift-wise reports)
+//   dbo.tblcompany/tbldepartment/tblcategory/tblshiftmaster   reference names
+//
+// BUSINESS RULES ARE REUSED, NEVER RE-INVENTED:
+//   - every row is classified by the SAME classifyRow()/normalizeAttendance()
+//     used by Daily Master and Single Employee Audit (Late stays an orthogonal
+//     flag after the universal 5-minute grace; the STAFF monthly grace is applied
+//     by computeMonthlyLateForEmployee exactly as the HR audit applies it);
+//   - KPI buckets follow calculateStats(): Week Off rows are excluded entirely,
+//     Present includes Half Day / Short Leave / Present-on-Week-Off / LATE codes,
+//     and hours are summed only from recorded `hoursworked` values.
+//
+// COMPANY-WISE SECURITY (enforced on the SERVER for every endpoint below):
+//   - identity and permissions come ONLY from the verified JWT + the stored
+//     SuperAdmin configuration (requireRole('HR') -> enforceHrAccess +
+//     enforceHrModulePermission). A company id sent by the browser is only ever
+//     VALIDATED against the stored assignment, never trusted as proof.
+//   - enforceHrAccess already rejects an out-of-scope companycode/company/
+//     companies/paycode in query or body (403 COMPANY_FORBIDDEN) and attaches
+//     the SERVER-built req.hrCompanyScopeClause, which every query below applies
+//     to the employee master (alias `e`).
+//   - an empty company assignment is denied (fail closed), never "all companies".
+//   - filter options (company/category/department/shift/employee) are derived
+//     from the scoped data only, so an unauthorised company name can never leak
+//     into a dropdown. The same filters + clause feed the Excel export, so a
+//     manipulated export request cannot read another company's rows either.
+// Because getCompanyScope()/moduleAllowed() are read LIVE from the store on every
+// request, a SuperAdmin change applies to the very next report request.
+// ---------------------------------------------------------------------------
+
+/** Fail-closed guard: an HR Admin with NO assigned company gets 403 (not empty data). */
+function reportDeniedEmptyScope(req, res) {
+  if (Array.isArray(req.hrCompanyScope) && req.hrCompanyScope.length === 0) {
+    res.status(403).json({ success: false, code: 'COMPANY_NOT_ASSIGNED', message: 'No company has been assigned to this HR Admin account. Contact SuperAdmin.' });
+    return true;
+  }
+  return false;
+}
+
+/** Max inclusive day-span for one report request (register + export). */
+const REPORT_MAX_RANGE_DAYS = 366;
+
+/**
+ * Shared report filter resolver. Dates via the EXISTING parseDateRange/validateRange
+ * (date | month | fromDate+toDate | days, default rolling 31 days). The company
+ * filter is re-validated here against the server-resolved scope (defense in depth
+ * on top of enforceHrAccess) — never trusted because the browser supplied it.
+ */
+function resolveReportFilters(req, res) {
+  const range = parseDateRange(req.query, 31);
+  if (!validateRange(res, range)) return null;
+  const spanDays = Math.round((Date.parse(`${range.toDate}T00:00:00Z`) - Date.parse(`${range.fromDate}T00:00:00Z`)) / 86400000) + 1;
+  if (!Number.isFinite(spanDays) || spanDays < 1 || spanDays > REPORT_MAX_RANGE_DAYS) {
+    res.status(400).json({ success: false, message: `Report range is limited to ${REPORT_MAX_RANGE_DAYS} days.` });
+    return null;
+  }
+  const companycode = String(req.query.companycode || '').trim();
+  if (companycode && Array.isArray(req.hrCompanyScope) && !companyInScope(req.hrCompanyScope, companycode)) {
+    res.status(403).json({ success: false, code: 'COMPANY_FORBIDDEN', message: 'You are not authorized for that company.' });
+    return null;
+  }
+  const activeParam = String(req.query.active || 'Y').trim().toUpperCase();
+  return {
+    fromDate: range.fromDate,
+    toDate: range.toDate,
+    companycode: companycode || null,
+    cat: String(req.query.cat || req.query.category || '').trim() || null,
+    departmentcode: String(req.query.departmentcode || '').trim() || null,
+    shiftcode: String(req.query.shiftcode || '').trim() || null,
+    paycode: String(req.query.paycode || '').trim() || null,
+    search: String(req.query.search || '').trim() || null,
+    active: activeParam === 'ALL' ? null : (activeParam === 'N' ? 'N' : 'Y'),
+    activeParam: activeParam === 'ALL' ? 'ALL' : (activeParam === 'N' ? 'N' : 'Y'),
+  };
+}
+
+/**
+ * Appends the parameterised employee-master filter conditions (alias `e`, shift
+ * join alias `esm`) to `request`, INCLUDING the shared server-built company scope
+ * clause. Every report query goes through this one place.
+ */
+function applyReportFilterConditions(request, filters, req) {
+  const conditions = [];
+  if (filters.active) {
+    request.input('rptActive', sql.VarChar(50), filters.active);
+    conditions.push("LTRIM(RTRIM(e.active)) = @rptActive");
+  }
+  if (filters.companycode) {
+    request.input('rptCompany', sql.VarChar(50), filters.companycode);
+    conditions.push("LTRIM(RTRIM(e.companycode)) = @rptCompany");
+  }
+  if (filters.departmentcode) {
+    request.input('rptDept', sql.VarChar(50), filters.departmentcode);
+    conditions.push("LTRIM(RTRIM(e.departmentcode)) = @rptDept");
+  }
+  if (filters.cat) {
+    request.input('rptCat', sql.VarChar(50), filters.cat);
+    conditions.push("LTRIM(RTRIM(e.cat)) = @rptCat");
+  }
+  if (filters.shiftcode) {
+    request.input('rptShift', sql.VarChar(50), filters.shiftcode);
+    conditions.push("LTRIM(RTRIM(esm.shift)) = @rptShift");
+  }
+  if (filters.paycode) {
+    request.input('rptPaycode', sql.VarChar(50), filters.paycode);
+    conditions.push("LTRIM(RTRIM(e.paycode)) = @rptPaycode");
+  }
+  if (filters.search) {
+    request.input('rptSearch', sql.VarChar(110), `%${filters.search}%`);
+    conditions.push("(LTRIM(RTRIM(e.paycode)) LIKE @rptSearch OR LTRIM(RTRIM(e.empname)) LIKE @rptSearch)");
+  }
+  /* Shared, verified company scope clause (alias `e`) — the leading `AND ` is
+     stripped because this builder joins conditions with ' AND '. Empty string =
+     unrestricted (bootstrap HR). */
+  if (req.hrCompanyScopeClause) {
+    conditions.push(req.hrCompanyScopeClause.replace(/^\s*AND\s+/i, ''));
+  }
+  return conditions;
+}
+
+/**
+ * Loads the report population: one output row per (employee x register day) in the
+ * range — the SAME shape Daily Master builds (employees with zero register rows
+ * appear once as 'No Record'; days without a row are never invented). Rows are
+ * normalised with the shared normalizeAttendance() so statuses / Late / grace
+ * match Daily Master and Single Employee Audit exactly.
+ */
+async function loadReportRegisterRows(pool, req, filters) {
+  const shiftMap = await loadShiftEndTimes(pool);
+  const request = pool.request()
+    .input('fromDate', sql.Date, filters.fromDate)
+    .input('toDate', sql.Date, filters.toDate);
+  const conditions = applyReportFilterConditions(request, filters, req);
+  let query = `
+    SELECT e.paycode, e.empname, e.companycode, c.companyname, e.departmentcode, d.departmentname,
+           e.cat, e.designation, LTRIM(RTRIM(esm.shift)) AS shiftcode,
+           tr.dateoffice, tr.shift AS registershift, tr.in1, tr.in2, tr.out1, tr.out2,
+           tr.hoursworked, tr.latearrival, tr.status, tr.reason
+    FROM dbo.tblemployee e
+    LEFT JOIN dbo.tbldepartment d ON LTRIM(RTRIM(d.departmentcode)) = LTRIM(RTRIM(e.departmentcode))
+    LEFT JOIN dbo.tblcompany c ON LTRIM(RTRIM(c.companycode)) = LTRIM(RTRIM(e.companycode))
+    LEFT JOIN dbo.tblemployeeshiftmaster esm ON LTRIM(RTRIM(esm.paycode)) = LTRIM(RTRIM(e.paycode))
+    OUTER APPLY (
+      SELECT ${attendanceFields}
+      FROM dbo.tbltimeregister tr
+      WHERE tr.paycode = e.paycode AND tr.dateoffice >= @fromDate AND tr.dateoffice < DATEADD(DAY, 1, @toDate)
+    ) tr`;
+  if (conditions.length) query += ' WHERE ' + conditions.join(' AND ');
+  query += ' ORDER BY e.empname, tr.dateoffice';
+  const result = await request.query(query);
+
+  const rows = [];
+  const rawRows = [];
+  const employees = new Map(); // paycode -> employee header info
+  for (const row of result.recordset) {
+    const paycode = String(row.paycode || '').trim();
+    const hasRow = Boolean(row.dateoffice);
+    if (!employees.has(paycode)) {
+      employees.set(paycode, {
+        paycode,
+        empname: row.empname,
+        companycode: String(row.companycode || '').trim(),
+        companyname: row.companyname || '',
+        departmentcode: String(row.departmentcode || '').trim(),
+        departmentname: row.departmentname || '',
+        category: String(row.cat || '').trim(),
+        designation: row.designation || '',
+        shiftcode: String(row.shiftcode || '').trim(),
+      });
+    }
+    const normInput = { ...row, shift: row.registershift };
+    if (hasRow) rawRows.push(normInput);
+    const n = normalizeAttendance(normInput, shiftMap, row.cat, row.companycode);
+    rows.push({
+      date: hasRow ? rowDateIso(row.dateoffice) : null,
+      paycode,
+      empname: row.empname,
+      companycode: String(row.companycode || '').trim(),
+      companyname: row.companyname || '',
+      departmentcode: String(row.departmentcode || '').trim(),
+      departmentname: row.departmentname || '',
+      category: String(row.cat || '').trim(),
+      designation: row.designation || '',
+      shiftcode: String(row.shiftcode || '').trim(),
+      inTime: n.inTime,
+      outTime: n.outTime,
+      hoursworked: row.hoursworked == null ? null : Number(row.hoursworked),
+      status: hasRow ? (n.computedStatus || 'Absent') : 'No Record',
+      statusCode: n.statusCode || null,
+      isLate: n.isLate === true,
+      lateMinutes: Number(n.latearrival || 0),
+      graceUsed: n.graceUsed || null,
+      reason: row.reason || null,
+      hasRecord: hasRow,
+    });
+  }
+  return { rows, rawRows, employees, shiftMap };
+}
+
+/* ------------------------- report aggregation (KPIs) ---------------------- */
+// Bucket semantics mirror calculateStats(): a Week Off row is excluded entirely;
+// Present includes Half Day / Short Leave / Present-on-Week-Off / LATE codes
+// (classifyRow already folded those into 'Present'); hours come only from
+// recorded `hoursworked` minutes. Attendance % = Present / (Present + Absent +
+// Miss Punch) — the established Employee Reports formula.
+
+function emptyReportBucket() {
+  return { presentDays: 0, absentDays: 0, missDays: 0, weekOffDays: 0, lateDays: 0, hoursMinutes: 0 };
+}
+
+function accumulateReportRow(bucket, row) {
+  if (!row.hasRecord) return; // 'No Record' rows are reported separately, never invented as Absent
+  if (row.status === 'Week Off') { bucket.weekOffDays += 1; return; }
+  if (row.status === 'Present') bucket.presentDays += 1;
+  else if (row.status === 'Absent') bucket.absentDays += 1;
+  else if (row.status === 'Miss Punch') bucket.missDays += 1;
+  if (row.isLate) bucket.lateDays += 1;
+  bucket.hoursMinutes += Number(row.hoursworked || 0);
+}
+
+function attendancePctOf(bucket) {
+  const denom = bucket.presentDays + bucket.absentDays + bucket.missDays;
+  return denom ? Number(((bucket.presentDays / denom) * 100).toFixed(1)) : null;
+}
+
+/** Group key/label for the report dimension (company | category | department | shift). */
+function reportGroupKey(dimension, row) {
+  if (dimension === 'company') return row.companycode || '';
+  if (dimension === 'department') return row.departmentcode || '';
+  if (dimension === 'category') return row.category || '';
+  return row.shiftcode || '';
+}
+
+function reportGroupLabel(dimension, row) {
+  if (dimension === 'company') return row.companyname || row.companycode || '—';
+  if (dimension === 'department') return row.departmentname || row.departmentcode || '—';
+  if (dimension === 'category') return row.category || '—';
+  return row.shiftcode || 'Unassigned';
+}
+
+const REPORT_DIMENSIONS = ['company', 'category', 'department', 'shift'];
+
+/** Per-dimension comparison groups (company comparisons only ever contain scoped companies). */
+function buildReportBreakdown(rows, employees, dimension) {
+  const groups = new Map();
+  for (const row of rows) {
+    const key = reportGroupKey(dimension, row);
+    if (!groups.has(key)) {
+      groups.set(key, { key, label: reportGroupLabel(dimension, row), ...emptyReportBucket(), employees: 0, employeeSet: new Set() });
+    }
+    const group = groups.get(key);
+    group.employeeSet.add(row.paycode);
+    accumulateReportRow(group, row);
+  }
+  return [...groups.values()]
+    .map((g) => {
+      const { employeeSet, ...rest } = g;
+      return { ...rest, employees: employeeSet.size, attendancePct: attendancePctOf(g) };
+    })
+    .sort((a, b) => b.employees - a.employees || String(a.label).localeCompare(String(b.label)));
+}
+
+/** Per-day trend series across the range (dates with no rows simply show zeros). */
+function buildReportTrend(rows, fromDate, toDate) {
+  const byDate = new Map();
+  for (const row of rows) {
+    if (!row.hasRecord || !row.date) continue;
+    if (!byDate.has(row.date)) byDate.set(row.date, { date: row.date, ...emptyReportBucket() });
+    accumulateReportRow(byDate.get(row.date), row);
+  }
+  const trend = [];
+  const start = Date.parse(`${fromDate}T00:00:00Z`);
+  const end = Date.parse(`${toDate}T00:00:00Z`);
+  for (let t = start; t <= end; t += 86400000) {
+    const date = new Date(t).toISOString().slice(0, 10);
+    const entry = byDate.get(date) || { date, ...emptyReportBucket() };
+    trend.push({ date, present: entry.presentDays, absent: entry.absentDays, miss: entry.missDays, weekOff: entry.weekOffDays, late: entry.lateDays, hoursMinutes: entry.hoursMinutes });
+  }
+  return trend;
+}
+
+/** Overall KPIs for the whole (already scoped) population. */
+function computeReportKpis(rows, employees) {
+  const bucket = emptyReportBucket();
+  for (const row of rows) accumulateReportRow(bucket, row);
+  const withRecord = new Set(rows.filter((r) => r.hasRecord).map((r) => r.paycode));
+  let withoutRecords = 0;
+  for (const paycode of employees.keys()) if (!withRecord.has(paycode)) withoutRecords += 1;
+  return {
+    employees: employees.size,
+    ...bucket,
+    employeesWithoutRecords: withoutRecords,
+    attendancePct: attendancePctOf(bucket),
+  };
+}
+
+/**
+ * Single-employee FINAL late (after STAFF monthly grace) — the exact
+ * computeMonthlyLateForEmployee() rule the HR Single Employee Audit applies,
+ * run per calendar month inside the range. Returned separately from the raw
+ * row-level `lateDays` so grace usage is never mixed into either number.
+ */
+function computeReportFinalLate(rawRows, shiftMap, employee, paycode) {
+  if (!paycode || !rawRows.length) return null;
+  const months = new Set();
+  for (const r of rawRows) {
+    const iso = rowDateIso(r.dateoffice);
+    if (iso) months.add(iso.slice(0, 7));
+  }
+  let lateFinal = 0;
+  const lateDetails = [];
+  for (const key of [...months].sort()) {
+    const [year, month] = key.split('-').map(Number);
+    const result = computeMonthlyLateForEmployee(rawRows, shiftMap, employee?.category, employee?.companycode, paycode, year, month);
+    lateFinal += Number(result.finalLateCount || 0);
+    for (const d of result.lateDetails || []) lateDetails.push({ ...d, month: key });
+  }
+  return { lateFinal, lateDetails };
+}
+
+/* ------------------------------ report routes ----------------------------- */
+
+// ---------------------------------------------------------------------------
+// MASTER REPORTS — COMPANY-WISE ABSENT & MISS PUNCH MONITOR
+// ---------------------------------------------------------------------------
+// Final per-employee per-day status for a date / range, reusing the EXISTING
+// business rules and data sources (no copied classification):
+//   - register status comes from loadReportRegisterRows() -> normalizeAttendance()
+//     -> classifyRow()  (Present / Absent / Miss Punch / Week Off / No Record),
+//     including the ongoing-shift rule for the CURRENT date;
+//   - a FULL-day active holiday applicable to the employee (real company+category
+//     via doesHolidayApplyToEmployee) overrides to "Holiday";
+//   - a FULL-day APPROVED leave (leave-service listApprovedLeaveForPopulation)
+//     overrides to "Approved Leave";
+//   - otherwise the register classification stands; a day with NO register row is
+//     reported as "No Record" (never invented as Absent).
+// Precedence: Holiday > Approved Leave > register. Half-day holiday/leave does NOT
+// override the register (the employee is expected to punch for the other half) —
+// this is a documented limitation, never a fabricated status.
+// ---------------------------------------------------------------------------
+
+/** Active holidays in a window, with their real company/category child rows loaded in bulk. */
+async function loadActiveHolidaysInRange(pool, fromDate, toDate) {
+  await migrateHolidayStructure(pool);
+  const base = await pool.request()
+    .input('fromDate', sql.Date, fromDate)
+    .input('toDate', sql.Date, toDate)
+    .query(`SELECT id, holidaydate, holidayname, category, companycode, isHalfDay, halfdaypart
+            FROM ${holidayTable}
+            WHERE active = 1 AND holidaydate >= @fromDate AND holidaydate <= @toDate
+            ORDER BY holidaydate`);
+  const rows = base.recordset || [];
+  const byId = { companies: new Map(), categories: new Map(), pairs: new Map() };
+  if (rows.length) {
+    const inList = rows.map((h) => h.id).join(',');
+    const comp = await pool.request().query(`SELECT holiday_id, LTRIM(RTRIM(companycode)) AS companycode FROM ${holidayCompaniesTable} WHERE holiday_id IN (${inList})`);
+    for (const c of comp.recordset || []) {
+      const key = Number(c.holiday_id);
+      if (!byId.companies.has(key)) byId.companies.set(key, []);
+      byId.companies.get(key).push(String(c.companycode || '').trim());
+    }
+    const cats = await pool.request().query(`SELECT holiday_id, LTRIM(RTRIM(categorycode)) AS categorycode FROM ${holidayCategoryEntriesTable} WHERE holiday_id IN (${inList})`);
+    for (const c of cats.recordset || []) {
+      const key = Number(c.holiday_id);
+      if (!byId.categories.has(key)) byId.categories.set(key, []);
+      byId.categories.get(key).push(String(c.categorycode || '').trim());
+    }
+    const pairs = await pool.request().query(`SELECT holiday_id, LTRIM(RTRIM(companycode)) AS companycode, LTRIM(RTRIM(categorycode)) AS categorycode FROM ${holidayCompanyCategoryTable} WHERE holiday_id IN (${inList})`);
+    for (const p of pairs.recordset || []) {
+      const key = Number(p.holiday_id);
+      if (!byId.pairs.has(key)) byId.pairs.set(key, []);
+      byId.pairs.get(key).push({ companycode: String(p.companycode || '').trim(), categorycode: String(p.categorycode || '').trim() });
+    }
+  }
+  return rows.map((h) => ({
+    id: h.id,
+    date: rowDateIso(h.holidaydate),
+    name: h.holidayname,
+    category: String(h.category || '').trim(),
+    companycode: String(h.companycode || '').trim(),
+    isHalfDay: Boolean(h.isHalfDay),
+    halfdaypart: h.halfdaypart,
+    companies: byId.companies.get(h.id) || [],
+    categories: byId.categories.get(h.id) || [],
+    pairs: byId.pairs.get(h.id) || [],
+  }));
+}
+
+/** Legacy holiday-category map (cat code -> group label), for group-only rows. */
+async function loadHolidayCategoryMap(pool) {
+  await ensureHolidayCategoryMap(pool);
+  const r = await pool.request().query(`SELECT LTRIM(RTRIM(categorycode)) AS code, LTRIM(RTRIM(holidaycategory)) AS [group] FROM ${holidayCategoryMapTable} WHERE active = 1`);
+  const map = new Map();
+  for (const row of r.recordset || []) {
+    const code = String(row.code || '').trim().toUpperCase();
+    if (code) map.set(code, String(row.group || '').trim());
+  }
+  return map;
+}
+
+/** The monitor's distinct status buckets (display order). Uses the SAME
+    classification strings as classifyRow()/Daily Master: "Week Off" (not "Weekly"). */
+const MONITOR_STATUSES = ['Present', 'Absent', 'Miss Punch', 'Approved Leave', 'Holiday', 'Week Off', 'No Record'];
+
+/**
+ * Core monitor dataset: every scoped employee's final status for every date in the
+ * window. `employees` + `rows` come from the existing scoped register loader, so
+ * company/category/department/search filters and company scope are already applied.
+ */
+async function buildAbsentMissMonitor(pool, req, filters) {
+  const { rows, employees } = await loadReportRegisterRows(pool, req, filters);
+  const dates = [];
+  const start = Date.parse(`${filters.fromDate}T00:00:00Z`);
+  const end = Date.parse(`${filters.toDate}T00:00:00Z`);
+  for (let t = start; t <= end; t += 86400000) dates.push(new Date(t).toISOString().slice(0, 10));
+
+  const regByKey = new Map();
+  for (const r of rows) if (r.hasRecord && r.date) regByKey.set(`${r.paycode}|${r.date}`, r);
+
+  // Holiday overlay (full-day applicable) — bulk child rows, pure predicate per employee.
+  const holidays = await loadActiveHolidaysInRange(pool, filters.fromDate, filters.toDate);
+  const categoryMap = await loadHolidayCategoryMap(pool);
+  const holidayByKey = new Map();
+  for (const h of holidays) {
+    for (const emp of employees.values()) {
+      let match = doesHolidayApplyToEmployee(h, h.companies, h.categories, h.pairs, emp.companycode, emp.category);
+      if (!match && h.companies.length === 0 && h.categories.length === 0 && h.pairs.length === 0) {
+        match = categoryMap.get(String(emp.category || '').toUpperCase()) === h.category;
+      }
+      if (match) holidayByKey.set(`${emp.paycode}|${h.date}`, { name: h.name, isHalfDay: h.isHalfDay });
+    }
+  }
+
+  // Approved full-day leave overlay (scoped bulk).
+  const leaveReqs = await listApprovedLeaveForPopulation(pool, { fromdate: filters.fromDate, todate: filters.toDate, companyScope: req.hrCompanyScope });
+  const leaveByKey = new Map();
+  for (const lr of leaveReqs) {
+    if (!employees.has(lr.paycode)) continue;
+    let d = Date.parse(`${lr.fromdate}T00:00:00Z`);
+    const last = Date.parse(`${lr.todate}T00:00:00Z`);
+    for (; d <= last; d += 86400000) {
+      const date = new Date(d).toISOString().slice(0, 10);
+      leaveByKey.set(`${lr.paycode}|${date}`, { typename: lr.typename, isHalfDay: lr.isHalfDay });
+    }
+  }
+
+  // Final per-date status map.
+  const perDate = new Map();
+  for (const date of dates) {
+    const day = new Map();
+    for (const emp of employees.values()) {
+      const key = `${emp.paycode}|${date}`;
+      const hol = holidayByKey.get(key);
+      const lv = leaveByKey.get(key);
+      const reg = regByKey.get(key);
+      let status;
+      if (hol && !hol.isHalfDay) status = 'Holiday';
+      else if (lv && !lv.isHalfDay) status = 'Approved Leave';
+      else if (reg) status = reg.status; // Present | Absent | Miss Punch | Week Off
+      else status = 'No Record';
+      day.set(emp.paycode, { status, emp, reg: reg || null, holiday: hol || null, leave: lv || null });
+    }
+    perDate.set(date, day);
+  }
+  return { employees, dates, perDate, regByKey };
+}
+
+function emptyMonitorBucket() {
+  return { present: 0, absent: 0, missPunch: 0, approvedLeave: 0, holiday: 0, weekOff: 0, noRecord: 0 };
+}
+
+function accumulateMonitorDay(bucket, entry) {
+  if (entry.status === 'Present') bucket.present += 1;
+  else if (entry.status === 'Absent') bucket.absent += 1;
+  else if (entry.status === 'Miss Punch') bucket.missPunch += 1;
+  else if (entry.status === 'Approved Leave') bucket.approvedLeave += 1;
+  else if (entry.status === 'Holiday') bucket.holiday += 1;
+  else if (entry.status === 'Week Off') bucket.weekOff += 1;
+  else bucket.noRecord += 1;
+}
+
+function monitorAttendancePct(bucket) {
+  const denom = bucket.present + bucket.absent + bucket.missPunch;
+  return denom ? Number(((bucket.present / denom) * 100).toFixed(1)) : null;
+}
+
+/** Aggregates one date's day-map into buckets. */
+function summariseMonitorDay(day) {
+  const b = emptyMonitorBucket();
+  for (const entry of day.values()) accumulateMonitorDay(b, entry);
+  return { ...b, employees: day.size, attendancePct: monitorAttendancePct(b) };
+}
+
+/** Flatten monitor entries into drill-down rows (optionally by status). */
+function flattenMonitorRows(perDate, dates, status) {
+  const rows = [];
+  for (const date of dates) {
+    const day = perDate.get(date);
+    if (!day) continue;
+    for (const entry of day.values()) {
+      if (status && entry.status !== status) continue;
+      const emp = entry.emp;
+      rows.push({
+        date,
+        paycode: emp.paycode,
+        empname: emp.empname,
+        companycode: emp.companycode,
+        companyname: emp.companyname,
+        category: emp.category,
+        departmentcode: emp.departmentcode,
+        departmentname: emp.departmentname,
+        status: entry.status,
+        inTime: entry.reg?.inTime || null,
+        outTime: entry.reg?.outTime || null,
+        hoursworked: entry.reg?.hoursworked ?? null,
+        isLate: entry.reg?.isLate === true,
+        holidayName: entry.holiday?.name || null,
+        leaveType: entry.leave?.typename || null,
+      });
+    }
+  }
+  rows.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : String(a.empname).localeCompare(String(b.empname))));
+  return rows;
+}
+
+// Monitor summary: KPIs over the window, a per-date trend, and a company-wise
+// comparison (only companies inside the HR Admin's scope).
+app.get('/api/hr/reports/absent-miss', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    if (reportDeniedEmptyScope(req, res)) return;
+    const filters = resolveReportFilters(req, res);
+    if (!filters) return;
+    const pool = await getPool();
+    const { employees, dates, perDate } = await buildAbsentMissMonitor(pool, req, filters);
+    const trend = dates.map((date) => ({ date, ...summariseMonitorDay(perDate.get(date) || new Map()) }));
+    const totals = trend.reduce((acc, t) => {
+      for (const k of ['present', 'absent', 'missPunch', 'approvedLeave', 'holiday', 'weekOff', 'noRecord']) acc[k] += t[k];
+      return acc;
+    }, emptyMonitorBucket());
+    const kpis = { employees: employees.size, ...totals, attendancePct: monitorAttendancePct(totals) };
+    const comparison = buildMonitorComparison(perDate, employees);
+    res.json({
+      success: true,
+      range: { fromDate: filters.fromDate, toDate: filters.toDate },
+      dates,
+      kpis,
+      trend,
+      comparison,
+    });
+  } catch (error) { sendDbError(res, error); }
+});
+
+// Monitor drill-down: the REAL employees for a status on the selected date/range,
+// with punch/working-hours detail. Server-side search + pagination.
+app.get('/api/hr/reports/absent-miss/employees', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    if (reportDeniedEmptyScope(req, res)) return;
+    const filters = resolveReportFilters(req, res);
+    if (!filters) return;
+    const status = String(req.query.status || '').trim() || null;
+    const page = Math.max(Number(req.query.page || 1), 1);
+    const pageSize = Math.min(Math.max(Number(req.query.pageSize || 50), 1), 200);
+    const pool = await getPool();
+    const { dates, perDate } = await buildAbsentMissMonitor(pool, req, filters);
+    const rows = flattenMonitorRows(perDate, dates, status);
+    const total = rows.length;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const safePage = Math.min(page, totalPages);
+    const start = (safePage - 1) * pageSize;
+    res.json({
+      success: true,
+      range: { fromDate: filters.fromDate, toDate: filters.toDate },
+      total,
+      page: safePage,
+      pageSize,
+      totalPages,
+      rows: rows.slice(start, start + pageSize),
+    });
+  } catch (error) { sendDbError(res, error); }
+});
+
+/** Per-company comparison over the whole window (headcount + summed day buckets). */
+function buildMonitorComparison(perDate, employees) {
+  const groups = new Map();
+  for (const [date, day] of perDate) {
+    for (const [paycode, entry] of day) {
+      const emp = entry.emp;
+      const key = emp.companycode || '';
+      if (!groups.has(key)) {
+        groups.set(key, { key, label: emp.companyname || emp.companycode || '—', ...emptyMonitorBucket(), employeeSet: new Set() });
+      }
+      const g = groups.get(key);
+      g.employeeSet.add(paycode);
+      accumulateMonitorDay(g, entry);
+    }
+  }
+  return [...groups.values()]
+    .map((g) => {
+      const { employeeSet, ...rest } = g;
+      return { ...rest, employees: employeeSet.size, attendancePct: monitorAttendancePct(g) };
+    })
+    .sort((a, b) => b.employees - a.employees || String(a.label).localeCompare(String(b.label)));
+}
+
+/* Monitor Excel export — company status summary + absent/miss-punch details + the
+   filtered register, all under the SAME server-side Export permission (subject to
+   View) and company scope as every other Master Reports export. */
+const MONITOR_EXPORT_ROW_LIMIT = 20000;
+
+function buildMonitorWorkbook({ filters, comparison, allRows, absentRows, missRows, generatedBy }) {
+  const title = 'Master Reports — Company-wise Absent & Miss Punch Monitor';
+  const cap = (rows) => (rows.length > MONITOR_EXPORT_ROW_LIMIT ? rows.slice(0, MONITOR_EXPORT_ROW_LIMIT) : rows);
+  const pctText = (v) => (v === null || v === undefined ? 'Not available' : `${v}%`);
+
+  const summaryAoA = [
+    [title],
+    ['Generated', new Date().toISOString()],
+    ['Generated by (HR Admin)', generatedBy || ''],
+    ['Period', `${filters.fromDate} to ${filters.toDate}`],
+    ['Company filter', filters.companycode || 'All authorised companies'],
+    ['Category filter', filters.cat || 'All'],
+    ['Department filter', filters.departmentcode || 'All'],
+    ['Search', filters.search || ''],
+    ['Note', 'Holiday / Weekly Off / Approved Leave are never counted as Absent. Days with no register row are "No Record", never invented as Absent.'],
+  ];
+
+  const compareHeader = ['Company', 'Employees', 'Present', 'Absent', 'Miss Punch', 'Approved Leave', 'Holiday', 'Weekly Off', 'No Record', 'Attendance %'];
+  const compareAoA = [
+    ['Company-wise status summary'],
+    compareHeader,
+    ...comparison.map((g) => [g.label || g.key, g.employees, g.present, g.absent, g.missPunch, g.approvedLeave, g.holiday, g.weekOff, g.noRecord, pctText(g.attendancePct)]),
+  ];
+
+  const detailHeader = ['Date', 'Paycode', 'Name', 'Company', 'Category', 'Department', 'Status', 'In', 'Out', 'Hours', 'Late', 'Holiday/Leave'];
+  const toRow = (r) => [
+    r.date, r.paycode, r.empname || '', r.companyname || r.companycode || '', r.category || '',
+    r.departmentname || r.departmentcode || '', r.status, r.inTime || '', r.outTime || '',
+    r.hoursworked == null ? '' : r.hoursworked, r.isLate ? 'Yes' : 'No',
+    r.holidayName || r.leaveType || '',
+  ];
+
+  const book = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet(summaryAoA), 'Monitor Summary');
+  XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet(compareAoA), 'Company Status Summary');
+  XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([detailHeader, ...cap(absentRows).map(toRow)]), 'Absent Employees');
+  XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([detailHeader, ...cap(missRows).map(toRow)]), 'Miss Punch Employees');
+  XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([detailHeader, ...cap(allRows).map(toRow)]), 'Detailed Register');
+  return XLSX.write(book, { type: 'buffer', bookType: 'xlsx' });
+}
+
+app.get('/api/hr/reports/absent-miss/export', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    if (reportDeniedEmptyScope(req, res)) return;
+    const filters = resolveReportFilters(req, res);
+    if (!filters) return;
+    const status = String(req.query.status || '').trim() || null;
+    const pool = await getPool();
+    const { dates, perDate } = await buildAbsentMissMonitor(pool, req, filters);
+    const allRows = flattenMonitorRows(perDate, dates, status);
+    const absentRows = flattenMonitorRows(perDate, dates, 'Absent');
+    const missRows = flattenMonitorRows(perDate, dates, 'Miss Punch');
+    const comparison = buildMonitorComparison(perDate, null);
+    const workbook = buildMonitorWorkbook({ filters, comparison, allRows, absentRows, missRows, generatedBy: req.user?.sub || '' });
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="Master-Reports-Absent-Miss_${filters.fromDate}_${filters.toDate}.xlsx"`);
+    res.send(Buffer.from(workbook));
+  } catch (error) { sendDbError(res, error); }
+});
+
+// Scoped filter options for the Reports tab: company / category / department /
+// shift values DERIVED from the authorised population only. Every employee-
+// derived list carries the shared scope clause (alias `e`), so a company-scoped
+// HR Admin is never offered another company's names or codes (empty scope is
+// denied up-front). `tblcategory` is the same global reference list the existing
+// /api/hr/filters exposes — it is configuration, not company data.
+app.get('/api/hr/reports/filters', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    if (reportDeniedEmptyScope(req, res)) return;
+    const scopeFilter = req.hrCompanyScopeClause || '';
+    const result = await (await getPool()).request().batch(`
+      SELECT DISTINCT LTRIM(RTRIM(e.companycode)) AS code, LTRIM(RTRIM(c.companyname)) AS name
+      FROM dbo.tblemployee e
+      LEFT JOIN dbo.tblcompany c ON LTRIM(RTRIM(c.companycode)) = LTRIM(RTRIM(e.companycode))
+      WHERE LTRIM(RTRIM(e.companycode)) <> ''${scopeFilter} ORDER BY code;
+      SELECT DISTINCT LTRIM(RTRIM(e.departmentcode)) AS code, LTRIM(RTRIM(d.departmentname)) AS name
+      FROM dbo.tblemployee e
+      LEFT JOIN dbo.tbldepartment d ON LTRIM(RTRIM(d.departmentcode)) = LTRIM(RTRIM(e.departmentcode))
+      WHERE LTRIM(RTRIM(e.departmentcode)) <> ''${scopeFilter} ORDER BY code;
+      SELECT DISTINCT LTRIM(RTRIM(e.cat)) AS code FROM dbo.tblemployee e WHERE LTRIM(RTRIM(e.cat)) <> ''${scopeFilter} ORDER BY code;
+      SELECT * FROM dbo.tblcategory;
+      SELECT DISTINCT LTRIM(RTRIM(esm.shift)) AS code
+      FROM dbo.tblemployeeshiftmaster esm
+      INNER JOIN dbo.tblemployee e ON LTRIM(RTRIM(e.paycode)) = LTRIM(RTRIM(esm.paycode))
+      WHERE LTRIM(RTRIM(esm.shift)) <> ''${scopeFilter} ORDER BY code;`);
+    const rs = result.recordsets || [];
+    const cleanVal = (v) => String(v == null ? '' : v).trim();
+    // tblcategory column names are not assumed (same convention as /api/hr/filters).
+    const categoryName = new Map();
+    for (const row of rs[3] || []) {
+      const keys = Object.keys(row);
+      const codeKey = keys.find((k) => /code/i.test(k)) || keys[0];
+      const nameKey = keys.find((k) => /name/i.test(k) && !/code/i.test(k));
+      const code = cleanVal(row[codeKey]);
+      if (code) categoryName.set(code.toUpperCase(), nameKey ? cleanVal(row[nameKey]) : code);
+    }
+    res.json({
+      companies: (rs[0] || []).map((r) => ({ code: cleanVal(r.code), name: cleanVal(r.name) || cleanVal(r.code) })),
+      departments: (rs[1] || []).map((r) => ({ code: cleanVal(r.code), name: cleanVal(r.name) || cleanVal(r.code) })),
+      categories: (rs[2] || []).map((r) => {
+        const code = cleanVal(r.code);
+        return { code, name: categoryName.get(code.toUpperCase()) || code };
+      }),
+      shifts: (rs[4] || []).map((r) => ({ code: cleanVal(r.code), name: cleanVal(r.code) })),
+    });
+  } catch (error) { sendDbError(res, error); }
+});
+
+// Scoped employee search for the single-employee report picker. Minimal fields
+// only (no salary / credential / attendance detail), server-side filtered by the
+// same report filters + company scope, capped at 200 matches.
+app.get('/api/hr/reports/employees', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    if (reportDeniedEmptyScope(req, res)) return;
+    const filters = resolveReportFilters(req, res);
+    if (!filters) return;
+    const pool = await getPool();
+    const request = pool.request();
+    const conditions = applyReportFilterConditions(request, filters, req);
+    let query = `
+      SELECT TOP (200) e.paycode, e.empname, e.companycode, c.companyname, e.departmentcode, d.departmentname,
+             e.cat, e.designation, LTRIM(RTRIM(esm.shift)) AS shiftcode
+      FROM dbo.tblemployee e
+      LEFT JOIN dbo.tbldepartment d ON LTRIM(RTRIM(d.departmentcode)) = LTRIM(RTRIM(e.departmentcode))
+      LEFT JOIN dbo.tblcompany c ON LTRIM(RTRIM(c.companycode)) = LTRIM(RTRIM(e.companycode))
+      LEFT JOIN dbo.tblemployeeshiftmaster esm ON LTRIM(RTRIM(esm.paycode)) = LTRIM(RTRIM(e.paycode))`;
+    if (conditions.length) query += ' WHERE ' + conditions.join(' AND ');
+    query += ' ORDER BY e.empname';
+    const result = await request.query(query);
+    res.json({
+      success: true,
+      employees: result.recordset.map((r) => ({
+        paycode: String(r.paycode || '').trim(),
+        empname: r.empname,
+        companycode: String(r.companycode || '').trim(),
+        companyname: r.companyname || '',
+        departmentcode: String(r.departmentcode || '').trim(),
+        departmentname: r.departmentname || '',
+        category: String(r.cat || '').trim(),
+        designation: r.designation || '',
+        shiftcode: String(r.shiftcode || '').trim(),
+      })),
+    });
+  } catch (error) { sendDbError(res, error); }
+});
+
+// Report summary: KPIs + per-day trend + dimension breakdown + company
+// comparison, all over the SAME scoped, classified rows as the register.
+// `dimension` selects the comparison grouping (company | category | department |
+// shift); comparisons can only ever contain companies inside the caller's scope.
+app.get('/api/hr/reports/summary', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    if (reportDeniedEmptyScope(req, res)) return;
+    const filters = resolveReportFilters(req, res);
+    if (!filters) return;
+    const dimensionRaw = String(req.query.dimension || 'company').trim().toLowerCase();
+    const dimension = REPORT_DIMENSIONS.includes(dimensionRaw) ? dimensionRaw : 'company';
+    const pool = await getPool();
+    const { rows, rawRows, employees, shiftMap } = await loadReportRegisterRows(pool, req, filters);
+
+    const kpis = computeReportKpis(rows, employees);
+    const trend = buildReportTrend(rows, filters.fromDate, filters.toDate);
+    const breakdown = buildReportBreakdown(rows, employees, dimension);
+    const companyComparison = buildReportBreakdown(rows, employees, 'company');
+
+    let employee = null;
+    if (filters.paycode) {
+      const info = employees.get(String(filters.paycode).trim()) || null;
+      const finalLate = computeReportFinalLate(rawRows, shiftMap, info, filters.paycode);
+      employee = info
+        ? { ...info, lateFinal: finalLate ? finalLate.lateFinal : null, lateDetails: finalLate ? finalLate.lateDetails : [] }
+        : { paycode: filters.paycode, lateFinal: null, lateDetails: [] };
+    }
+
+    res.json({
+      success: true,
+      range: { fromDate: filters.fromDate, toDate: filters.toDate },
+      dimension,
+      kpis,
+      trend,
+      breakdown,
+      companyComparison,
+      employee,
+    });
+  } catch (error) { sendDbError(res, error); }
+});
+
+// Detailed attendance register — one row per (employee x register day) in the
+// range, the same rows/labels as Daily Master ('No Record' where no source row
+// exists). Server-side pagination + the same filters and company scope as the
+// summary, so page 2 of a manipulated request can never surface another company.
+app.get('/api/hr/reports/register', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    if (reportDeniedEmptyScope(req, res)) return;
+    const filters = resolveReportFilters(req, res);
+    if (!filters) return;
+    const page = Math.max(Number(req.query.page || 1), 1);
+    const pageSize = Math.min(Math.max(Number(req.query.pageSize || 50), 1), 200);
+    const pool = await getPool();
+    const { rows, employees } = await loadReportRegisterRows(pool, req, filters);
+
+    // Newest day first (matching the audit's recency ordering); 'No Record' rows
+    // (no date) sort last. Sort is deterministic so pages are stable.
+    const sorted = rows.slice().sort((a, b) => {
+      const da = a.date || '';
+      const db = b.date || '';
+      if (da !== db) return da < db ? 1 : -1;
+      return String(a.empname || '').localeCompare(String(b.empname || ''));
+    });
+    const total = sorted.length;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const safePage = Math.min(page, totalPages);
+    const start = (safePage - 1) * pageSize;
+
+    res.json({
+      success: true,
+      range: { fromDate: filters.fromDate, toDate: filters.toDate },
+      total,
+      page: safePage,
+      pageSize,
+      totalPages,
+      employees: employees.size,
+      rows: sorted.slice(start, start + pageSize),
+    });
+  } catch (error) { sendDbError(res, error); }
+});
+
+/* Excel export row cap — a huge range is truncated (and labelled as such on the
+   Summary sheet) instead of streaming unbounded rows. */
+const REPORT_EXPORT_ROW_LIMIT = 20000;
+
+/** Builds the HR Admin Reports workbook (Summary / Group Comparison / Register). */
+function buildReportWorkbook({ filters, dimension, kpis, breakdown, companyComparison, rows, employee, generatedBy }) {
+  const truncated = rows.length > REPORT_EXPORT_ROW_LIMIT;
+  const registerRows = truncated ? rows.slice(0, REPORT_EXPORT_ROW_LIMIT) : rows;
+  const hoursText = (min) => {
+    const n = Number(min || 0);
+    const h = Math.floor(n / 60);
+    const r = n % 60;
+    return r ? `${h}h ${String(r).padStart(2, '0')}m` : `${h}h`;
+  };
+  const pctText = (v) => (v === null || v === undefined ? 'Not available' : `${v}%`);
+
+  const summaryAoA = [
+    ['Master Reports — Attendance Report'],
+    ['Generated', new Date().toISOString()],
+    ['Generated by (HR Admin)', generatedBy || ''],
+    ['Period', `${filters.fromDate} to ${filters.toDate}`],
+    ['Company filter', filters.companycode || 'All authorised companies'],
+    ['Category filter', filters.cat || 'All'],
+    ['Department filter', filters.departmentcode || 'All'],
+    ['Shift filter', filters.shiftcode || 'All'],
+    ['Employee filter', filters.paycode || 'All'],
+    ['Search', filters.search || ''],
+    ['Employee status filter', filters.activeParam],
+    [],
+    ['KPI', 'Value'],
+    ['Employees in scope', kpis.employees],
+    ['Present days', kpis.presentDays],
+    ['Absent days', kpis.absentDays],
+    ['Miss Punch days', kpis.missDays],
+    ['Week Off days (excluded from %)', kpis.weekOffDays],
+    ['Late days (after 5-minute grace)', kpis.lateDays],
+    ['Recorded hours', hoursText(kpis.hoursMinutes)],
+    ['Attendance %', pctText(kpis.attendancePct)],
+    ['Employees without register rows', kpis.employeesWithoutRecords],
+  ];
+  if (employee) {
+    summaryAoA.push([], ['Single-employee report', `${employee.paycode} — ${employee.empname || ''}`]);
+    if (employee.lateFinal !== null && employee.lateFinal !== undefined) {
+      summaryAoA.push(['Final late arrivals (after STAFF monthly grace)', employee.lateFinal]);
+    }
+  }
+  if (truncated) summaryAoA.push([], ['NOTE', `Register sheet truncated to ${REPORT_EXPORT_ROW_LIMIT} rows. Narrow the date range or filters for the full export.`]);
+  summaryAoA.push(
+    [],
+    ['Business rules'],
+    ['Statuses', "Derived from the shared backend classification (classifyRow/normalizeAttendance) — the same rules as Daily Master and Single Employee Audit."],
+    ['Week Off / Holiday register rows', 'Excluded from the Attendance % denominator; never counted as Absent.'],
+    ['Attendance %', 'Present / (Present + Absent + Miss Punch) x 100.'],
+    ['Late', 'Row-level flag after the universal 5-minute grace (STAFF monthly grace is reported separately in single-employee mode).'],
+    ['Hours', 'Summed only from recorded hoursworked values.'],
+    ['Days without any register row', "Never invented; employees with no rows at all are listed as 'No Record'."],
+    ['Company security', 'All rows and every filter option are limited to the companies assigned to this HR Admin account by the SuperAdmin console.'],
+  );
+
+  const compareHeader = ['Group', 'Employees', 'Present Days', 'Absent Days', 'Miss Punch Days', 'Week Off Days', 'Late Days', 'Recorded Hours', 'Attendance %'];
+  const compareAoA = [
+    [`Comparison — ${dimension}-wise`, `(${filters.fromDate} to ${filters.toDate})`],
+    compareHeader,
+    ...breakdown.map((g) => [g.label || g.key, g.employees, g.presentDays, g.absentDays, g.missDays, g.weekOffDays, g.lateDays, hoursText(g.hoursMinutes), pctText(g.attendancePct)]),
+    [],
+    ['Company comparison (authorised companies only)'],
+    compareHeader,
+    ...companyComparison.map((g) => [g.label || g.key, g.employees, g.presentDays, g.absentDays, g.missDays, g.weekOffDays, g.lateDays, hoursText(g.hoursMinutes), pctText(g.attendancePct)]),
+  ];
+
+  const registerAoA = [
+    ['Date', 'Paycode', 'Name', 'Company', 'Department', 'Category', 'Shift', 'In', 'Out', 'Hours', 'Status', 'Late', 'Late Minutes', 'Grace Used', 'Reason'],
+    ...registerRows.map((r) => [
+      r.date || 'No Record', r.paycode, r.empname || '', r.companyname || r.companycode || '',
+      r.departmentname || r.departmentcode || '', r.category || '', r.shiftcode || '',
+      r.inTime || '', r.outTime || '', r.hoursworked == null ? '' : hoursText(r.hoursworked),
+      r.status, r.isLate ? 'Yes' : 'No', r.lateMinutes || 0, r.graceUsed || '', r.reason || '',
+    ]),
+  ];
+
+  const book = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet(summaryAoA), 'Report Summary');
+  XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet(compareAoA), 'Group Comparison');
+  XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet(registerAoA), 'Detailed Register');
+  return XLSX.write(book, { type: 'buffer', bookType: 'xlsx' });
+}
+
+// Excel export — the SAME scoped filters/rows as the JSON APIs, generated on the
+// SERVER so the export endpoint sits behind the identical company + module
+// authorisation (requireRole('HR') -> reports.export). An unauthorised company id
+// is rejected before any workbook is built, so a hand-crafted export URL can
+// never carry another company's rows out of the system.
+app.get('/api/hr/reports/export', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    if (reportDeniedEmptyScope(req, res)) return;
+    const filters = resolveReportFilters(req, res);
+    if (!filters) return;
+    const dimensionRaw = String(req.query.dimension || 'company').trim().toLowerCase();
+    const dimension = REPORT_DIMENSIONS.includes(dimensionRaw) ? dimensionRaw : 'company';
+    const pool = await getPool();
+    const { rows, rawRows, employees, shiftMap } = await loadReportRegisterRows(pool, req, filters);
+    const kpis = computeReportKpis(rows, employees);
+    const breakdown = buildReportBreakdown(rows, employees, dimension);
+    const companyComparison = buildReportBreakdown(rows, employees, 'company');
+    let employee = null;
+    if (filters.paycode) {
+      const info = employees.get(String(filters.paycode).trim()) || null;
+      const finalLate = computeReportFinalLate(rawRows, shiftMap, info, filters.paycode);
+      employee = info
+        ? { ...info, lateFinal: finalLate ? finalLate.lateFinal : null }
+        : { paycode: filters.paycode, lateFinal: null };
+    }
+    // Deterministic sheet order: newest day first, then name ('No Record' last).
+    const ordered = rows.slice().sort((a, b) => {
+      const da = a.date || '';
+      const db = b.date || '';
+      if (da !== db) return da < db ? 1 : -1;
+      return String(a.empname || '').localeCompare(String(b.empname || ''));
+    });
+    const workbook = buildReportWorkbook({
+      filters, dimension, kpis, breakdown, companyComparison,
+      rows: ordered, employee, generatedBy: req.user?.sub || '',
+    });
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="Master-Reports_${filters.fromDate}_${filters.toDate}.xlsx"`);
+    res.send(Buffer.from(workbook));
+  } catch (error) { sendDbError(res, error); }
+});
+
 app.get('/api/hr/celebrations', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
   try {
     const pool = await getPool();
@@ -4221,6 +5303,204 @@ app.get('/api/hr/salary/fullfinal/:paycode', authenticate, requireRole('HR'), re
     res.json({ success: true, employee: outcome.employee, salary: outcome.salary, rules: outcome.rules, rulesConfigured: true, estimate: outcome.estimate, disclaimer: outcome.disclaimer });
   } catch (error) { sendDbError(res, error); }
 });
+
+// Bonus settlement history - explicit HR records only. Estimating NEVER writes
+// here; overlapping service for the same employee + bonus period is rejected so
+// the same service period can never be settled twice.
+app.get('/api/hr/salary/bonus-settlements', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const rows = await listBonusSettlements(pool, {
+      paycode: req.query?.paycode, periodStart: req.query?.periodStart, periodEnd: req.query?.periodEnd,
+    });
+    res.json({ success: true, rows });
+  } catch (error) { sendDbError(res, error); }
+});
+
+app.post('/api/hr/salary/bonus-settlements', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const outcome = await recordBonusSettlement(pool, { input: req.body || {}, actor: req.user?.sub, companyScope: req.hrCompanyScope });
+    if (!outcome.ok) return res.status(outcome.status).json({ success: false, message: outcome.message, code: outcome.code });
+    res.status(201).json({ success: true, settlement: outcome.settlement });
+  } catch (error) { sendDbError(res, error); }
+});
+
+app.delete('/api/hr/salary/bonus-settlements', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const outcome = await deleteBonusSettlements(pool, { ids: req.body?.ids, companyScope: req.hrCompanyScope });
+    if (!outcome.ok) return res.status(outcome.status).json({ success: false, message: outcome.message, code: outcome.code });
+    res.json({ success: true, deleted: outcome.deleted, results: outcome.results });
+  } catch (error) { sendDbError(res, error); }
+});
+
+// ---------------------------------------------------------------------------
+// SALARY STRUCTURE V1 (dynamic pay elements + Excel import/export).
+// Same HR role + company-scope rules as the routes above; both the mobile app
+// and the Next.js website read/write these SHARED records. The V1 workbook
+// import accepts the EmployeeSalaryMaster / EmployeePayElements / PayElementMaster
+// sheets and reports Imported / Updated / Skipped / Failed per dataset.
+// ---------------------------------------------------------------------------
+app.post('/api/hr/salary/structure/import', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const body = req.body || {};
+    const master = Array.isArray(body.master) ? body.master : [];
+    const elements = Array.isArray(body.elements) ? body.elements : [];
+    const payElementMaster = Array.isArray(body.payElementMaster) ? body.payElementMaster : [];
+    const total = master.length + elements.length + payElementMaster.length;
+    if (!total) return res.status(400).json({ success: false, message: 'No rows to import.', code: 'NO_ROWS' });
+    if (total > 5000) return res.status(400).json({ success: false, message: 'Please import at most 5000 rows at a time.', code: 'TOO_MANY_ROWS' });
+    const summaries = await importSalaryStructure(pool, {
+      master, elements, payElementMaster, actor: req.user?.sub, companyScope: req.hrCompanyScope,
+    });
+    res.json({ success: true, summaries, columns: {
+      master: SALARY_STRUCTURE_MASTER_COLUMNS,
+      elements: SALARY_STRUCTURE_ELEMENT_COLUMNS,
+      payElementMaster: PAY_ELEMENT_MASTER_COLUMNS,
+    } });
+  } catch (error) { sendDbError(res, error); }
+});
+
+// Download Template pre-fill source: READ-ONLY export from the genuine Savior
+// SQL Server roster (HR Admin only). Application salary tables are never used
+// as the source; salary fields Savior does not contain come back blank with an
+// explicit report - never fabricated and never zero/'N'.
+app.get('/api/hr/salary/structure/template-source', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const out = await exportSaviorTemplateSource(pool, { companyScope: req.hrCompanyScope });
+    if (!out.ok) return res.status(out.status).json({ success: false, message: out.message });
+    res.json({ success: true, master: out.master, elements: out.elements, payElementMaster: out.payElementMaster, report: out.report });
+  } catch (error) { sendDbError(res, error); }
+});
+
+app.get('/api/hr/salary/structure/master', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const rows = await listSalaryStructureMaster(pool, {
+      paycode: req.query?.paycode, search: req.query?.search,
+      from: req.query?.from, to: req.query?.to, limit: req.query?.limit,
+      companyScope: req.hrCompanyScope,
+    });
+    res.json({ success: true, rows, columns: SALARY_STRUCTURE_MASTER_COLUMNS });
+  } catch (error) { sendDbError(res, error); }
+});
+
+app.get('/api/hr/salary/structure/elements', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const rows = await listSalaryStructureElements(pool, {
+      paycode: req.query?.paycode, search: req.query?.search,
+      from: req.query?.from, to: req.query?.to, limit: req.query?.limit,
+      companyScope: req.hrCompanyScope,
+    });
+    res.json({ success: true, rows, columns: SALARY_STRUCTURE_ELEMENT_COLUMNS });
+  } catch (error) { sendDbError(res, error); }
+});
+
+app.get('/api/hr/salary/payelement-master', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const rows = await listPayElementMaster(pool, { search: req.query?.search, limit: req.query?.limit });
+    res.json({ success: true, rows, columns: PAY_ELEMENT_MASTER_COLUMNS });
+  } catch (error) { sendDbError(res, error); }
+});
+
+app.post('/api/hr/salary/payelement-master/import', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+    if (!rows.length) return res.status(400).json({ success: false, message: 'No rows to import.', code: 'NO_ROWS' });
+    if (rows.length > 5000) return res.status(400).json({ success: false, message: 'Please import at most 5000 rows at a time.', code: 'TOO_MANY_ROWS' });
+    await ensureSalaryStructureTables(pool);
+    const summary = { imported: 0, updated: 0, skipped: 0, failed: 0, errors: [], results: [], warnings: [] };
+    await importPayElementMasterRows(pool, { rows, actor: req.user?.sub, summary });
+    res.json({ success: true, summary });
+  } catch (error) { sendDbError(res, error); }
+});
+
+// Dynamic pay-element report (union of the codes actually present in the
+// filtered data). Gross Salary appears only from an explicit GROSS source
+// element - never a sum of positives - and is NOT labelled CTC.
+app.get('/api/hr/salary/structure/report', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const pool = await getPool();
+    const report = await buildSalaryStructureReport(pool, {
+      paycode: req.query?.paycode, search: req.query?.search, asOf: req.query?.asOf,
+      limit: req.query?.limit, companyScope: req.hrCompanyScope,
+    });
+    res.json({ success: true, ...report });
+  } catch (error) { sendDbError(res, error); }
+});
+
+/* Manual CRUD for the three structure tables (Add / Edit / Delete Selected).
+   Same middleware/permission architecture as the imports: HR (module 'salary')
+   + SuperAdmin management surface. The HTTP verbs map onto the existing
+   HR_PERMISSION_RULES (POST=create, PUT=edit, DELETE=delete). */
+app.post('/api/hr/salary/structure/master', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const out = await createSalaryMasterVersion(await getPool(), { input: req.body || {}, actor: req.user?.sub, companyScope: req.hrCompanyScope });
+    res.status(out.success ? 200 : 400).json(out);
+  } catch (error) { sendDbError(res, error); }
+});
+app.put('/api/hr/salary/structure/master/:id', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const out = await updateSalaryMasterVersion(await getPool(), { id: req.params.id, input: req.body || {}, actor: req.user?.sub, companyScope: req.hrCompanyScope });
+    res.status(out.success ? 200 : 400).json(out);
+  } catch (error) { sendDbError(res, error); }
+});
+app.delete('/api/hr/salary/structure/master', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    if (!ids.length) return res.status(400).json({ success: false, message: 'No rows selected.' });
+    const out = await deleteSalaryMasterRows(await getPool(), { ids, actor: req.user?.sub, companyScope: req.hrCompanyScope });
+    res.json(out);
+  } catch (error) { sendDbError(res, error); }
+});
+app.post('/api/hr/salary/structure/elements', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const out = await createElementAssignment(await getPool(), { input: req.body || {}, actor: req.user?.sub, companyScope: req.hrCompanyScope });
+    res.status(out.success ? 200 : 400).json(out);
+  } catch (error) { sendDbError(res, error); }
+});
+app.put('/api/hr/salary/structure/elements/:id', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const out = await updateElementAssignment(await getPool(), { id: req.params.id, input: req.body || {}, actor: req.user?.sub, companyScope: req.hrCompanyScope });
+    res.status(out.success ? 200 : 400).json(out);
+  } catch (error) { sendDbError(res, error); }
+});
+app.delete('/api/hr/salary/structure/elements', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    if (!ids.length) return res.status(400).json({ success: false, message: 'No rows selected.' });
+    const out = await deleteElementAssignments(await getPool(), { ids, actor: req.user?.sub, companyScope: req.hrCompanyScope });
+    res.json(out);
+  } catch (error) { sendDbError(res, error); }
+});
+app.post('/api/hr/salary/payelement-master', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const out = await createPayElementMasterRecord(await getPool(), { input: req.body || {}, actor: req.user?.sub });
+    res.status(out.success ? 200 : 400).json(out);
+  } catch (error) { sendDbError(res, error); }
+});
+app.put('/api/hr/salary/payelement-master/:id', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const out = await updatePayElementMasterRecord(await getPool(), { id: req.params.id, input: req.body || {}, actor: req.user?.sub });
+    res.status(out.success ? 200 : 400).json(out);
+  } catch (error) { sendDbError(res, error); }
+});
+app.delete('/api/hr/salary/payelement-master', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    if (!ids.length) return res.status(400).json({ success: false, message: 'No rows selected.' });
+    const out = await deletePayElementMasterRecords(await getPool(), { ids });
+    res.json(out);
+  } catch (error) { sendDbError(res, error); }
+});
+
+
 
 // ---------------------------------------------------------------------------
 // Marriage anniversary application table (NOT a Savior table).
@@ -6221,6 +7501,676 @@ app.get('/api/email/log', requireDbConfig, authenticate, requireRole('HR'), asyn
     return res.json({ success: true, rows });
   } catch (error) { return emailErrorResponse(res, error); }
 });
+/* ============================================================================
+   WHATSAPP ATTENDANCE MESSAGING (V1) — isolated feature block.
+   ----------------------------------------------------------------------------
+   Mirrors the Email feature's structure. Application-owned tables only
+   (dbo.HR_WhatsApp*). Savior tables (tblemployee, tbltimeregister, ...) are only
+   READ. Attendance/grace/shift math is reused from the existing functions above —
+   no parallel calculation engine is created here.
+   ========================================================================== */
+const whatsappConfigTable = process.env.HR_WHATSAPP_CONFIG_TABLE || 'dbo.HR_WhatsAppConfig';
+const whatsappEmployeeTable = process.env.HR_WHATSAPP_EMPLOYEE_TABLE || 'dbo.HR_EmployeeWhatsApp';
+const whatsappLogTable = process.env.HR_WHATSAPP_LOG_TABLE || 'dbo.HR_WhatsAppLog';
+const whatsappJobRunTable = process.env.HR_WHATSAPP_JOBRUN_TABLE || 'dbo.HR_WhatsAppJobRun';
+const WHATSAPP_DEFAULT_COUNTRY = '91';
+const WHATSAPP_MESSAGE_TYPE = 'Attendance';
+const WHATSAPP_MAX_ATTEMPTS = 3;
+let whatsappTablesState = null; // null = unknown, true = ready, string = error message
+let whatsappSchedulerBusy = false;
+
+const WHATSAPP_DEFAULTS = {
+  mode: 'FREE_MANUAL',
+  sendtime: '21:00',
+  timezone: 'Asia/Kolkata',
+  templatename: 'attendance_update',
+  templatelanguage: 'en',
+  templatebody: 'Hello {{EmployeeName}} ({{Paycode}}),\nDate: {{AttendanceDate}}\nIn: {{InTime}} | Out: {{OutTime}}\nPunch: {{PunchStatus}} | Status: {{Status}}\nGrace Used: {{GraceUsed}} | Grace Remaining: {{GraceRemaining}}',
+};
+
+function whatsappErrorResponse(res, error) {
+  console.error('[WHATSAPP_ERROR]', (error && error.message || error).toString().slice(0, 300));
+  return res.status(503).json({ success: false, message: typeof whatsappTablesState === 'string' ? whatsappTablesState : (error && error.message || 'WhatsApp service unavailable.') });
+}
+
+async function ensureWhatsAppTables(pool) {
+  if (whatsappTablesState === true) return;
+  if (typeof whatsappTablesState === 'string') throw new Error(whatsappTablesState);
+  try {
+    await pool.request().batch(`
+IF OBJECT_ID('${whatsappConfigTable}','U') IS NULL
+CREATE TABLE ${whatsappConfigTable} (
+  id INT IDENTITY(1,1) PRIMARY KEY,
+  enabled BIT NOT NULL CONSTRAINT DF_WhatsAppCfg_Enabled DEFAULT(0),
+  mode VARCHAR(20) NOT NULL CONSTRAINT DF_WhatsAppCfg_Mode DEFAULT('FREE_MANUAL'),
+  sendtime VARCHAR(5) NOT NULL CONSTRAINT DF_WhatsAppCfg_Time DEFAULT('21:00'),
+  timezone VARCHAR(64) NOT NULL CONSTRAINT DF_WhatsAppCfg_Tz DEFAULT('Asia/Kolkata'),
+  eligiblecategory VARCHAR(50) NULL,
+  dryrun BIT NOT NULL CONSTRAINT DF_WhatsAppCfg_Dry DEFAULT(1),
+  sendername NVARCHAR(120) NULL,
+  templatename VARCHAR(200) NULL,
+  templatelanguage VARCHAR(20) NOT NULL CONSTRAINT DF_WhatsAppCfg_Lang DEFAULT('en'),
+  templatebody NVARCHAR(MAX) NULL,
+  approved BIT NOT NULL CONSTRAINT DF_WhatsAppCfg_Approved DEFAULT(0),
+  updateddate DATETIME2 NOT NULL CONSTRAINT DF_WhatsAppCfg_Upd DEFAULT SYSUTCDATETIME(),
+  updatedby VARCHAR(50) NULL
+);
+IF OBJECT_ID('${whatsappEmployeeTable}','U') IS NULL
+CREATE TABLE ${whatsappEmployeeTable} (
+  id INT IDENTITY(1,1) PRIMARY KEY,
+  paycode VARCHAR(50) NOT NULL CONSTRAINT UQ_WhatsAppEmp_Paycode UNIQUE,
+  whatsappnumber VARCHAR(20) NOT NULL,
+  consentstatus VARCHAR(20) NOT NULL CONSTRAINT DF_WhatsAppEmp_Consent DEFAULT('None'),
+  consentat DATETIME2 NULL,
+  consentsource VARCHAR(50) NULL,
+  optedoutat DATETIME2 NULL,
+  companycode VARCHAR(30) NULL,
+  departmentcode VARCHAR(30) NULL,
+  employeename NVARCHAR(120) NULL,
+  createddate DATETIME2 NOT NULL CONSTRAINT DF_WhatsAppEmp_Created DEFAULT SYSUTCDATETIME(),
+  updateddate DATETIME2 NOT NULL CONSTRAINT DF_WhatsAppEmp_Updated DEFAULT SYSUTCDATETIME()
+);
+IF OBJECT_ID('${whatsappLogTable}','U') IS NULL
+CREATE TABLE ${whatsappLogTable} (
+  id INT IDENTITY(1,1) PRIMARY KEY,
+  paycode VARCHAR(50) NULL,
+  employeename NVARCHAR(120) NULL,
+  companycode VARCHAR(30) NULL,
+  departmentcode VARCHAR(30) NULL,
+  messagetype VARCHAR(30) NOT NULL CONSTRAINT DF_WhatsAppLog_Type DEFAULT('Attendance'),
+  attendancedate DATE NULL,
+  recipientnumber VARCHAR(20) NULL,
+  status VARCHAR(20) NOT NULL,
+  providermessageid VARCHAR(150) NULL,
+  attemptcount INT NOT NULL CONSTRAINT DF_WhatsAppLog_Attempt DEFAULT(0),
+  idempotencykey VARCHAR(120) NULL,
+  errormessage NVARCHAR(500) NULL,
+  createdat DATETIME2 NOT NULL CONSTRAINT DF_WhatsAppLog_Created DEFAULT SYSUTCDATETIME(),
+  sentat DATETIME2 NULL,
+  updatedat DATETIME2 NOT NULL CONSTRAINT DF_WhatsAppLog_Updated DEFAULT SYSUTCDATETIME()
+);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UQ_WhatsAppLog_Idem' AND object_id = OBJECT_ID('${whatsappLogTable}'))
+CREATE UNIQUE INDEX UQ_WhatsAppLog_Idem ON ${whatsappLogTable}(idempotencykey) WHERE idempotencykey IS NOT NULL;
+IF OBJECT_ID('${whatsappJobRunTable}','U') IS NULL
+CREATE TABLE ${whatsappJobRunTable} (
+  id INT IDENTITY(1,1) PRIMARY KEY,
+  rundate DATE NOT NULL,
+  messagetype VARCHAR(30) NOT NULL CONSTRAINT DF_WhatsAppJobRun_Type DEFAULT('Attendance'),
+  mode VARCHAR(20) NULL,
+  status VARCHAR(20) NOT NULL,
+  startedat DATETIME2 NOT NULL CONSTRAINT DF_WhatsAppJobRun_Started DEFAULT SYSUTCDATETIME(),
+  finishedat DATETIME2 NULL,
+  total INT NOT NULL CONSTRAINT DF_WhatsAppJobRun_Total DEFAULT(0),
+  sent INT NOT NULL CONSTRAINT DF_WhatsAppJobRun_Sent DEFAULT(0),
+  failed INT NOT NULL CONSTRAINT DF_WhatsAppJobRun_Failed DEFAULT(0),
+  skipped INT NOT NULL CONSTRAINT DF_WhatsAppJobRun_Skipped DEFAULT(0),
+  note NVARCHAR(500) NULL
+);`);
+    // Provider/credential columns are owned by the isolated whatsapp-provider module.
+    await ensureWhatsAppProviderColumns(pool, sql);
+    whatsappTablesState = true;
+  } catch (error) {
+    whatsappTablesState = 'WhatsApp tables unavailable. Run server/whatsapp-schema.sql on the database (SQL login needs CREATE rights on HR_ tables). Detail: ' + (error && error.message || error).toString().slice(0, 140);
+    throw new Error(whatsappTablesState);
+  }
+}
+
+async function getWhatsAppConfig(pool) {
+  await ensureWhatsAppTables(pool);
+  const existing = await pool.request().query(`SELECT TOP 1 * FROM ${whatsappConfigTable} ORDER BY id`);
+  if (existing.recordset[0]) return existing.recordset[0];
+  const inserted = await pool.request()
+    .input('templatename', sql.VarChar(200), WHATSAPP_DEFAULTS.templatename)
+    .input('templatebody', sql.NVarChar(sql.MAX), WHATSAPP_DEFAULTS.templatebody)
+    .query(`INSERT INTO ${whatsappConfigTable} (templatename, templatelanguage, templatebody)
+            OUTPUT INSERTED.*
+            VALUES (@templatename, '${WHATSAPP_DEFAULTS.templatelanguage}', @templatebody);`);
+  return inserted.recordset[0];
+}
+
+// Case-insensitive placeholders: {{EmployeeName}}, {{Paycode}}, {{AttendanceDate}},
+// {{InTime}}, {{OutTime}}, {{PunchStatus}}, {{Status}}, {{GraceUsed}},
+// {{GraceRemaining}}, {{CompanyCode}}, {{Department}} — unknown ones stay untouched.
+function renderWhatsAppTemplate(tpl, vars) {
+  const map = {};
+  Object.entries(vars || {}).forEach(([k, v]) => { map[String(k).toLowerCase()] = (v === undefined || v === null) ? '' : String(v); });
+  return String(tpl || '').replace(/\{\{(\w+)\}\}/g, (m, k) => (k.toLowerCase() in map) ? map[k.toLowerCase()] : m);
+}
+
+// Normalize a phone number to E.164 (default country 91 for a 10-digit local
+// number). Masked/legacy values (e.g. "XXXXXX9155") and invalid inputs return ''.
+function normalizeWhatsAppNumber(raw) {
+  let s = String(raw == null ? '' : raw).trim();
+  if (!s) return '';
+  s = s.replace(/[^\d]/g, '');
+  if (!s) return '';
+  if (s.startsWith('00')) s = s.slice(2);
+  else if (s.startsWith('0')) s = s.slice(1);
+  if (s.length === 10) s = WHATSAPP_DEFAULT_COUNTRY + s;
+  if (!/^[1-9]\d{9,14}$/.test(s)) return '';
+  return s;
+}
+
+function safeJsonParse(buf) {
+  try { return JSON.parse(Buffer.isBuffer(buf) ? buf.toString('utf8') : String(buf || '')); }
+  catch (_) { return {}; }
+}
+
+function whatsappInScope(req, companycode) {
+  if (!req || !req.hrCompanyScope) return true;
+  const code = String(companycode || '').trim().toUpperCase();
+  return req.hrCompanyScope.map((c) => String(c).trim().toUpperCase()).includes(code);
+}
+
+async function logWhatsApp(pool, entry) {
+  await pool.request()
+    .input('paycode', sql.VarChar(50), entry.paycode || null)
+    .input('employeename', sql.NVarChar(120), entry.employeename || null)
+    .input('companycode', sql.VarChar(30), entry.companycode || null)
+    .input('departmentcode', sql.VarChar(30), entry.departmentcode || null)
+    .input('messagetype', sql.VarChar(30), entry.messagetype || WHATSAPP_MESSAGE_TYPE)
+    .input('attendancedate', sql.Date, entry.attendancedate || null)
+    .input('recipientnumber', sql.VarChar(20), entry.recipientnumber || null)
+    .input('status', sql.VarChar(20), entry.status)
+    .input('providermessageid', sql.VarChar(150), entry.providermessageid || null)
+    .input('attemptcount', sql.Int, entry.attemptcount || 0)
+    .input('idempotencykey', sql.VarChar(120), entry.idempotencykey || null)
+    .input('errormessage', sql.NVarChar(500), entry.errormessage || null)
+    .query(`INSERT INTO ${whatsappLogTable} (paycode, employeename, companycode, departmentcode, messagetype, attendancedate, recipientnumber, status, providermessageid, attemptcount, idempotencykey, errormessage, sentat)
+            VALUES (@paycode, @employeename, @companycode, @departmentcode, @messagetype, @attendancedate, @recipientnumber, @status, @providermessageid, @attemptcount, @idempotencykey, @errormessage, CASE WHEN @status IN ('Sent','Delivered','Read') THEN SYSUTCDATETIME() ELSE NULL END);`);
+}
+
+/* Paycode already successfully messaged for this attendance date + type (duplicate protection). */
+async function alreadySentForDay(pool, paycode, dateIso, type) {
+  const check = await pool.request()
+    .input('paycode', sql.VarChar(50), paycode)
+    .input('attendancedate', sql.Date, dateIso)
+    .input('messagetype', sql.VarChar(30), type || WHATSAPP_MESSAGE_TYPE)
+    .query(`SELECT TOP 1 status FROM ${whatsappLogTable} WHERE paycode = @paycode AND attendancedate = @attendancedate AND messagetype = @messagetype AND status IN ('Sent','Delivered','Read','Queued')`);
+  return !!check.recordset[0];
+}
+
+async function whatsappJobAlreadyRan(pool, dateIso, type) {
+  const r = await pool.request()
+    .input('rundate', sql.Date, dateIso)
+    .input('messagetype', sql.VarChar(30), type || WHATSAPP_MESSAGE_TYPE)
+    .query(`SELECT TOP 1 id FROM ${whatsappJobRunTable} WHERE rundate = @rundate AND messagetype = @messagetype AND status IN ('Completed','DryRun','Failed')`);
+  return !!r.recordset[0];
+}
+
+async function createWhatsAppJobRun(pool, entry) {
+  const r = await pool.request()
+    .input('rundate', sql.Date, entry.rundate)
+    .input('messagetype', sql.VarChar(30), entry.messagetype || WHATSAPP_MESSAGE_TYPE)
+    .input('mode', sql.VarChar(20), entry.mode || null)
+    .query(`INSERT INTO ${whatsappJobRunTable} (rundate, messagetype, mode, status) OUTPUT INSERTED.id VALUES (@rundate, @messagetype, @mode, 'Running');`);
+  return r.recordset[0].id;
+}
+
+async function finishWhatsAppJobRun(pool, id, entry) {
+  await pool.request()
+    .input('id', sql.Int, id)
+    .input('status', sql.VarChar(20), entry.status)
+    .input('total', sql.Int, entry.total || 0)
+    .input('sent', sql.Int, entry.sent || 0)
+    .input('failed', sql.Int, entry.failed || 0)
+    .input('skipped', sql.Int, entry.skipped || 0)
+    .input('note', sql.NVarChar(500), entry.note || null)
+    .query(`UPDATE ${whatsappJobRunTable} SET status = @status, finishedat = SYSUTCDATETIME(), total = @total, sent = @sent, failed = @failed, skipped = @skipped, note = @note WHERE id = @id`);
+}
+
+function mapWebhookStatus(status) {
+  const s = String(status || '').toLowerCase();
+  if (s === 'sent') return 'Sent';
+  if (s === 'delivered') return 'Delivered';
+  if (s === 'read') return 'Read';
+  if (s === 'failed') return 'Failed';
+  return null;
+}
+
+/* Update the message log from verified Cloud API status callbacks. Never claims a
+   message was delivered unless the provider webhook said so. */
+async function recordWhatsAppWebhookStatuses(pool, payload) {
+  const statuses = [];
+  for (const entry of (Array.isArray(payload && payload.entry) ? payload.entry : [])) {
+    for (const change of (Array.isArray(entry && entry.changes) ? entry.changes : [])) {
+      if (!change || change.field !== 'messages') continue;
+      const value = change.value || {};
+      for (const st of (Array.isArray(value.statuses) ? value.statuses : [])) {
+        if (st && st.id && st.status) statuses.push({ id: String(st.id), mapped: mapWebhookStatus(st.status), error: (st.errors && st.errors[0] && st.errors[0].message) || null });
+      }
+    }
+  }
+  let updated = 0;
+  for (const s of statuses) {
+    if (!s.mapped) continue;
+    const r = await pool.request()
+      .input('id', sql.VarChar(150), s.id)
+      .input('status', sql.VarChar(20), s.mapped)
+      .input('errormessage', sql.NVarChar(500), s.error ? String(s.error).slice(0, 480) : null)
+      .query(`UPDATE ${whatsappLogTable} SET status = @status, errormessage = COALESCE(@errormessage, errormessage), updatedat = SYSUTCDATETIME() WHERE providermessageid = @id AND status IN ('Sent','Delivered','Read')`);
+    updated += (r.rowsAffected && r.rowsAffected[0]) || 0;
+  }
+  return updated;
+}
+
+async function loadWhatsAppEligible(pool, req, cfg) {
+  await ensureWhatsAppTables(pool);
+  await loadCategoryNames(pool); // warm the category cache used by isStaffCategory
+  const empResult = await pool.request().query(`SELECT LTRIM(RTRIM(paycode)) AS paycode, LTRIM(RTRIM(empname)) AS empname, LTRIM(RTRIM(companycode)) AS companycode, LTRIM(RTRIM(departmentcode)) AS departmentcode, LTRIM(RTRIM(cat)) AS cat, LTRIM(RTRIM(telephone1)) AS telephone1, active FROM dbo.tblemployee`);
+  const consentResult = await pool.request().query(`SELECT paycode, whatsappnumber, consentstatus, optedoutat FROM ${whatsappEmployeeTable}`);
+  const consentByPaycode = new Map();
+  for (const c of consentResult.recordset) consentByPaycode.set(String(c.paycode || '').trim(), c);
+  const eligibleCats = String(cfg.eligiblecategory || '').split(',').map((c) => c.trim().toUpperCase()).filter(Boolean);
+  const eligible = [];
+  const counts = { total: 0, eligible: 0, noNumber: 0, invalidNumber: 0, noConsent: 0, notStaff: 0, inactive: 0, outOfScope: 0 };
+  for (const e of empResult.recordset) {
+    const paycode = String(e.paycode || '').trim();
+    if (!paycode) continue;
+    counts.total++;
+    const companycode = String(e.companycode || '').trim();
+    if (!whatsappInScope(req, companycode)) { counts.outOfScope++; continue; }
+    const activeRaw = e.active;
+    const inactive = activeRaw === false || activeRaw === 0 || String(activeRaw || '').trim().toUpperCase() === 'N';
+    if (inactive) { counts.inactive++; continue; }
+    const catCode = String(e.cat || '').trim();
+    const catOk = eligibleCats.length ? eligibleCats.includes(catCode.toUpperCase()) : isStaffCategory(catCode, categoryCache);
+    if (!catOk) { counts.notStaff++; continue; }
+    const rawPhone = String(e.telephone1 || '').trim();
+    if (!rawPhone) { counts.noNumber++; continue; }
+    const number = normalizeWhatsAppNumber(rawPhone);
+    if (!number) { counts.invalidNumber++; continue; }
+    const consent = consentByPaycode.get(paycode);
+    const granted = consent && String(consent.consentstatus || '').trim() === 'Granted' && !consent.optedoutat;
+    if (!granted) { counts.noConsent++; continue; }
+    eligible.push({ paycode, empname: String(e.empname || '').trim(), companycode, departmentcode: String(e.departmentcode || '').trim(), cat: catCode, whatsappnumber: number, consentstatus: 'Granted' });
+  }
+  counts.eligible = eligible.length;
+  return { eligible, counts };
+}
+
+async function buildWhatsAppMessageForEmployee(pool, emp, cfg, dateIso) {
+  const paycode = emp.paycode;
+  const companycode = emp.companycode || '';
+  const cat = emp.cat || '';
+  const shiftMap = await loadShiftEndTimes(pool);
+  const shiftInfo = await resolveEmployeeShift(pool, paycode, companycode);
+  const dayRows = await queryAttendance(pool, paycode, { fromDate: dateIso, toDate: dateIso });
+  const normalized = dayRows.map((r) => normalizeAttendance(r, shiftMap, cat, companycode, shiftInfo));
+  const row = normalized[0];
+  const tpl = cfg.templatebody || WHATSAPP_DEFAULTS.templatebody;
+  const base = { paycode, empname: emp.empname, companycode, departmentcode: emp.departmentcode || '', whatsappnumber: emp.whatsappnumber, dateIso };
+  if (!row) {
+    return { ...base, status: 'No Record', punchStatus: 'No punch', inTime: null, outTime: null, graceUsed: '—', graceRemaining: '—', text: renderWhatsAppTemplate(tpl, { EmployeeName: emp.empname, Paycode: paycode, AttendanceDate: dateIso, InTime: '—', OutTime: '—', PunchStatus: 'No punch', Status: 'No Record', GraceUsed: '—', GraceRemaining: '—', CompanyCode: companycode, Department: emp.departmentcode || '' }) };
+  }
+  const monthKey = dateIso.slice(0, 7);
+  const [y, m] = monthKey.split('-').map(Number);
+  const monthRows = await queryAttendance(pool, paycode, { fromDate: `${monthKey}-01`, toDate: dateIso });
+  const monthly = computeMonthlyLateForEmployee(monthRows, shiftMap, cat, companycode, paycode, y, m, shiftInfo.resolved ? shiftInfo.shiftCode : null);
+  const lateDetail = (monthly.lateDetails || []).find((d) => rowDateIso(d.date) === dateIso);
+  const isStaff = isStaffCategory(cat, categoryCache);
+  const graceUsed = (lateDetail && lateDetail.graceUsed) ? lateDetail.graceUsed : (row.graceUsed || '—');
+  const graceRemaining = isStaff && monthly.graceRemaining
+    ? `30m:${monthly.graceRemaining.grace30min ?? 0} 1h:${monthly.graceRemaining.grace1hr ?? 0} 2h:${monthly.graceRemaining.grace2hr ?? 0}`
+    : '—';
+  const hasIn = Boolean(row.in1 || row.in2);
+  const hasOut = Boolean(row.out1 || row.out2);
+  const punchStatus = (!hasIn && !hasOut) ? 'No punch' : (!hasIn ? 'Missing IN' : (!hasOut ? 'Missing OUT' : 'Complete'));
+  const status = row.computedStatus || row.statusLabel || '—';
+  const text = renderWhatsAppTemplate(tpl, {
+    EmployeeName: emp.empname, Paycode: paycode, AttendanceDate: dateIso,
+    InTime: row.inTime || '—', OutTime: row.outTime || '—',
+    PunchStatus: punchStatus, Status: status,
+    GraceUsed: graceUsed, GraceRemaining: graceRemaining,
+    CompanyCode: companycode, Department: emp.departmentcode || '',
+  });
+  return { ...base, status, punchStatus, inTime: row.inTime || null, outTime: row.outTime || null, graceUsed, graceRemaining, text };
+}
+
+function canSendReal(cfg, provider) {
+  const mode = String(cfg.mode || 'FREE_MANUAL').toUpperCase();
+  const enabled = cfg.enabled === true || cfg.enabled === 1;
+  const approved = cfg.approved === true || cfg.approved === 1;
+  const dryRun = cfg.dryrun === true || cfg.dryrun === 1;
+  return mode === 'CLOUD_API' && enabled && approved && !dryRun && provider.configured;
+}
+
+async function countWhatsAppAttempts(pool, paycode, dateIso, type) {
+  const r = await pool.request()
+    .input('paycode', sql.VarChar(50), paycode)
+    .input('attendancedate', sql.Date, dateIso)
+    .input('messagetype', sql.VarChar(30), type || WHATSAPP_MESSAGE_TYPE)
+    .query(`SELECT COUNT(*) AS cnt FROM ${whatsappLogTable} WHERE paycode = @paycode AND attendancedate = @attendancedate AND messagetype = @messagetype AND status = 'Failed'`);
+  return Number((r.recordset[0] && r.recordset[0].cnt) || 0);
+}
+
+async function buildWhatsAppPreviews(pool, req, cfg, dateIso, paycodeFilter) {
+  const { eligible } = await loadWhatsAppEligible(pool, req, cfg);
+  const list = eligible.filter((e) => !paycodeFilter || String(e.paycode).trim() === String(paycodeFilter).trim());
+  const previews = [];
+  for (const emp of list) previews.push(await buildWhatsAppMessageForEmployee(pool, emp, cfg, dateIso));
+  return previews;
+}
+
+/* Sends (or dry-runs) the attendance message for eligible staff. `forceReal` alone
+   is NOT enough to send — canSendReal() must also be true. */
+async function sendWhatsAppMessages(pool, req, cfg, dateIso, paycodeFilter, forceReal) {
+  const stat = { total: 0, sent: 0, failed: 0, skipped: 0, dryRun: 0 };
+  const previews = [];
+  const { eligible } = await loadWhatsAppEligible(pool, req, cfg);
+  const list = eligible.filter((e) => !paycodeFilter || String(e.paycode).trim() === String(paycodeFilter).trim());
+  stat.total = list.length;
+  const provider = await getWhatsAppProviderSettings(pool);
+  const real = forceReal === true && canSendReal(cfg, provider);
+  for (const emp of list) {
+    const key = `${emp.paycode}|${dateIso}|${WHATSAPP_MESSAGE_TYPE}`;
+    if (await alreadySentForDay(pool, emp.paycode, dateIso, WHATSAPP_MESSAGE_TYPE)) { stat.skipped++; continue; }
+    const attempts = await countWhatsAppAttempts(pool, emp.paycode, dateIso, WHATSAPP_MESSAGE_TYPE);
+    if (attempts >= WHATSAPP_MAX_ATTEMPTS) { stat.skipped++; continue; }
+    const built = await buildWhatsAppMessageForEmployee(pool, emp, cfg, dateIso);
+    if (!real) { stat.dryRun++; previews.push(built); continue; }
+    try {
+      const { messageId } = await sendWhatsAppTemplate(provider, {
+        to: emp.whatsappnumber,
+        templateName: cfg.templatename || WHATSAPP_DEFAULTS.templatename,
+        languageCode: cfg.templatelanguage || WHATSAPP_DEFAULTS.templatelanguage,
+        bodyText: built.text,
+      });
+      stat.sent++;
+      await logWhatsApp(pool, { paycode: emp.paycode, employeename: emp.empname, companycode: emp.companycode, departmentcode: emp.departmentcode, messagetype: WHATSAPP_MESSAGE_TYPE, attendancedate: dateIso, recipientnumber: emp.whatsappnumber, status: 'Sent', providermessageid: messageId, attemptcount: attempts + 1, idempotencykey: key });
+    } catch (error) {
+      stat.failed++;
+      await logWhatsApp(pool, { paycode: emp.paycode, employeename: emp.empname, companycode: emp.companycode, departmentcode: emp.departmentcode, messagetype: WHATSAPP_MESSAGE_TYPE, attendancedate: dateIso, recipientnumber: emp.whatsappnumber, status: 'Failed', attemptcount: attempts + 1, idempotencykey: null, errormessage: (error && error.message || error).toString().slice(0, 480) });
+    }
+  }
+  return { ...stat, previews, real };
+}
+
+async function runWhatsAppSchedulerTick() {
+  const pool = await getPool();
+  const cfg = await getWhatsAppConfig(pool);
+  const date = indiaTodayISO();
+  const mode = String(cfg.mode || 'FREE_MANUAL').toUpperCase();
+  const enabled = cfg.enabled === true || cfg.enabled === 1;
+  if (!enabled) return { status: 'Skipped', note: 'WhatsApp sending is disabled.' };
+  if (await whatsappJobAlreadyRan(pool, date, WHATSAPP_MESSAGE_TYPE)) return { status: 'Skipped', note: `Already ran for ${date}.` };
+  const provider = await getWhatsAppProviderSettings(pool);
+  const real = canSendReal(cfg, provider);
+  const jobId = await createWhatsAppJobRun(pool, { rundate: date, messagetype: WHATSAPP_MESSAGE_TYPE, mode });
+  try {
+    const result = await sendWhatsAppMessages(pool, null, cfg, date, null, real);
+    const status = real ? 'Completed' : 'DryRun';
+    const note = real ? null : 'Dry-run: no real messages sent (mode/enabled/approved/dry-run/provider not all set for real sending).';
+    await finishWhatsAppJobRun(pool, jobId, { status, total: result.total, sent: result.sent, failed: result.failed, skipped: result.skipped, note });
+    return { status, ...result, note };
+  } catch (error) {
+    await finishWhatsAppJobRun(pool, jobId, { status: 'Failed', note: (error && error.message || error).toString().slice(0, 480) });
+    throw error;
+  }
+}
+
+function startWhatsAppScheduler() {
+  if (!process.env.DB_SERVER) return;
+  const tick = async () => {
+    if (whatsappSchedulerBusy) return;
+    whatsappSchedulerBusy = true;
+    try { await runWhatsAppSchedulerTick(); }
+    catch (error) { console.error('[WHATSAPP_SCHEDULER]', (error && error.message || error).toString().slice(0, 200)); }
+    finally { whatsappSchedulerBusy = false; }
+  };
+  const sendTime = String(process.env.WHATSAPP_SEND_TIME || WHATSAPP_DEFAULTS.sendtime).trim();
+  const timezone = String(process.env.WHATSAPP_TIMEZONE || WHATSAPP_DEFAULTS.timezone).trim();
+  const m = /^(\d{1,2}):(\d{2})$/.exec(sendTime);
+  const hour = m ? Number(m[1]) : 21;
+  const minute = m ? Number(m[2]) : 0;
+  function msUntilNext() {
+    const parts = new Intl.DateTimeFormat('en-US', { timeZone: timezone, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).formatToParts(new Date());
+    const get = (t) => Number((parts.find((p) => p.type === t) || {}).value || 0);
+    const nowMin = get('hour') * 60 + get('minute');
+    const targetMin = hour * 60 + minute;
+    let diffMin = targetMin - nowMin;
+    if (diffMin <= 0) diffMin += 24 * 60;
+    return diffMin * 60 * 1000;
+  }
+  const initialDelay = msUntilNext();
+  console.log(`[WHATSAPP_SCHEDULER] First run in ${Math.round(initialDelay / 60000)} minutes (daily at ${sendTime} ${timezone}). Real sending stays OFF unless Cloud API is configured, enabled, approved and dry-run=false.`);
+  setTimeout(() => { tick(); setInterval(tick, 24 * 60 * 60 * 1000).unref(); }, initialDelay).unref();
+}
+startWhatsAppScheduler();
+
+async function resolveWhatsAppEmployee(pool, paycode) {
+  const r = await pool.request().input('paycode', sql.VarChar(50), paycode)
+    .query(`SELECT TOP 1 LTRIM(RTRIM(paycode)) AS paycode, LTRIM(RTRIM(empname)) AS empname, LTRIM(RTRIM(companycode)) AS companycode, LTRIM(RTRIM(departmentcode)) AS departmentcode, LTRIM(RTRIM(telephone1)) AS telephone1 FROM dbo.tblemployee WHERE LTRIM(RTRIM(paycode)) = @paycode`);
+  if (!r.recordset[0]) return null;
+  const row = r.recordset[0];
+  return { paycode: String(row.paycode).trim(), empname: String(row.empname || '').trim(), companycode: String(row.companycode || '').trim(), departmentcode: String(row.departmentcode || '').trim(), telephone1: String(row.telephone1 || '').trim() };
+}
+
+async function upsertWhatsAppConsent(pool, entry) {
+  await pool.request()
+    .input('paycode', sql.VarChar(50), entry.paycode)
+    .input('whatsappnumber', sql.VarChar(20), entry.whatsappnumber || '')
+    .input('consentstatus', sql.VarChar(20), entry.consentstatus)
+    .input('consentat', sql.DateTime2, entry.consentat || null)
+    .input('consentsource', sql.VarChar(50), entry.consentsource || null)
+    .input('optedoutat', sql.DateTime2, entry.optedoutat || null)
+    .input('companycode', sql.VarChar(30), entry.companycode || null)
+    .input('departmentcode', sql.VarChar(30), entry.departmentcode || null)
+    .input('employeename', sql.NVarChar(120), entry.employeename || null)
+    .query(`MERGE ${whatsappEmployeeTable} WITH (HOLDLOCK) AS t USING (SELECT @paycode AS paycode) AS s ON t.paycode = s.paycode
+WHEN MATCHED THEN UPDATE SET whatsappnumber = @whatsappnumber, consentstatus = @consentstatus, consentat = COALESCE(@consentat, t.consentat), consentsource = COALESCE(@consentsource, t.consentsource), optedoutat = @optedoutat, companycode = COALESCE(@companycode, t.companycode), departmentcode = COALESCE(@departmentcode, t.departmentcode), employeename = COALESCE(@employeename, t.employeename), updateddate = SYSUTCDATETIME()
+WHEN NOT MATCHED THEN INSERT (paycode, whatsappnumber, consentstatus, consentat, consentsource, optedoutat, companycode, departmentcode, employeename) VALUES (@paycode, @whatsappnumber, @consentstatus, @consentat, @consentsource, @optedoutat, @companycode, @departmentcode, @employeename)
+OUTPUT $action;`);
+}
+
+/* ---- WhatsApp endpoints (HR-only, mirroring the Email endpoints) ---- */
+app.get('/api/whatsapp/config', requireDbConfig, authenticate, requireRole('HR'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    const cfg = await getWhatsAppConfig(pool);
+    const providerStatus = publicWhatsAppProviderStatus(await getWhatsAppProviderSettings(pool));
+    return res.json({ success: true, config: {
+      enabled: !!cfg.enabled, mode: String(cfg.mode || 'FREE_MANUAL'), sendtime: String(cfg.sendtime || '21:00'),
+      timezone: String(cfg.timezone || 'Asia/Kolkata'), eligiblecategory: String(cfg.eligiblecategory || ''),
+      dryrun: !!(cfg.dryrun), sendername: String(cfg.sendername || ''), templatename: String(cfg.templatename || ''),
+      templatelanguage: String(cfg.templatelanguage || 'en'), templatebody: String(cfg.templatebody || ''), approved: !!cfg.approved,
+    }, providerStatus, sqlPhoneField: 'telephone1' });
+  } catch (error) { return whatsappErrorResponse(res, error); }
+});
+
+app.post('/api/whatsapp/config', requireDbConfig, authenticate, requireRole('HR'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    await getWhatsAppConfig(pool);
+    const b = req.body || {};
+    const updates = [];
+    const rq = pool.request();
+    if (b.enabled !== undefined) { rq.input('enabled', sql.Bit, b.enabled ? 1 : 0); updates.push('enabled = @enabled'); }
+    if (b.mode !== undefined) { const mode = String(b.mode || '').trim().toUpperCase(); if (!WHATSAPP_MODES.includes(mode)) return res.status(400).json({ success: false, message: 'mode must be FREE_MANUAL or CLOUD_API.' }); rq.input('mode', sql.VarChar(20), mode); updates.push('mode = @mode'); }
+    if (b.sendtime !== undefined) { const t = String(b.sendtime || '').trim(); if (!/^\d{1,2}:\d{2}$/.test(t)) return res.status(400).json({ success: false, message: 'sendtime must be HH:MM.' }); rq.input('sendtime', sql.VarChar(5), t); updates.push('sendtime = @sendtime'); }
+    if (b.timezone !== undefined) { rq.input('timezone', sql.VarChar(64), String(b.timezone || 'Asia/Kolkata').slice(0, 64)); updates.push('timezone = @timezone'); }
+    if (b.eligiblecategory !== undefined) { rq.input('eligiblecategory', sql.VarChar(50), String(b.eligiblecategory || '').slice(0, 50) || null); updates.push('eligiblecategory = @eligiblecategory'); }
+    if (b.dryrun !== undefined) { rq.input('dryrun', sql.Bit, b.dryrun ? 1 : 0); updates.push('dryrun = @dryrun'); }
+    if (b.sendername !== undefined) { rq.input('sendername', sql.NVarChar(120), String(b.sendername || '').slice(0, 120)); updates.push('sendername = @sendername'); }
+    if (b.templatename !== undefined) { rq.input('templatename', sql.VarChar(200), String(b.templatename || '').slice(0, 200)); updates.push('templatename = @templatename'); }
+    if (b.templatelanguage !== undefined) { rq.input('templatelanguage', sql.VarChar(20), String(b.templatelanguage || 'en').slice(0, 20)); updates.push('templatelanguage = @templatelanguage'); }
+    if (b.templatebody !== undefined) { rq.input('templatebody', sql.NVarChar(sql.MAX), String(b.templatebody || '')); updates.push('templatebody = @templatebody'); }
+    if (b.approved !== undefined) { rq.input('approved', sql.Bit, b.approved ? 1 : 0); updates.push('approved = @approved'); }
+    if (!updates.length) return res.json({ success: true, message: 'Nothing to update.' });
+    rq.input('updatedby', sql.VarChar(50), String(req.user?.sub || 'HR').slice(0, 50));
+    await rq.query(`UPDATE ${whatsappConfigTable} SET ${updates.join(', ')}, updateddate = SYSUTCDATETIME(), updatedby = @updatedby WHERE id = (SELECT TOP 1 id FROM ${whatsappConfigTable} ORDER BY id)`);
+    return res.json({ success: true, message: 'WhatsApp configuration updated.' });
+  } catch (error) { return whatsappErrorResponse(res, error); }
+});
+
+app.get('/api/whatsapp/provider', requireDbConfig, authenticate, requireRole('HR'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    await ensureWhatsAppTables(pool);
+    const status = publicWhatsAppProviderStatus(await getWhatsAppProviderSettings(pool));
+    return res.json({ success: true, provider: status });
+  } catch (error) { return whatsappErrorResponse(res, error); }
+});
+
+app.post('/api/whatsapp/provider', requireDbConfig, authenticate, requireRole('HR'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    await ensureWhatsAppTables(pool);
+    const saved = await saveWhatsAppProviderSettings(pool, sql, req.body || {}, req.user?.sub);
+    return res.json({ success: true, ...saved });
+  } catch (error) { return whatsappErrorResponse(res, error); }
+});
+
+app.get('/api/whatsapp/health', requireDbConfig, authenticate, requireRole('HR'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    const cfg = await getWhatsAppConfig(pool);
+    const provider = await getWhatsAppProviderSettings(pool);
+    const enabled = cfg.enabled === true || cfg.enabled === 1;
+    const real = canSendReal(cfg, provider);
+    return res.json({ success: true, db: !!process.env.DB_SERVER, enabled, mode: String(cfg.mode || 'FREE_MANUAL'), dryRun: !!(cfg.dryrun), approved: !!cfg.approved, providerConfigured: provider.configured, canSendReal: real, hint: real ? '' : (provider.hint || 'Real sending is off (mode/enabled/approved/dry-run/provider).') });
+  } catch (error) { return whatsappErrorResponse(res, error); }
+});
+
+app.get('/api/whatsapp/eligibility', requireDbConfig, authenticate, requireRole('HR'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    const cfg = await getWhatsAppConfig(pool);
+    const { eligible, counts } = await loadWhatsAppEligible(pool, req, cfg);
+    return res.json({ success: true, counts, employees: eligible });
+  } catch (error) { return whatsappErrorResponse(res, error); }
+});
+
+app.get('/api/whatsapp/preview', requireDbConfig, authenticate, requireRole('HR'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    const cfg = await getWhatsAppConfig(pool);
+    const date = isValidIsoDate(req.query.date) ? req.query.date : indiaTodayISO();
+    const paycode = req.query.paycode ? String(req.query.paycode).trim() : null;
+    const previews = await buildWhatsAppPreviews(pool, req, cfg, date, paycode);
+    return res.json({ success: true, date, mode: String(cfg.mode || 'FREE_MANUAL'), dryRun: !!(cfg.dryrun), count: previews.length, previews });
+  } catch (error) { return whatsappErrorResponse(res, error); }
+});
+
+app.post('/api/whatsapp/export', requireDbConfig, authenticate, requireRole('HR'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    const cfg = await getWhatsAppConfig(pool);
+    const date = isValidIsoDate(req.body?.date) ? req.body.date : indiaTodayISO();
+    const paycode = req.body?.paycode ? String(req.body.paycode).trim() : null;
+    const previews = await buildWhatsAppPreviews(pool, req, cfg, date, paycode);
+    const esc = (v) => { const s = String(v ?? ''); return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+    const header = ['paycode', 'employeename', 'companycode', 'departmentcode', 'whatsappnumber', 'attendancedate', 'status', 'punchstatus', 'intime', 'outtime', 'graceused', 'graceremaining', 'message'];
+    const lines = [header.join(',')];
+    for (const p of previews) lines.push([p.paycode, p.empname, p.companycode, p.departmentcode, p.whatsappnumber, p.dateIso, p.status, p.punchStatus, p.inTime || '', p.outTime || '', p.graceUsed, p.graceRemaining, p.text].map(esc).join(','));
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="whatsapp-attendance-${date}.csv"`);
+    return res.send('\uFEFF' + lines.join('\r\n'));
+  } catch (error) { return whatsappErrorResponse(res, error); }
+});
+
+app.post('/api/whatsapp/send', requireDbConfig, authenticate, requireRole('HR'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    const cfg = await getWhatsAppConfig(pool);
+    const date = isValidIsoDate(req.body?.date) ? req.body.date : indiaTodayISO();
+    const paycode = req.body?.paycode ? String(req.body.paycode).trim() : null;
+    // Explicit dryRun:false attempts a real send — but canSendReal() still gates it.
+    const forceReal = req.body?.dryRun === false;
+    const result = await sendWhatsAppMessages(pool, req, cfg, date, paycode, forceReal);
+    return res.json({ success: true, date, mode: String(cfg.mode || 'FREE_MANUAL'), dryRun: !result.real, ...result });
+  } catch (error) { return whatsappErrorResponse(res, error); }
+});
+
+app.get('/api/whatsapp/log', requireDbConfig, authenticate, requireRole('HR'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    await ensureWhatsAppTables(pool);
+    const limit = Math.min(Number(req.query.limit || 100), 500);
+    const clauses = [];
+    const rq = pool.request();
+    if (req.query.date) { rq.input('attendancedate', sql.Date, req.query.date); clauses.push('attendancedate = @attendancedate'); }
+    if (req.query.paycode) { rq.input('paycode', sql.VarChar(50), String(req.query.paycode).trim()); clauses.push('paycode = @paycode'); }
+    if (req.query.status) { rq.input('status', sql.VarChar(20), String(req.query.status).trim()); clauses.push('status = @status'); }
+    const where = clauses.length ? 'WHERE ' + clauses.join(' AND ') : '';
+    const result = await rq.query(`SELECT TOP ${limit} id, paycode, employeename, companycode, departmentcode, messagetype, CONVERT(varchar(10), attendancedate, 23) AS attendancedate, recipientnumber, status, providermessageid, attemptcount, errormessage, CONVERT(varchar(19), createdat, 120) AS createdat, CONVERT(varchar(19), sentat, 120) AS sentat FROM ${whatsappLogTable} ${where} ORDER BY createdat DESC, id DESC`);
+    let rows = result.recordset;
+    if (req.hrCompanyScope && req.hrCompanyScope.length === 0) return res.status(403).json({ success: false, message: 'No company assigned to this HR admin.' });
+    if (req.hrCompanyScope) rows = rows.filter((r) => whatsappInScope(req, r.companycode));
+    return res.json({ success: true, rows });
+  } catch (error) { return whatsappErrorResponse(res, error); }
+});
+
+app.get('/api/whatsapp/consent', requireDbConfig, authenticate, requireRole('HR'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    await ensureWhatsAppTables(pool);
+    const result = await pool.request().query(`SELECT paycode, whatsappnumber, consentstatus, CONVERT(varchar(19), consentat, 120) AS consentat, consentsource, CONVERT(varchar(19), optedoutat, 120) AS optedoutat, companycode, departmentcode, employeename, CONVERT(varchar(19), updateddate, 120) AS updateddate FROM ${whatsappEmployeeTable} ORDER BY paycode`);
+    let rows = result.recordset;
+    if (req.hrCompanyScope && req.hrCompanyScope.length === 0) return res.status(403).json({ success: false, message: 'No company assigned to this HR admin.' });
+    if (req.hrCompanyScope) rows = rows.filter((r) => whatsappInScope(req, r.companycode));
+    return res.json({ success: true, rows });
+  } catch (error) { return whatsappErrorResponse(res, error); }
+});
+
+app.put('/api/whatsapp/consent', requireDbConfig, authenticate, requireRole('HR'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    await ensureWhatsAppTables(pool);
+    const paycodes = Array.isArray(req.body?.paycodes) ? req.body.paycodes.map((p) => String(p).trim()).filter(Boolean) : [];
+    const status = String(req.body?.status || 'Granted').trim();
+    if (!['Granted', 'Revoked', 'None'].includes(status)) return res.status(400).json({ success: false, message: 'status must be Granted, Revoked or None.' });
+    if (!paycodes.length) return res.status(400).json({ success: false, message: 'paycodes array is required.' });
+    const source = String(req.body?.source || 'HR').slice(0, 50);
+    let done = 0, skipped = 0;
+    const errors = [];
+    for (const paycode of paycodes) {
+      const emp = await resolveWhatsAppEmployee(pool, paycode);
+      if (!emp) { skipped++; errors.push(`${paycode}: not found`); continue; }
+      if (!whatsappInScope(req, emp.companycode)) { skipped++; errors.push(`${paycode}: out of scope`); continue; }
+      const number = normalizeWhatsAppNumber(req.body?.whatsappnumber || emp.telephone1);
+      if (status === 'Granted' && !number) { skipped++; errors.push(`${paycode}: no valid number`); continue; }
+      await upsertWhatsAppConsent(pool, { paycode, whatsappnumber: number || '', consentstatus: status, consentat: status === 'Granted' ? new Date() : null, consentsource: source, optedoutat: (status === 'Revoked' || status === 'None') ? new Date() : null, companycode: emp.companycode, departmentcode: emp.departmentcode, employeename: emp.empname });
+      done++;
+    }
+    return res.json({ success: true, done, skipped, errors });
+  } catch (error) { return whatsappErrorResponse(res, error); }
+});
+
+app.post('/api/whatsapp/consent/:paycode', requireDbConfig, authenticate, requireRole('HR'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    await ensureWhatsAppTables(pool);
+    const paycode = String(req.params.paycode || '').trim();
+    const status = String(req.body?.status || 'Granted').trim();
+    if (!['Granted', 'Revoked', 'None'].includes(status)) return res.status(400).json({ success: false, message: 'status must be Granted, Revoked or None.' });
+    const emp = await resolveWhatsAppEmployee(pool, paycode);
+    if (!emp) return res.status(404).json({ success: false, message: 'Employee not found.' });
+    if (!whatsappInScope(req, emp.companycode)) return res.status(403).json({ success: false, message: 'Employee belongs to a company outside your access.' });
+    const number = normalizeWhatsAppNumber(req.body?.whatsappnumber || emp.telephone1);
+    if (status === 'Granted' && !number) return res.status(400).json({ success: false, message: 'No valid WhatsApp number for this employee.' });
+    await upsertWhatsAppConsent(pool, { paycode, whatsappnumber: number || '', consentstatus: status, consentat: status === 'Granted' ? new Date() : null, consentsource: String(req.body?.source || 'HR').slice(0, 50), optedoutat: (status === 'Revoked' || status === 'None') ? new Date() : null, companycode: emp.companycode, departmentcode: emp.departmentcode, employeename: emp.empname });
+    return res.json({ success: true, paycode, status });
+  } catch (error) { return whatsappErrorResponse(res, error); }
+});
+
+app.get('/api/whatsapp/webhook', async (req, res) => {
+  try {
+    const mode = req.query['hub.mode'];
+    const token = req.query['hub.verify_token'];
+    const challenge = req.query['hub.challenge'];
+    const pool = await getPool();
+    await ensureWhatsAppTables(pool);
+    const settings = await getWhatsAppProviderSettings(pool);
+    const expected = settings.webhookVerifyToken || process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || '';
+    if (mode === 'subscribe' && expected && token === expected) return res.status(200).send(String(challenge || ''));
+    return res.status(403).send('Verification failed');
+  } catch (error) {
+    console.error('[WHATSAPP_WEBHOOK_VERIFY]', (error && error.message || error).toString().slice(0, 200));
+    return res.status(500).send('ERROR');
+  }
+});
+
 // EADDRINUSE ko crash ki jagah clear message banao: user ko exact fix command batao.
 // (npm run server dobara chalane se pehle purana node process band karna hota hai.)
 const server = app.listen(port, () => console.log(`Attendance API listening on port ${port}`));

@@ -1,0 +1,3 @@
+health=200
+absentmiss=404
+absentmiss3000=404

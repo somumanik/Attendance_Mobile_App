@@ -1,0 +1,23 @@
+
+=== HR Admin Reports website verification against http://localhost:3100 ===
+
+PASS :: Anonymous /hr/reports redirects to the login page :: HTTP 307 -> /login
+PASS :: Website HR login returns an auth cookie :: HTTP 200
+PASS :: Authenticated /hr/reports renders (HTTP 200) :: HTTP 200
+PASS :: Server render includes the HR portal shell :: emp-shell present
+PASS :: Bundle: Master Reports tab entry + dashboard markup
+PASS :: Bundle: report types, filters, KPI and chart wiring
+PASS :: Bundle: report API endpoints wired
+PASS :: Bundle: SuperAdmin permission UI offers View / Export Master Reports
+PASS :: Bundle: access-denied guard names the module
+PASS :: Website proxy: /api/hr/reports/filters works :: HTTP 200
+PASS :: Website proxy: /api/hr/reports/summary works :: HTTP 200
+PASS :: Website proxy: /api/hr/reports/register works (detailed records) :: HTTP 200, 50 row(s)
+PASS :: Website proxy: unknown company id returns ZERO rows for the unrestricted account :: HTTP 200, 0 row(s)
+PASS :: Create scoped test HR Admin for the web proxy attack
+PASS :: Scoped HR Admin login through the website :: HTTP 200
+PASS :: Website proxy: unauthorised company id rejected for scoped admin (403) :: HTTP 403
+PASS :: Website proxy: Excel export with unauthorised company id rejected for scoped admin (403) :: HTTP 403
+PASS :: Website proxy: Excel export downloads .xlsx bytes :: HTTP 200, 1467554 bytes
+
+=== RESULT: 18 passed, 0 failed ===

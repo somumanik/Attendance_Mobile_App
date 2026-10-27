@@ -7,6 +7,7 @@
 
 import { useRef, useState } from 'react';
 import apiFetch from '../../lib/api';
+import { HrCan } from './HrAccess';
 
 const inputCls = 'w-full mt-1 px-3 py-2 rounded-xl bg-[var(--input-bg)] border border-[var(--border)] text-xs text-[var(--text)] outline-none focus:border-[var(--accent)]';
 const labelCls = 'text-[10px] uppercase font-bold text-[var(--muted)]';
@@ -235,15 +236,21 @@ export default function HrEmployeeCredentialsSection() {
               <div><label className={labelCls}>New Password</label><input type="password" autoComplete="off" value={password} onChange={(e) => setPassword(e.target.value)} className={inputCls} placeholder="••••••••" /></div>
               <div><label className={labelCls}>Confirm Password</label><input type="password" autoComplete="off" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} className={inputCls} placeholder="••••••••" /></div>
               <p className="text-[10px] text-[var(--muted)] leading-relaxed">Password minimum 8 characters + letters &amp; numbers. Password reset se employee ka PIN change NAHI hota.</p>
-              <button type="button" onClick={() => resetPassword(false)} disabled={pwBusy} className="w-full py-2.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25 text-xs font-bold transition disabled:opacity-50">
-                {pwBusy ? 'Updating...' : 'Reset Password'}
-              </button>
-              <button type="button" onClick={() => resetPassword(true)} disabled={pwBusy} className="w-full py-2.5 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 hover:bg-amber-500/25 text-xs font-bold transition disabled:opacity-50">
-                {pwBusy ? 'Updating...' : 'Set Temporary Password'}
-              </button>
-              <button type="button" onClick={forcePasswordChange} disabled={forceBusy} className="w-full py-2.5 rounded-xl bg-white/5 border border-[var(--border)] hover:bg-white/10 text-[var(--text)] text-xs font-bold transition disabled:opacity-50">
-                {forceBusy ? 'Forcing...' : 'Force Password Change'}
-              </button>
+              <HrCan module="credentials" action="edit">
+                <button type="button" onClick={() => resetPassword(false)} disabled={pwBusy} className="w-full py-2.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25 text-xs font-bold transition disabled:opacity-50">
+                  {pwBusy ? 'Updating...' : 'Reset Password'}
+                </button>
+              </HrCan>
+              <HrCan module="credentials" action="edit">
+                <button type="button" onClick={() => resetPassword(true)} disabled={pwBusy} className="w-full py-2.5 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 hover:bg-amber-500/25 text-xs font-bold transition disabled:opacity-50">
+                  {pwBusy ? 'Updating...' : 'Set Temporary Password'}
+                </button>
+              </HrCan>
+              <HrCan module="credentials" action="edit">
+                <button type="button" onClick={forcePasswordChange} disabled={forceBusy} className="w-full py-2.5 rounded-xl bg-white/5 border border-[var(--border)] hover:bg-white/10 text-[var(--text)] text-xs font-bold transition disabled:opacity-50">
+                  {forceBusy ? 'Forcing...' : 'Force Password Change'}
+                </button>
+              </HrCan>
             </div>
           </div>
 
@@ -254,12 +261,16 @@ export default function HrEmployeeCredentialsSection() {
               <div><label className={labelCls}>New 4-Digit PIN</label><input type="password" inputMode="numeric" autoComplete="off" maxLength={4} value={pin} onChange={(e) => setPin(digitsOnly(e.target.value))} className={inputCls} placeholder="••••" /></div>
               <div><label className={labelCls}>Confirm 4-Digit PIN</label><input type="password" inputMode="numeric" autoComplete="off" maxLength={4} value={confirmPin} onChange={(e) => setConfirmPin(digitsOnly(e.target.value))} className={inputCls} placeholder="••••" /></div>
               <p className="text-[10px] text-[var(--muted)] leading-relaxed">Exactly 4 numbers. PIN reset se employee ka password change NAHI hota.</p>
-              <button type="button" onClick={resetPin} disabled={pinBusy} className="w-full py-2.5 rounded-xl bg-sky-500/15 border border-sky-500/30 text-sky-300 hover:bg-sky-500/25 text-xs font-bold transition disabled:opacity-50">
-                {pinBusy ? 'Updating...' : 'Reset PIN'}
-              </button>
-              <button type="button" onClick={requirePinSetup} disabled={requirePinBusy} className="w-full py-2.5 rounded-xl bg-white/5 border border-[var(--border)] hover:bg-white/10 text-[var(--text)] text-xs font-bold transition disabled:opacity-50">
-                {requirePinBusy ? 'Requiring...' : 'Require PIN Setup Again'}
-              </button>
+              <HrCan module="credentials" action="edit">
+                <button type="button" onClick={resetPin} disabled={pinBusy} className="w-full py-2.5 rounded-xl bg-sky-500/15 border border-sky-500/30 text-sky-300 hover:bg-sky-500/25 text-xs font-bold transition disabled:opacity-50">
+                  {pinBusy ? 'Updating...' : 'Reset PIN'}
+                </button>
+              </HrCan>
+              <HrCan module="credentials" action="edit">
+                <button type="button" onClick={requirePinSetup} disabled={requirePinBusy} className="w-full py-2.5 rounded-xl bg-white/5 border border-[var(--border)] hover:bg-white/10 text-[var(--text)] text-xs font-bold transition disabled:opacity-50">
+                  {requirePinBusy ? 'Requiring...' : 'Require PIN Setup Again'}
+                </button>
+              </HrCan>
             </div>
           </div>
         </div>

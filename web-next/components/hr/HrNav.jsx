@@ -10,12 +10,14 @@ const LINKS = [
   { href: '/hr/employees', label: 'Employees' },
   { href: '/hr/audit', label: 'Audit' },
   { href: '/hr/analytics', label: 'Analytics' },
+  { href: '/hr/reports', label: 'Master Reports' },
   { href: '/hr/celebrations', label: 'Celebrations' },
   { href: '/hr/marriage', label: 'Marriage' },
   { href: '/hr/leave', label: 'Leave' },
   { href: '/hr/salary', label: 'Salary' },
   { href: '/hr/holidays', label: 'Holidays' },
   { href: '/hr/email', label: 'Email' },
+  { href: '/hr/whatsapp', label: 'WhatsApp' },
 ];
 
 export default function HrNav() {

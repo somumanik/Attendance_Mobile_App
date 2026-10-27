@@ -1,0 +1,66 @@
+
+=== Master Reports permission/access verification against http://localhost:4100 ===
+
+PASS :: Setup: temporary SuperAdmin account created (app-owned store)
+PASS :: Scenario 8: SuperAdmin login works
+PASS :: Scenario 8: HR Admin (bootstrap) login works
+PASS :: Catalog: reports module is displayed as "Master Reports" :: {"key":"reports","label":"Master Reports"}
+PASS :: Catalog: internal key stays `reports` (no duplicate module keys)
+PASS :: Catalog: Daily Master stays a separate, unchanged module
+PASS :: Catalog: other module labels unchanged
+PASS :: Catalog: action list unchanged (View/Export included)
+PASS :: Console: HR Admin created with company assignment :: HTTP 201
+PASS :: Scenario 8: new HR Admin login works
+PASS :: Console: permissions load for the account (includes Master Reports row) :: {"view":true,"create":false,"edit":false,"delete":false,"import":false,"export":false,"approve":false,"email":false,"placement":null,"visible":null}
+NOTE :: Default for a new account (existing project convention): reports.view=true, reports.export=false (View default on, Export default off).
+PASS :: Scenario 1: SuperAdmin saves View=false (console save confirmed) :: HTTP 200
+PASS :: Scenario 1: /api/me reports Master Reports View=false after save
+PASS :: Scenario 1: report summary DENIED without View :: HTTP 403 PERMISSION_DENIED
+PASS :: Scenario 1: detailed register DENIED without View :: HTTP 403
+PASS :: Scenario 1: report filters DENIED without View :: HTTP 403
+PASS :: Scenario 1: Excel export DENIED without View :: HTTP 403
+PASS :: Scenario 2: SuperAdmin saves View=true (console save confirmed) :: HTTP 200
+PASS :: Scenario 2: saved permission loads correctly after reload
+PASS :: Scenario 2: /api/me shows View Master Reports after re-sign-in
+PASS :: Scenario 2: Master Reports summary works after grant (refresh) :: HTTP 200
+PASS :: Scenario 2: detailed register works after grant :: HTTP 200, 50 row(s)
+PASS :: Scenario 2: report filters work after grant :: HTTP 200
+PASS :: Scenario 4: viewing works while Export is denied (summary still 200)
+PASS :: Scenario 4: Excel export blocked server-side when Export is denied :: HTTP 403 action=export
+PASS :: Export is subject to View: export denied when View is revoked (even with Export on) :: HTTP 403 action=view
+PASS :: Scenario 5: SuperAdmin saves View=true + Export=true (confirmed) :: HTTP 200
+PASS :: Scenario 5: Master Reports summary works (View + Export) :: HTTP 200
+PASS :: Scenario 5: authorised Excel download works (.xlsx) :: HTTP 200
+PASS :: Scenario 5: download filename is Master-Reports_*.xlsx :: attachment; filename="Master-Reports_2026-10-19_2026-10-26.xlsx"
+PASS :: Workbook: titled "Master Reports — Attendance Report" :: Master Reports — Attendance Report
+PASS :: Workbook: downloaded rows limited to the assigned company :: 720 row(s), 0 outside
+PASS :: Scenario 3: SuperAdmin revokes View (same account, no re-create) :: HTTP 200
+PASS :: Scenario 3: revoke takes effect on the NEXT request (open session) :: HTTP 403
+PASS :: Scenario 3: export also denied after View revoke :: HTTP 403
+PASS :: Scenario 3: fresh sign-in after revoke is denied too :: HTTP 403
+PASS :: Scenario 6: every register row belongs to the assigned company :: 50 row(s)
+PASS :: Scenario 6: filter options only offer the assigned company :: ["001"]
+PASS :: Scenario 6: summary rejects another company id (403 COMPANY_FORBIDDEN) :: HTTP 403 COMPANY_FORBIDDEN
+PASS :: Scenario 6: Excel export rejects another company id (403) :: HTTP 403
+PASS :: Scenario 6: real other-company code rejected too (403) :: HTTP 403
+PASS :: Scenario 6: out-of-scope employee paycode rejected (403) :: HTTP 403 COMPANY_FORBIDDEN
+PASS :: Console: multi-company HR Admin created :: HTTP 201
+PASS :: Scenario 7: multi-company filters offer exactly the assigned companies :: ["001","002"]
+PASS :: Scenario 7: comparisons run only between assigned companies :: ["002","001"]
+PASS :: Scenario 7: third company rejected for multi-company admin (403) :: HTTP 403
+PASS :: Scenario 9: employee login route intact (missing creds -> 400) :: HTTP 400
+PASS :: Scenario 9: employee login still rejects invalid credentials :: HTTP 401
+PASS :: Scenario 9: employee APIs still require the employee session (401) :: HTTP 401
+NOTE :: Scenario 9: mobile app source untouched for employee screens/navigation (only the SuperAdmin permission labels changed); see git status in the report.
+PASS :: Scenario 10: Daily Master Report API unchanged (200) :: HTTP 200
+PASS :: Scenario 10: Executive Overview API unchanged (200) :: HTTP 200
+PASS :: Scenario 10: Category Analytics API unchanged (200) :: HTTP 200
+PASS :: Scenario 10: shared /api/hr/filters unchanged (200) :: HTTP 200
+PASS :: Scenario 10: employee roster API unchanged (200) :: HTTP 200
+PASS :: Scenario 10: /api/me unchanged for the bootstrap account (full access preserved)
+PASS :: Preservation: every NON-reports module permission unchanged after all saves
+PASS :: Preservation: Export is NOT auto-granted to new accounts (existing default kept) :: default export=false
+PASS :: Preservation: SuperAdmin console lists both accounts with separate company assignments :: companies kept separate from module permissions
+PASS :: Cleanup: test accounts removed :: 2 HR Admin + 1 SuperAdmin
+
+=== RESULT: 59 passed, 0 failed ===

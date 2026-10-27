@@ -88,6 +88,35 @@ const statusColor = (status) => {
   return '#94A3B8';
 };
 
+// ----------------------------------------------------------------------------
+// Today's Status card palette — SCOPED to the Employee Dashboard's Today's
+// Status card only (UI colour polish, no shared theme/global style changes).
+// Royal blue card; the status/timings sit on soft-white chips so the royal
+// green/red accents stay clearly readable (text contrast is the priority).
+// ----------------------------------------------------------------------------
+const TODAY_CARD = {
+  bg: '#3155D9',                    // Royal Blue (solid — app has no gradient lib)
+  border: 'rgba(255,255,255,0.18)', // subtle premium edge
+  heading: 'rgba(255,255,255,0.92)', // soft white
+  muted: 'rgba(255,255,255,0.75)',  // missing value / placeholder
+  chipBg: '#FFFFFF',
+  green: '#16A36A',                 // Royal Green — Present / In time
+  red: '#E5484D',                   // Royal Red — Absent / Out time
+  amber: '#D97706',                 // Miss Punch (existing app language)
+  teal: '#0D9488',                  // Week Off / Holiday (existing app language)
+  slate: '#64748B',                 // unknown-but-real status
+};
+// Card-local status accent. NOTE: statusColor() above is intentionally left
+// untouched — it still drives the trend/distribution charts.
+const todayStatusAccent = (status) => {
+  const s = clean(status).toLowerCase();
+  if (s.includes('present')) return TODAY_CARD.green;
+  if (s.includes('absent')) return TODAY_CARD.red;
+  if (s.includes('miss')) return TODAY_CARD.amber;
+  if (s.includes('week') || s.includes('holiday')) return TODAY_CARD.teal;
+  return TODAY_CARD.slate;
+};
+
 /**
  * Employee Dashboard Screen Component
  */
@@ -213,6 +242,14 @@ export const EmployeeDashboardScreen = () => {
 
   const todayStatus = todayRow ? statusOf(todayRow) : (rows.length ? PLACEHOLDER : 'No record');
 
+  // Real In/Out values for the Today's Status card. A missing value keeps the
+  // existing PLACEHOLDER rendering — never displayed like an actual time.
+  const inTimeText = clean(todayRow?.inTime);
+  const outTimeText = clean(todayRow?.outTime);
+  // A real status gets the accent chip; the placeholder / 'No record' states
+  // stay muted, exactly like the existing behaviour.
+  const hasTodayStatus = todayStatus !== PLACEHOLDER && clean(todayStatus) !== 'No record';
+
   /**
    * Today's organisation celebrations, flattened from the real celebrations
    * response. The logged-in employee is already excluded by the backend
@@ -249,15 +286,57 @@ export const EmployeeDashboardScreen = () => {
             <Text style={[styles.greetingName, { color: theme.textPrimary }]} numberOfLines={1}>{employeeName}</Text>
             <Text style={[styles.greetingMeta, { color: theme.textTertiary }]}>Paycode: {paycode || PLACEHOLDER}</Text>
           </View>
-          <View style={[styles.todayStatusCard, { backgroundColor: theme.primary }]}>
-            <Text style={[styles.todayStatusLabel, { color: 'rgba(255,255,255,0.9)' }]}>Today's Status</Text>
-            <Text style={[styles.todayStatusValue, { color: theme.textOnPrimary }]} numberOfLines={1}>{todayStatus}</Text>
-            <Text style={[styles.todayStatusTime, { color: 'rgba(255,255,255,0.85)' }]}>
-              {`In: ${clean(todayRow?.inTime) || PLACEHOLDER}`}
-            </Text>
-            <Text style={[styles.todayStatusTime, { color: 'rgba(255,255,255,0.85)' }]}>
-              {`Out: ${clean(todayRow?.outTime) || PLACEHOLDER}`}
-            </Text>
+          <View style={[styles.todayStatusCard, { backgroundColor: TODAY_CARD.bg, borderColor: TODAY_CARD.border }]}>
+            <Text style={[styles.todayStatusLabel, { color: TODAY_CARD.heading }]}>Today's Status</Text>
+            {hasTodayStatus ? (
+              <View style={styles.todayStatusPill}>
+                <View style={[styles.todayStatusDot, { backgroundColor: todayStatusAccent(todayStatus) }]} />
+                <Text
+                  style={[styles.todayStatusValue, { color: todayStatusAccent(todayStatus) }]}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.75}
+                >
+                  {todayStatus}
+                </Text>
+              </View>
+            ) : (
+              <Text style={[styles.todayStatusValue, { color: TODAY_CARD.muted }]} numberOfLines={1}>{todayStatus}</Text>
+            )}
+            <View style={styles.todayStatusRow}>
+              <Text style={[styles.todayStatusTime, { color: TODAY_CARD.heading }]}>In:</Text>
+              {inTimeText ? (
+                <View style={styles.todayStatusChip}>
+                  <Text
+                    style={[styles.todayStatusChipText, { color: TODAY_CARD.green }]}
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.8}
+                  >
+                    {inTimeText}
+                  </Text>
+                </View>
+              ) : (
+                <Text style={[styles.todayStatusTime, { color: TODAY_CARD.muted }]}>{PLACEHOLDER}</Text>
+              )}
+            </View>
+            <View style={styles.todayStatusRow}>
+              <Text style={[styles.todayStatusTime, { color: TODAY_CARD.heading }]}>Out:</Text>
+              {outTimeText ? (
+                <View style={styles.todayStatusChip}>
+                  <Text
+                    style={[styles.todayStatusChipText, { color: TODAY_CARD.red }]}
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.8}
+                  >
+                    {outTimeText}
+                  </Text>
+                </View>
+              ) : (
+                <Text style={[styles.todayStatusTime, { color: TODAY_CARD.muted }]}>{PLACEHOLDER}</Text>
+              )}
+            </View>
           </View>
         </View>
 
@@ -591,10 +670,15 @@ const styles = StyleSheet.create({
   greetingTitle: { fontSize: 20, fontWeight: '700' },
   greetingName: { fontSize: 26, fontWeight: '700', marginTop: 2 },
   greetingMeta: { fontSize: 12, marginTop: 2 },
-  todayStatusCard: { width: 160, maxWidth: '100%', flexShrink: 1, borderRadius: 16, padding: 16, alignItems: 'center', justifyContent: 'center' },
-  todayStatusLabel: { fontSize: 11, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 },
+  todayStatusCard: { width: 160, maxWidth: '100%', flexShrink: 1, borderRadius: 16, padding: 16, alignItems: 'center', justifyContent: 'center', borderWidth: 1, shadowColor: '#0F172A', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.18, shadowRadius: 8, elevation: 4 },
+  todayStatusLabel: { fontSize: 11, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 },
+  todayStatusPill: { flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 999, backgroundColor: '#FFFFFF', paddingHorizontal: 12, paddingVertical: 4, maxWidth: '100%' },
+  todayStatusDot: { width: 7, height: 7, borderRadius: 4 },
   todayStatusValue: { fontSize: 16, fontWeight: '700' },
-  todayStatusTime: { fontSize: 11, marginTop: 3 },
+  todayStatusRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 5, maxWidth: '100%' },
+  todayStatusTime: { fontSize: 11, fontWeight: '600' },
+  todayStatusChip: { borderRadius: 8, backgroundColor: '#FFFFFF', paddingHorizontal: 8, paddingVertical: 2, maxWidth: '100%' },
+  todayStatusChipText: { fontSize: 11.5, fontWeight: '700' },
   periodLabel: { fontSize: 12, marginBottom: 10 },
   stateBox: { paddingVertical: 40, alignItems: 'center', gap: 10 },
   stateText: { fontSize: 13 },

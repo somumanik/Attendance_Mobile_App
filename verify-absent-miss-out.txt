@@ -1,0 +1,40 @@
+
+=== Absent & Miss Punch Monitor verification against http://localhost:4000 ===
+
+PASS :: Bootstrap HR Admin login works
+PASS :: Historical date with register data found :: 2026-10-25
+PASS :: today: monitor summary returns KPIs + trend + comparison :: HTTP 200
+PASS :: today: KPI shape complete
+PASS :: yesterday: monitor summary returns KPIs + trend + comparison :: HTTP 200
+PASS :: yesterday: KPI shape complete
+PASS :: historical: monitor summary returns KPIs + trend + comparison :: HTTP 200
+PASS :: historical: KPI shape complete
+PASS :: Date range: trend covers each day in range :: HTTP 200, 7 day(s)
+PASS :: Drill-down (all statuses) loads for the historical date :: 296 row(s)
+PASS :: KPIs exactly match the drill-down rows (partition, no double count) :: 296 row(s)
+PASS :: Same employee never appears twice for the same date :: 296 row(s)
+PASS :: Absent never overlaps Holiday / Weekly Off / Leave / Present / Miss Punch
+PASS :: Drill-down filter status=Absent returns only Absent :: HTTP 200, 0 row(s)
+PASS :: Drill-down filter status=Miss Punch returns only Miss Punch :: HTTP 200, 0 row(s)
+PASS :: Category filter keeps rows in that category :: HTTP 200
+PASS :: Department filter keeps rows in that department :: HTTP 200
+PASS :: Company filter limits comparison to that company :: HTTP 200
+PASS :: Monitor Excel export returns .xlsx :: HTTP 200
+PASS :: Export workbook contains the required sheets :: Monitor Summary, Company Status Summary, Absent Employees, Miss Punch Employees, Detailed Register
+PASS :: Exported Absent sheet only lists Absent rows :: 0 row(s)
+PASS :: Exported Miss Punch sheet only lists Miss Punch rows :: 0 row(s)
+PASS :: Temp SuperAdmin login works
+PASS :: Scoped + multi HR Admins created via console :: HTTP 201/201
+PASS :: Single-company HR Admin login works
+PASS :: Single-company: monitor comparison limited to assigned company :: HTTP 200
+PASS :: Single-company: drill-down rows limited to assigned company :: HTTP 200, 90 row(s)
+PASS :: Single-company: unassigned company rejected (403) :: HTTP 403 COMPANY_FORBIDDEN
+PASS :: Single-company: export for unassigned company rejected (403) :: HTTP 403
+PASS :: Multi-company: comparison only between assigned companies :: ["002","001"]
+PASS :: Multi-company: third company rejected (403) :: HTTP 403
+PASS :: View without Export: monitor summary still works :: HTTP 200
+PASS :: View without Export: monitor export blocked (403 PERMISSION_DENIED) :: HTTP 403 PERMISSION_DENIED
+PASS :: Revoke View: monitor summary denied (403 PERMISSION_DENIED) :: HTTP 403
+PASS :: Cleanup: test accounts removed :: 2 HR + 1 SA
+
+=== RESULT: 35 passed, 0 failed ===

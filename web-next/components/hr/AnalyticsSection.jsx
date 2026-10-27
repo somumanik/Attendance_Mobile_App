@@ -66,7 +66,7 @@ export default function AnalyticsSection() {
             <div className={`w-10 h-10 rounded-xl ${color} flex items-center justify-center text-lg`}><i className={`fas ${icon}`}></i></div>
             <div><h4 className="font-bold text-sm text-[var(--text)]">{title}</h4><p className="text-[10px] text-[var(--muted)]">{period}</p></div>
           </div>
-          <span className={`text-2xl font-extrabold ${subClass}`}>{Number(value || 0).toLocaleString()}</span>
+          <span className={`text-2xl font-extrabold ${subClass}`}>{Number(value || 0).toLocaleString('en-IN')}</span>
         </div>
         <div className="w-full bg-white/10 rounded-full h-2"><div className={`${barColor} h-2 rounded-full transition-all duration-500`} style={{ width: `${pctStaff(value)}%` }}></div></div>
         <p className={`text-[11px] ${subClass} font-semibold mt-2`}>{pctStaff(value)}% of Staff</p>

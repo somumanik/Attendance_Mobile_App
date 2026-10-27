@@ -1,0 +1,6 @@
+health4000=200
+reports4000=404
+catalog4000=401
+reports3000=404
+reports4100=401
+reports3100=401

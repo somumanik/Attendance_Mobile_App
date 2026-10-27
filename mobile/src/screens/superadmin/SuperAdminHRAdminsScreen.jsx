@@ -34,6 +34,14 @@ const ACTION_LABELS = {
   import: 'Import', export: 'Export', approve: 'Approve', email: 'Email',
 };
 
+/* Master Reports is configured with the EXISTING view/export actions; the chips
+   are labelled with the permission names the console documents for it. */
+const actionChipLabel = (moduleKey, action) => {
+  if (moduleKey === 'reports' && action === 'view') return 'View Master Reports';
+  if (moduleKey === 'reports' && action === 'export') return 'Export Master Reports';
+  return ACTION_LABELS[action] || action;
+};
+
 export const SuperAdminHRAdminsScreen = () => {
   const [admins, setAdmins] = useState([]);
   const [modules, setModules] = useState([]);
@@ -368,6 +376,12 @@ export const SuperAdminHRAdminsScreen = () => {
                 {modules.map((mod) => (
                   <View key={mod.key} style={styles.moduleRow}>
                     <Text style={styles.moduleLabel}>{mod.label}</Text>
+{mod.key === 'reports' ? (
+<Text style={styles.meta}>
+View Master Reports — access to the Master Reports page and its permitted data.
+Export Master Reports — Excel export (requires View; company scope always applies).
+</Text>
+) : null}
                     {/* Phase 4.4 — Visible / Hidden is INDEPENDENT of the action
                         permissions below and of the Primary tab / More menu placement:
                         it only controls whether the section appears at all. Hidden also
@@ -389,7 +403,7 @@ export const SuperAdminHRAdminsScreen = () => {
                         const on = (draft[mod.key] || {})[action] === true;
                         return (
                           <TouchableOpacity key={action} onPress={() => toggleAction(mod.key, action)} style={[styles.chip, on && styles.chipOn]}>
-                            <Text style={[styles.chipText, on && styles.chipTextOn]}>{ACTION_LABELS[action] || action}</Text>
+                            <Text style={[styles.chipText, on && styles.chipTextOn]}>{actionChipLabel(mod.key, action)}</Text>
                           </TouchableOpacity>
                         );
                       })}

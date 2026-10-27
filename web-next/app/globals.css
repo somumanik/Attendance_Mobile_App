@@ -15,7 +15,11 @@
 .portal-sidebar { background: color-mix(in srgb, var(--surface-solid) 82%, transparent); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border-right: 1px solid var(--border); }
 .portal-header { background: color-mix(in srgb, var(--surface-solid) 70%, transparent); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border-bottom: 1px solid var(--border); }
 .portal-mobile-nav { background: color-mix(in srgb, var(--surface-solid) 95%, transparent); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border-top: 1px solid var(--border); }
-.fade-in { animation: fadeIn .35s ease-out forwards; }
+/* fadeIn: `forwards` fill-mode pe transform persist rehta tha (translateY(0)),
+   jisse <main> position:fixed descendants (modals) ka containing block ban jata
+   tha aur modal page scroll ke saath upar-neeche move karta tha. Fill-mode hata
+   diya gaya — animation ke baad transform none ho jata hai, visual same rehta hai. */
+.fade-in { animation: fadeIn .35s ease-out; }
 @keyframes fadeIn { from { opacity:0; transform: translateY(8px);} to {opacity:1; transform: translateY(0);} }
 .pulse-dot { animation: pulseGlow 2s infinite; }
 @keyframes pulseGlow { 0%,100%{opacity:1;transform:scale(1);} 50%{opacity:.4;transform:scale(1.15);} }
@@ -40,6 +44,16 @@
 .portal-table thead th { padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,.1); color: #94a3b8; text-transform: uppercase; font-size: 10px; letter-spacing: .04em; }
 .portal-table tbody td { padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,.05); color: #e2e8f0; }
 .portal-table tbody tr:hover { background: rgba(99,102,241,.08); }
+
+/* Independent section-wise table scrolling (Salary / data-heavy sections).
+   Har table ka apna scroll container: vertical max-height viewport-based,
+   horizontal scroll preserve, wheel scroll chain page tak nahi jata, aur
+   column headers sticky. Data kam ho to container content jitna hi rehta hai.
+   min-width:0 + max-width:100%: wide table ki min-content width container ko
+   (aur upar layout ko) expand nahi karti — horizontal overflow yahin scroll hota hai. */
+.table-scroll { overflow: auto; max-height: 60vh; overscroll-behavior: contain; min-width: 0; max-width: 100%; }
+.table-scroll .portal-table thead th { position: sticky; top: 0; z-index: 2; background: var(--surface-solid); box-shadow: inset 0 -1px 0 rgba(255,255,255,.12); }
+.table-scroll .portal-table tbody td { background: transparent; }
 .badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 999px; font-size: 10px; font-weight: 700; }
 .badge--present { background: rgba(16,185,129,.15); color: #34d399; border: 1px solid rgba(16,185,129,.3); }
 .badge--absent { background: rgba(244,63,94,.15); color: #fb7185; border: 1px solid rgba(244,63,94,.3); }
@@ -617,6 +631,225 @@ body {
   gap: 10px;
 }
 
+/* ===========================================================================
+   Employee Profile tab — page-scoped styles (sirf /employee/profile).
+   Mobile EmployeeProfileScreen ke information/behaviour parity ke liye, website
+   ke existing theme tokens (--surface, --surface-solid, --border, --text,
+   --muted, --accent, --on-accent, --ok, --err-soft-*) par based — Theme Selector
+   ke chaaron themes me bina reload ke match karta hai.
+   =========================================================================== */
+.prof { display: flex; flex-direction: column; gap: 16px; --prof-ok-ink: color-mix(in srgb, var(--ok) 65%, var(--text)); --prof-id-bg: var(--accent-2); --prof-id-ink: var(--on-accent); }
+[data-theme='light'] .prof, [data-theme='emerald'] .prof { --prof-id-bg: var(--accent); }
+
+/* Header: avatar + identity + employee ID card */
+.prof-hero { display: flex; flex-wrap: wrap; align-items: center; gap: 18px; }
+.prof-hero__id { display: flex; align-items: center; gap: 14px; flex: 1; min-width: 240px; }
+.prof-avatar {
+  width: 64px; height: 64px; flex-shrink: 0; border-radius: 32px;
+  display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%);
+  color: var(--on-accent); font-size: 1.6rem; font-weight: 800;
+}
+.prof-hero__meta { flex: 1; min-width: 0; }
+.prof-hero__name {
+  margin: 0; font-size: 1.25rem; font-weight: 800; color: var(--text);
+  overflow-wrap: anywhere;
+}
+.prof-hero__role { margin: 2px 0 0; font-size: 0.9rem; color: var(--muted); overflow-wrap: anywhere; }
+.prof-hero__badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.prof-badge {
+  padding: 3px 10px; border-radius: 999px; font-size: 11px; font-weight: 700;
+  max-width: 100%; overflow-wrap: anywhere;
+}
+.prof-badge--accent { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent-soft); border: 1px solid var(--accent-border); }
+.prof-badge--ok { background: color-mix(in srgb, var(--ok) 14%, transparent); color: var(--prof-ok-ink); }
+.prof-badge--muted { background: color-mix(in srgb, var(--muted) 16%, transparent); color: var(--muted); }
+
+.prof-idcard {
+  flex: 1; min-width: 240px; border-radius: 14px; padding: 14px 16px;
+  background: linear-gradient(135deg, var(--prof-id-bg) 0%, color-mix(in srgb, var(--prof-id-bg) 82%, #000) 100%);
+  color: var(--prof-id-ink);
+}
+.prof-idcard__row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.prof-idcard__row--foot { margin-top: 10px; }
+.prof-idcard__label { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; opacity: .85; }
+.prof-idcard__chip {
+  padding: 3px 12px; border-radius: 10px; font-size: 0.85rem; font-weight: 800;
+  background: color-mix(in srgb, var(--prof-id-ink) 18%, transparent);
+  overflow-wrap: anywhere;
+}
+.prof-idcard__value { font-weight: 700; overflow-wrap: anywhere; }
+
+/* Section heads, hints, read-only rows */
+.prof-sec-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.prof-sec-title { margin: 0 0 6px; }
+.prof-lock {
+  padding: 3px 9px; border-radius: 999px; font-size: 9.5px; font-weight: 800;
+  letter-spacing: .04em; color: var(--accent-soft);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: 1px solid var(--accent-border);
+}
+.prof-hint { margin: 0 0 10px; font-size: 0.78rem; color: var(--muted); }
+.prof-hint--foot { margin: 10px 0 0; }
+.prof-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; }
+.prof-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 9px 12px; border-radius: 10px;
+  background: var(--surface-solid); border: 1px solid var(--border);
+}
+.prof-row__label { font-size: 0.78rem; color: var(--muted); flex-shrink: 0; }
+.prof-row__value {
+  font-size: 0.85rem; font-weight: 700; color: var(--text);
+  text-align: right; min-width: 0; overflow-wrap: anywhere;
+}
+
+/* Self-service edit form + messages */
+.prof-edit {
+  padding: 6px 12px; border-radius: 999px; font-size: 11.5px; font-weight: 800;
+  font-family: inherit; cursor: pointer;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent-soft); border: 1px solid var(--accent-border);
+}
+.prof-edit:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.prof-msg {
+  padding: 10px 12px; border-radius: 10px; border: 1px solid; margin-bottom: 12px;
+  font-size: 0.82rem; font-weight: 600;
+}
+.prof-msg--ok { background: color-mix(in srgb, var(--ok) 12%, transparent); border-color: color-mix(in srgb, var(--ok) 32%, transparent); color: var(--prof-ok-ink); }
+.prof-msg--error { background: var(--err-soft-bg); border-color: color-mix(in srgb, var(--err) 32%, transparent); color: var(--err-soft-text); }
+.prof-form { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 0 14px; }
+.prof-actions { display: flex; flex-wrap: wrap; gap: 10px; grid-column: 1 / -1; margin-top: 4px; }
+.prof-actions .btn { flex: 1; min-width: 130px; }
+
+/* Security rows */
+.prof-security { flex-direction: column; }
+.prof-sec-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 14px; border-radius: 12px; text-decoration: none;
+  background: var(--surface-solid); border: 1px solid var(--border);
+}
+.prof-sec-row:hover { border-color: var(--accent-border); }
+.prof-sec-row__icon {
+  width: 40px; height: 40px; flex-shrink: 0; border-radius: 12px;
+  display: flex; align-items: center; justify-content: center; font-size: 1rem;
+}
+.prof-sec-row__icon--amber { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+.prof-sec-row__icon--violet { background: color-mix(in srgb, var(--accent-2) 18%, transparent); color: var(--accent-soft); }
+.prof-sec-row__text { display: flex; flex-direction: column; min-width: 0; }
+.prof-sec-row__title { font-size: 0.88rem; font-weight: 700; color: var(--text); }
+.prof-sec-row__sub { font-size: 0.74rem; color: var(--muted); }
+
+@media (max-width: 560px) {
+  .prof-row { flex-direction: column; align-items: flex-start; gap: 2px; }
+  .prof-row__value { text-align: left; }
+}
+
+/* ===========================================================================
+   Employee Reports tab — page-scoped styles (sirf /employee/reports).
+   "My Attendance Reports" dashboard — existing theme tokens par based, Theme
+   Selector ke chaaron themes me consistent. Status accent colors fixed hain
+   (Attendance tab ke established colors) taaki meaning har theme me same rahe.
+   =========================================================================== */
+.rpt { display: flex; flex-direction: column; gap: 16px; }
+
+.rpt-head__row { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.rpt-head__sub { margin: 4px 0 0; font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.rpt-chip {
+  padding: 2px 10px; border-radius: 999px; font-size: 10px; font-weight: 800;
+  letter-spacing: .03em; text-transform: uppercase;
+  background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn);
+  border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
+}
+.rpt-ctrl { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.rpt-msg {
+  margin-top: 12px; padding: 10px 12px; border-radius: 10px; border: 1px solid;
+  font-size: 12.5px; font-weight: 600;
+}
+.rpt-msg--ok { background: color-mix(in srgb, var(--ok) 12%, transparent); border-color: color-mix(in srgb, var(--ok) 32%, transparent); color: color-mix(in srgb, var(--ok) 65%, var(--text)); }
+.rpt-msg--error { background: var(--err-soft-bg); border-color: color-mix(in srgb, var(--err) 32%, transparent); color: var(--err-soft-text); }
+
+/* Summary cards */
+.rpt-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+.rpt-sum {
+  background: var(--surface-solid); border: 1px solid var(--border);
+  border-radius: 12px; padding: 14px 12px;
+}
+.rpt-sum__value { font-size: 24px; font-weight: 800; line-height: 1.1; }
+.rpt-sum__label { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-top: 4px; }
+.rpt-sum__sub { font-size: 9.5px; color: var(--muted); opacity: .85; margin-top: 3px; }
+
+/* Charts grid */
+.rpt-charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+.rpt-note { margin: -4px 0 10px; font-size: 11px; color: var(--muted); }
+.rpt-grace {
+  margin-top: 10px; padding: 8px 10px; border-radius: 10px; font-size: 11px;
+  color: var(--muted); background: color-mix(in srgb, var(--surface-solid) 60%, transparent);
+  border: 1px solid var(--border);
+}
+.rpt-late-list { margin-top: 10px; max-height: 180px; overflow-y: auto; }
+.rpt-late-final { color: var(--err-soft-text); }
+
+/* Insights */
+.rpt-insights { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+.rpt-insight {
+  background: var(--surface-solid); border: 1px solid var(--border);
+  border-radius: 12px; padding: 12px;
+}
+.rpt-insight__title { font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.rpt-insight__value { font-size: 15px; font-weight: 800; color: var(--text); margin-top: 4px; overflow-wrap: anywhere; }
+.rpt-insight__note { font-size: 10.5px; color: var(--muted); margin-top: 4px; overflow-wrap: anywhere; }
+
+/* Daily register */
+.rpt-legend { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
+.rpt-legend__item { display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--muted); }
+.rpt-legend__dot { width: 9px; height: 9px; border-radius: 5px; display: inline-block; }
+.rpt-table td { white-space: nowrap; }
+.rpt-table .rpt-remark { white-space: normal; min-width: 180px; font-size: 11px; color: var(--muted); }
+.rpt-status {
+  display: inline-block; padding: 2px 9px; border-radius: 999px;
+  font-size: 10.5px; font-weight: 800; border: 1px solid;
+}
+.rpt-row--future td { opacity: .55; font-style: italic; }
+.rpt-row--today td { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+
+/* Notes */
+.rpt-notes { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
+.rpt-notes li { font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+.rpt-actions { display: flex; justify-content: center; margin-top: 12px; }
+
+/* ===========================================================================
+   Employee Portal SIDEBAR SPACING — scoped ONLY to the employee variant
+   (.portal-sidebar--employee / .emp-nav-list are rendered exclusively by the
+   employee PortalShell variant). HR Admin and SuperAdmin sidebars are untouched.
+   Width stays w-64; nav items get comfortable vertical padding + min height,
+   a consistent Dashboard→Profile gap, relaxed icon↔label spacing and readable
+   full labels. The scoped max-height/overflow guard keeps the bottom LIVE SQL
+   SYNC panel safe on short viewports (scrolls instead of overlapping).
+   =========================================================================== */
+.portal-sidebar--employee {
+  max-height: 100vh;
+  overflow-y: auto;
+}
+.portal-sidebar--employee .sidebar-item {
+  padding: 14px 16px;
+  min-height: 50px;
+  gap: 13px;
+  font-size: 13px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.portal-sidebar--employee .sidebar-item i {
+  width: 20px;
+  font-size: 15.5px;
+  text-align: center;
+  flex-shrink: 0;
+}
+.emp-nav-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
 
 /* Input field with leading icon */
 .field__wrap--icon .field__input {
@@ -647,6 +880,16 @@ body {
   max-width: 960px;
   margin: 0 auto;
   padding: 20px 16px 44px;
+}
+
+/* SuperAdmin Console — wider content area (~85-90% of viewport on desktop,
+   balanced side margins). SCOPED modifier: only SuperAdminShell uses it, so the
+   Employee portal / HR gate (.emp-shell base) keep their original width. Small
+   screens keep the base full-width behaviour (no horizontal overflow). */
+@media (min-width: 1100px) {
+  .emp-shell--wide {
+    max-width: min(90vw, 2200px);
+  }
 }
 
 .emp-header {
@@ -873,16 +1116,244 @@ body {
   text-align: right;
 }
 
-/* Celebrations buckets */
-.cel-bucket { margin-bottom: 12px; }
+/* ===========================================================================
+   Employee Celebrations tab — page-scoped styles (sirf /employee/celebrations).
+   THEME INTEGRATION: surface/text/border/accent colors WEBSITE KE EXISTING
+   theme tokens se aate hain (--surface, --surface-solid, --border, --text,
+   --muted, --accent, --on-accent, --accent-border) — Theme Selector ke chaaron
+   themes (Dark Purple / Light Professional / Midnight Blue / Emerald Dark) ke
+   saath data-theme + CSS variables se bina reload ke match karte hain.
+   Celebration category accents (pink / gold / red) page-scoped tokens hain:
+   --celv-pink / --celv-gold / --celv-red — har theme me vivid aur readable;
+   --celv-on-accent solid accent badge ka ink hai.
+   =========================================================================== */
+.celv {
+  /* Base = Dark Purple (SSR me data-theme nahi hota; :root default purple hai).
+     --celv-chip-bg/ink: active filter pill — site accent family me, AA-contrast ke
+     liye theme ke hisaab se accent/accent-2 + on-accent ink choose kiya gaya. */
+  --celv-pink: #f472b6;
+  --celv-gold: #fbbf24;
+  --celv-red: #fb7185;
+  --celv-on-accent: #0f172a;
+  --celv-chip-bg: var(--accent-2);
+  --celv-chip-ink: #ffffff;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 16px;
+}
 
-.cel-bucket__label {
-  font-size: 0.72rem;
-  font-weight: 800;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+[data-theme='purple'] .celv,
+[data-theme='blue'] .celv,
+[data-theme='emerald'] .celv {
+  --celv-pink: #f472b6;
+  --celv-gold: #fbbf24;
+  --celv-red: #fb7185;
+  --celv-on-accent: #0f172a;
+}
+
+[data-theme='purple'] .celv,
+[data-theme='blue'] .celv {
+  --celv-chip-bg: var(--accent-2);
+  --celv-chip-ink: #ffffff;
+}
+
+[data-theme='emerald'] .celv {
+  --celv-chip-bg: var(--accent);
+  --celv-chip-ink: var(--on-accent);
+}
+
+[data-theme='light'] .celv {
+  --celv-pink: #db2777;
+  --celv-gold: #b45309;
+  --celv-red: #e11d48;
+  --celv-on-accent: #ffffff;
+  --celv-chip-bg: var(--accent);
+  --celv-chip-ink: #ffffff;
+}
+
+@media (max-width: 640px) {
+  .celv { padding: 12px; }
+}
+
+/* Filter chips: All / Today / This Week / This Month / Upcoming */
+.celv__filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.celv__chip {
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-solid);
   color: var(--muted);
-  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 700;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background .15s ease, border-color .15s ease, color .15s ease;
+}
+
+.celv__chip:hover { border-color: var(--accent-border); color: var(--text); }
+
+.celv__chip--active,
+.celv__chip--active:hover {
+  background: var(--celv-chip-bg);
+  border-color: var(--celv-chip-bg);
+  color: var(--celv-chip-ink);
+}
+
+/* Sections: Birthdays (pink) / Work Anniversaries (gold) / Marriage (red) */
+.celv__section { margin-bottom: 18px; }
+
+.celv__sec-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.celv__sec-icon {
+  width: 18px;
+  text-align: center;
+  font-size: 16px;
+  color: var(--celv-accent);
+}
+
+.celv__sec-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--text);
+}
+
+.celv__sec-count {
+  min-width: 28px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--celv-accent);
+  background: color-mix(in srgb, var(--celv-accent) 12%, transparent);
+}
+
+/* Employee cards — desktop par responsive grid, mobile par single column. */
+.celv__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+  gap: 8px;
+}
+
+@media (max-width: 420px) {
+  .celv__grid { grid-template-columns: 1fr; }
+}
+
+.celv-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: var(--surface-solid);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px;
+}
+
+.celv-card__icon {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  color: var(--celv-accent);
+  background: color-mix(in srgb, var(--celv-accent) 10%, transparent);
+}
+
+.celv-card__body { flex: 1; min-width: 0; }
+
+.celv-card__name {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.celv-card__role {
+  margin: 2px 0 0;
+  font-size: 11.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.celv-card__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 5px;
+}
+
+.celv-card__chip {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--celv-accent);
+  background: color-mix(in srgb, var(--celv-accent) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--celv-accent) 30%, transparent);
+}
+
+.celv-card__sub { font-size: 11px; color: color-mix(in srgb, var(--muted) 85%, transparent); }
+
+.celv-card__right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  min-width: 46px;
+}
+
+.celv-card__day { font-size: 11px; font-weight: 700; color: color-mix(in srgb, var(--muted) 85%, transparent); }
+.celv-card__in { font-size: 10.5px; color: color-mix(in srgb, var(--muted) 85%, transparent); }
+
+.celv-card__today {
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--celv-accent);
+  color: var(--celv-on-accent);
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: .02em;
+}
+
+.celv__empty {
+  padding: 16px;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--surface-solid) 45%, transparent);
+}
+
+.celv__footnote {
+  margin: 4px 0 0;
+  text-align: center;
+  font-size: 11px;
+  color: color-mix(in srgb, var(--muted) 85%, transparent);
 }
 
 .role-grid {
@@ -1405,3 +1876,111 @@ body {
 /* Light-theme softening for the scoped attendance/leave blocks */
 [data-theme='light'] .cal__cell { background: color-mix(in srgb, var(--cell-color) 16%, #fff); }
 [data-theme='light'] .cal__cell--out { background: #f1f5f9; }
+
+/* ===========================================================================
+   SuperAdmin console — contrast & readability polish (scoped ONLY to .sa-shell)
+   ---------------------------------------------------------------------------
+   Ye layer existing theme system ke UPAR ek targeted readability pass hai (koi
+   naya theme / competing system NAHI). Sirf SuperAdmin workspace ke andar text,
+   icons, borders, headings, buttons, badges, tables aur form controls ke contrast
+   ko brighter/clearer banaya gaya — theme preference (localStorage + ThemeSelector
+   + [data-theme] blocks) bilkul unchanged.
+   - HR/Employee portal untouched (wo .sa-shell ke bahar hain).
+   - Modals untouched (wo createPortal se <body> me render hote hain, .sa-shell
+     ke bahar) — isliye modal width/layout/look 100% same.
+   - Sirf colour & contrast badla hai; koi width/structure/calculation nahi.
+   =========================================================================== */
+.sa-shell {
+  /* Readability token boosts (dark themes): same hue family, better contrast. */
+  --text: #f2f6ff;
+  --muted: #bcc9de;
+  --border: rgba(148, 163, 184, 0.34);
+  --sa-heading: #f5f8ff;
+  --sa-label: #cfd9ea;
+}
+
+/* Light theme: dark text rakho, sirf muted/heading contrast sudhaaro. */
+[data-theme='light'] .sa-shell {
+  --text: #0b1220;
+  --muted: #33415a;
+  --border: rgba(15, 23, 42, 0.18);
+  --sa-heading: #0b1220;
+  --sa-label: #293548;
+}
+
+/* ---- Sidebar: clear labels + distinct colourful module icon accents ---- */
+.sa-shell .sa-sidebar .sidebar-item {
+  color: var(--sa-label);
+  border-left-color: transparent;
+}
+/* Icons apna distinct accent colour rakhte hain (FontAwesome + Tailwind tint);
+   bas thoda vivid taaki modules alag dikhein. */
+.sa-shell .sa-sidebar .sidebar-item i {
+  filter: saturate(1.18) brightness(1.08);
+}
+.sa-shell .sa-sidebar .sidebar-item:hover {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border-left-color: color-mix(in srgb, var(--accent) 75%, transparent);
+  color: var(--sa-heading);
+}
+/* Active item: visible accent background + border + readable bright text. */
+.sa-shell .sa-sidebar .sidebar-item.active {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 32%, transparent), color-mix(in srgb, var(--accent-2) 20%, transparent));
+  border-left: 4px solid var(--accent);
+  color: var(--sa-heading);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent), 0 6px 18px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.sa-shell .sa-sidebar .sidebar-item.active i {
+  filter: saturate(1.3) brightness(1.2);
+}
+
+/* ---- Page headings & section titles: brighter, clearer ---- */
+.sa-shell h1, .sa-shell h2, .sa-shell h3 { color: var(--sa-heading); }
+.sa-shell .portal-header h1 { color: var(--sa-heading); letter-spacing: .01em; }
+/* Section titles (reused HR sections) ko ek consistent bright tone. */
+.sa-shell main h2, .sa-shell main h3 { color: var(--sa-heading); }
+
+/* ---- Primary buttons: clear contrast + recognizable action ---- */
+.sa-shell .btn--primary,
+.sa-shell button.bg-indigo-600,
+.sa-shell .bg-indigo-600.text-white {
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%);
+  color: var(--on-accent, #fff);
+  font-weight: 700;
+  box-shadow: 0 6px 16px color-mix(in srgb, var(--accent) 32%, transparent);
+}
+.sa-shell .btn--primary:hover { filter: brightness(1.1); }
+
+/* ---- Secondary text, descriptions, badges, borders, tables ---- */
+/* (Muted/secondary text auto-brighten hote hain .sa-shell ke --muted/--text token
+    boost se — har var(--muted) / var(--text) use par apply hota hai. Neeche sirf
+    wo hardcoded colours override kiye jo tokens use nahi karte.) */
+.sa-shell .portal-table thead th { color: var(--sa-label); }
+.sa-shell .portal-table tbody td { color: var(--text); }
+.sa-shell .portal-table tbody tr:hover { background: rgba(99, 102, 241, .12); }
+.sa-shell .badge--neutral { background: rgba(148, 163, 184, .18); color: #e2e8f0; border-color: rgba(148, 163, 184, .35); }
+
+/* ---- Cards & form controls: dark theme preserved, distinct & readable ---- */
+.sa-shell .glass-card { border-color: color-mix(in srgb, var(--border) 70%, var(--accent) 30%); }
+.sa-shell .field__input,
+.sa-shell input, .sa-shell select, .sa-shell textarea {
+  color: var(--text);
+  border-color: var(--border);
+}
+.sa-shell .field__input::placeholder { color: color-mix(in srgb, var(--muted) 85%, transparent); }
+
+/* ---- Hover / focus / disabled / selected states: readable contrast ---- */
+.sa-shell .btn--ghost:hover, .sa-shell .bg-white\/5:hover { color: var(--sa-heading); }
+.sa-shell a:focus-visible, .sa-shell button:focus-visible,
+.sa-shell input:focus-visible, .sa-shell select:focus-visible, .sa-shell textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.sa-shell button:disabled, .sa-shell .btn:disabled { opacity: .55; cursor: not-allowed; }
+
+/* Light theme par icons ko readable rakhne ke liye halka shadow. */
+[data-theme='light'] .sa-shell .sa-sidebar .sidebar-item i {
+  filter: saturate(1.1) brightness(0.95);
+  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.55);
+}
+

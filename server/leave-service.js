@@ -1299,6 +1299,48 @@ export async function getLeaveCalendarOverlay(pool, { paycode, fromdate, todate 
   };
 }
 
+/**
+ * APPROVED leave requests for a whole SCOPED population in a window (bulk).
+ *
+ * Reuses the SAME table + APPROVED status as listApprovedLeaveDates, but returns
+ * every employee's overlapping request at once for HR-side multi-employee
+ * reporting (the Master Reports Absent & Miss Punch monitor). Scope is enforced
+ * through the shared companyScopeFragment (join alias `e`); an EMPTY assignment
+ * is deny ([]) — never "all employees". The employee's company must be inside the
+ * HR Admin's assigned companies, so an out-of-scope employee's leave can never
+ * leak into a report.
+ */
+export async function listApprovedLeaveForPopulation(pool, { fromdate, todate, companyScope }) {
+  await ensureLeaveTables(pool);
+  const scope = companyScopeFragment('e', companyScope);
+  if (scope.denied) return [];
+  const request = pool.request()
+    .input('from', sql.Date, clean(fromdate))
+    .input('to', sql.Date, clean(todate));
+  const r = await request.query(`
+    SELECT LTRIM(RTRIM(r.paycode)) AS paycode, LTRIM(RTRIM(r.leavetype)) AS leavetype,
+           LTRIM(RTRIM(t.typename)) AS typename, r.fromdate, r.todate,
+           r.ishalfday, r.halfdaypart, r.days, LTRIM(RTRIM(r.reason)) AS reason
+    FROM ${LEAVE_REQUEST_TABLE} r
+    INNER JOIN dbo.tblemployee e ON LTRIM(RTRIM(e.paycode)) = LTRIM(RTRIM(r.paycode))
+    LEFT JOIN ${LEAVE_TYPES_TABLE} t ON LTRIM(RTRIM(t.leavetype)) = LTRIM(RTRIM(r.leavetype))
+    WHERE LTRIM(RTRIM(r.status)) = '${LEAVE_STATUS.APPROVED}'
+      AND r.todate >= @from AND r.fromdate <= @to
+      ${scope.fragment}
+    ORDER BY r.fromdate`);
+  return (r.recordset || []).map((row) => ({
+    paycode: clean(row.paycode),
+    leavetype: clean(row.leavetype),
+    typename: clean(row.typename) || '',
+    fromdate: toIsoDate(row.fromdate),
+    todate: toIsoDate(row.todate),
+    isHalfDay: Boolean(row.ishalfday),
+    halfdaypart: clean(row.halfdaypart),
+    days: round2(row.days),
+    reason: clean(row.reason),
+  }));
+}
+
 /* ------------------------------------------------------------------ */
 /* Excel import (Phase J section 2)                                    */
 /* ------------------------------------------------------------------ */

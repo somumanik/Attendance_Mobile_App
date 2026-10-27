@@ -74,6 +74,13 @@ export const MODULE_CATALOG = [
   { key: 'audit', label: 'Attendance / Audit' },
   { key: 'analytics', label: 'Analytics / Charts' },
   { key: 'dailymaster', label: 'Daily Master' },
+  /* Master Reports (route /hr/reports) — same additive, backward-compatible
+     pattern as the Phase 4.4 section keys: the internal key stays `reports`
+     (existing saved permissions keep working), and every existing key/row is
+     untouched. Displayed as "Master Reports" in the HR Admin navigation and in
+     the SuperAdmin permission screens; "Daily Master" above stays a separate,
+     unchanged module. */
+  { key: 'reports', label: 'Master Reports' },
   { key: 'celebrations', label: 'Celebrations' },
   { key: 'marriage', label: 'Marriage Anniversary' },
   /* Pre-existing module/action sections (Phase 3) — unchanged. */
@@ -84,6 +91,7 @@ export const MODULE_CATALOG = [
   { key: 'fullfinal', label: 'Full & Final Management' },
   { key: 'employees', label: 'Employee Management' },
   { key: 'email', label: 'Email Management' },
+  { key: 'whatsapp', label: 'WhatsApp Messaging' },
 ];
 
 /**

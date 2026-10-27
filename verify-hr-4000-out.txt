@@ -1,0 +1,62 @@
+
+=== HR Admin Reports verification against http://localhost:4000 ===
+
+PASS :: Bootstrap HR Admin login works
+PASS :: GET /api/me returns HR identity from the server session
+PASS :: Regression: GET /api/hr/dashboard still works :: HTTP 200
+PASS :: Regression: GET /api/hr/daily still works :: HTTP 200
+PASS :: Regression: GET /api/hr/category-analytics still works :: HTTP 200
+PASS :: Regression: GET /api/hr/filters still works :: HTTP 200
+PASS :: Regression: GET /api/health still works :: HTTP 200
+PASS :: Regression: SuperAdmin surface still rejects HR tokens :: HTTP 403
+PASS :: Bootstrap: GET /api/hr/reports/filters works :: HTTP 200
+PASS :: Bootstrap: filter options include companies from the master :: 4 companies
+PASS :: Bootstrap: filter options include departments / categories / shifts
+PASS :: Bootstrap: GET /api/hr/reports/summary works :: HTTP 200
+PASS :: Bootstrap: GET /api/hr/reports/register works :: HTTP 200
+PASS :: Bootstrap: GET /api/hr/reports/employees works :: HTTP 200
+PASS :: Bootstrap: GET /api/hr/reports/export returns an .xlsx workbook :: HTTP 200
+PASS :: Bootstrap: company comparison covers the authorised companies :: 4 group(s)
+PASS :: Company catalogue available for scope tests :: 4 code(s)
+PASS :: Create test HR Admin RPTONEMVP5T1D2
+PASS :: Create test HR Admin RPTMULTIMVP5T1D2
+PASS :: Create test HR Admin RPTNONEMVP5T1D2
+PASS :: Create test HR Admin RPTLEGACYMVP5T1D2
+PASS :: One-company HR Admin login works
+PASS :: One-company: /api/me reports exactly the assigned company :: ["001"]
+PASS :: One-company: filter dropdown offers ONLY the assigned company :: ["001"]
+PASS :: One-company: summary + company comparison limited to the assigned company :: ["001"]
+PASS :: One-company: every register row belongs to the assigned company :: 50 row(s)
+PASS :: One-company: employee search returns only in-company employees :: 90 employee(s)
+PASS :: One-company: summary rejects unauthorised company id (403) :: HTTP 403 COMPANY_FORBIDDEN
+PASS :: One-company: register rejects unauthorised company id (403) :: HTTP 403
+PASS :: One-company: Excel export rejects unauthorised company id (403) :: HTTP 403
+PASS :: One-company: summary rejects a REAL other company code (403) :: HTTP 403
+PASS :: One-company: Excel export rejects a REAL other company code (403) :: HTTP 403
+PASS :: One-company: single-employee report rejects an out-of-scope paycode (403) :: HTTP 403 COMPANY_FORBIDDEN
+PASS :: One-company: category filter keeps rows inside the assigned company :: 50 row(s)
+PASS :: One-company: department filter keeps rows inside the assigned company :: 50 row(s)
+PASS :: One-company: employee search with a filter term stays inside the assigned company :: 89 hit(s)
+PASS :: One-company: single-employee report works for an in-scope employee :: HTTP 200
+PASS :: One-company: authorised Excel export returns an .xlsx workbook :: HTTP 200
+PASS :: Export workbook contains Summary / Comparison / Register sheets :: Report Summary, Group Comparison, Detailed Register
+PASS :: Exported Excel rows are limited to the assigned company :: 720 row(s), 0 leak(s)
+PASS :: Multi-company HR Admin login works
+PASS :: Multi-company: filter dropdown offers exactly the assigned companies :: ["001","002"]
+PASS :: Multi-company: comparison runs ONLY between the assigned companies :: ["002","001"]
+PASS :: Multi-company: every register row belongs to an assigned company :: 50 row(s)
+PASS :: Multi-company: summary rejects a company outside the assignment (403) :: HTTP 403
+PASS :: Multi-company: Excel export rejects a company outside the assignment (403) :: HTTP 403
+PASS :: No-company HR Admin login works
+PASS :: No-company: report summary is DENIED (fail closed, not empty data) :: HTTP 403 COMPANY_NOT_ASSIGNED
+PASS :: No-company: report filters are DENIED (fail closed) :: HTTP 403
+PASS :: No-company: Excel export is DENIED (fail closed) :: HTTP 403
+PASS :: Permission: reports View=false denies the report API (403 PERMISSION_DENIED) :: HTTP 403 PERMISSION_DENIED
+PASS :: Permission: reports View=true still works :: HTTP 200
+PASS :: Permission: reports Export=false denies the Excel export (403 PERMISSION_DENIED) :: HTTP 403 PERMISSION_DENIED
+PASS :: Scope refresh: after SuperAdmin re-assignment the report follows the NEW company :: ["002"]
+PASS :: Scope refresh: the OLD company is now rejected (403) :: HTTP 403
+NOTE :: Legacy-row behaviour (moduleAllowed legacy flag): account with stored permissions but NO reports row gets HTTP 403 on the report API. DENIED until SuperAdmin saves the reports permission for that account (the UI shows the same state; no existing feature is affected).
+PASS :: Cleanup: test HR Admin accounts removed :: 4 account(s)
+
+=== RESULT: 56 passed, 0 failed ===

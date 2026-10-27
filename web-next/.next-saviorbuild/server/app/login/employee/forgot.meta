@@ -1,0 +1,15 @@
+{
+  "headers": {
+    "x-nextjs-stale-time": "300",
+    "x-nextjs-prerender": "1",
+    "x-next-cache-tags": "_N_T_/layout,_N_T_/login/layout,_N_T_/login/employee/layout,_N_T_/login/employee/forgot/layout,_N_T_/login/employee/forgot/page,_N_T_/login/employee/forgot"
+  },
+  "routeCache": {
+    "key": "/route-cache/APP_PAGE/5dc4416e5d985b583fde7f09db99ee78e4dc55f834cd0bd73237899b1cde5391/$/login/employee/forgot",
+    "owner": {
+      "kind": "APP_PAGE",
+      "sourceRoute": "/login/employee/forgot/page"
+    },
+    "isFallback": false
+  }
+}

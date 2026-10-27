@@ -7,6 +7,7 @@
 import { useEffect, useRef, useState } from 'react';
 import useApiData from '../useApiData';
 import apiFetch from '../../lib/api';
+import { HrCan } from './HrAccess';
 import { isoToday } from '../../lib/format';
 import LoadingState from '../LoadingState';
 import ErrorState from '../ErrorState';
@@ -566,9 +567,11 @@ export default function EmailSection() {
                       <span><i className="fas fa-circle-info text-slate-400 mr-1"></i>{providerStatus.hint || 'Email provider configure nahi hai. Brevo API key ya SMTP credentials save karo.'}</span>
                     )}
                   </div>
-                  <button type="button" onClick={saveProvider} disabled={provBusy} className="w-full py-2.5 rounded-xl bg-violet-500/15 border border-violet-500/30 text-violet-300 hover:bg-violet-500/25 text-xs font-bold transition disabled:opacity-50">
-                    {provBusy ? <i className="fas fa-spinner fa-spin mr-1"></i> : <i className="fas fa-save mr-1"></i>}Save Provider &amp; Sender
-                  </button>
+                  <HrCan module="email" action="email">
+                    <button type="button" onClick={saveProvider} disabled={provBusy} className="w-full py-2.5 rounded-xl bg-violet-500/15 border border-violet-500/30 text-violet-300 hover:bg-violet-500/25 text-xs font-bold transition disabled:opacity-50">
+                      {provBusy ? <i className="fas fa-spinner fa-spin mr-1"></i> : <i className="fas fa-save mr-1"></i>}Save Provider &amp; Sender
+                    </button>
+                  </HrCan>
                   {provMsg ? <Notice ok={provMsg.ok}>{provMsg.text}</Notice> : null}
                 </div>
               </div>
@@ -576,7 +579,9 @@ export default function EmailSection() {
                 <p className="text-xs font-bold text-[var(--text)] mb-3"><i className="fas fa-paper-plane text-emerald-400 mr-1.5"></i>Test Email <span className="text-[10px] font-normal text-[var(--muted)]">(employee data use nahi hota)</span></p>
                 <div className="flex gap-2">
                   <input value={testTo} onChange={(e) => setTestTo(e.target.value)} className={inputCls} placeholder="your@email.com" />
-                  <button type="button" onClick={sendTest} disabled={testBusy} className="px-4 py-2 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25 text-xs font-bold transition whitespace-nowrap disabled:opacity-50">Send Test</button>
+                  <HrCan module="email" action="email">
+                    <button type="button" onClick={sendTest} disabled={testBusy} className="px-4 py-2 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25 text-xs font-bold transition whitespace-nowrap disabled:opacity-50">Send Test</button>
+                  </HrCan>
                 </div>
                 {testMsg ? <div className="mt-2.5"><Notice ok={testMsg.ok}>{testMsg.text}</Notice></div> : null}
               </div>
@@ -672,9 +677,11 @@ export default function EmailSection() {
                   <div><label className={labelCls}>Subject (editable)</label><input value={singleSubject} onChange={(e) => setSingleSubject(e.target.value)} className={inputCls} /></div>
                   <div><label className={labelCls}>Message Body (editable)</label><textarea rows={6} value={singleBody} onChange={(e) => setSingleBody(e.target.value)} className={inputCls} /></div>
                   <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={singleResend} onChange={(e) => setSingleResend(e.target.checked)} className="accent-amber-500" /><span className="text-[10px] font-bold text-amber-300">Resend (ignore duplicate protection)</span></label>
-                  <button type="button" onClick={sendSingle} disabled={singleBusy} className="w-full py-2.5 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 hover:bg-amber-500/25 text-xs font-bold transition disabled:opacity-50">
-                    {singleBusy ? <i className="fas fa-spinner fa-spin mr-1"></i> : <i className="fas fa-paper-plane mr-1"></i>}Send Email
-                  </button>
+                  <HrCan module="email" action="email">
+                    <button type="button" onClick={sendSingle} disabled={singleBusy} className="w-full py-2.5 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 hover:bg-amber-500/25 text-xs font-bold transition disabled:opacity-50">
+                      {singleBusy ? <i className="fas fa-spinner fa-spin mr-1"></i> : <i className="fas fa-paper-plane mr-1"></i>}Send Email
+                    </button>
+                  </HrCan>
                   {singleMsg ? <Notice ok={singleMsg.ok}>{singleMsg.text}</Notice> : null}
                 </div>
               </div>
@@ -717,9 +724,11 @@ export default function EmailSection() {
                 <button type="button" onClick={previewBulk} disabled={bulkBusy} className="flex-1 py-2.5 rounded-xl bg-sky-500/15 border border-sky-500/30 text-sky-300 hover:bg-sky-500/25 text-xs font-bold transition disabled:opacity-50">
                   <i className="fas fa-eye mr-1.5"></i>Preview Recipients
                 </button>
-                <button type="button" onClick={sendBulk} disabled={bulkBusy || !bulkPreview?.willSend} className="flex-1 py-2.5 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 hover:bg-amber-500/25 text-xs font-bold transition disabled:opacity-40 disabled:cursor-not-allowed">
-                  <i className="fas fa-paper-plane mr-1.5"></i>Send Bulk Email
-                </button>
+                <HrCan module="email" action="email">
+                  <button type="button" onClick={sendBulk} disabled={bulkBusy || !bulkPreview?.willSend} className="flex-1 py-2.5 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 hover:bg-amber-500/25 text-xs font-bold transition disabled:opacity-40 disabled:cursor-not-allowed">
+                    <i className="fas fa-paper-plane mr-1.5"></i>Send Bulk Email
+                  </button>
+                </HrCan>
               </div>
               <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={bulkResend} onChange={(e) => setBulkResend(e.target.checked)} className="accent-amber-500" /><span className="text-[10px] font-bold text-amber-300">Resend (already-sent employees ko bhi dubara bhejo)</span></label>
               {bulkPreview ? (
@@ -782,9 +791,11 @@ export default function EmailSection() {
                   <p className="text-[10px] text-[var(--muted)]">Custom emails sirf manual (Single / Bulk tab) se jaate hain — scheduler me nahi.</p>
                 </div>
               </div>
-              <button type="button" onClick={saveTemplates} disabled={tplBusy} className="w-full py-2.5 rounded-xl bg-violet-500/15 border border-violet-500/30 text-violet-300 hover:bg-violet-500/25 text-xs font-bold transition disabled:opacity-50">
-                {tplBusy ? <i className="fas fa-spinner fa-spin mr-1"></i> : <i className="fas fa-save mr-1"></i>}Save All Templates
-              </button>
+              <HrCan module="email" action="email">
+                <button type="button" onClick={saveTemplates} disabled={tplBusy} className="w-full py-2.5 rounded-xl bg-violet-500/15 border border-violet-500/30 text-violet-300 hover:bg-violet-500/25 text-xs font-bold transition disabled:opacity-50">
+                  {tplBusy ? <i className="fas fa-spinner fa-spin mr-1"></i> : <i className="fas fa-save mr-1"></i>}Save All Templates
+                </button>
+              </HrCan>
               {tplMsg ? <Notice ok={tplMsg.ok}>{tplMsg.text}</Notice> : null}
             </div>
           )}

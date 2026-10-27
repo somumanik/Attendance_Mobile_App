@@ -30,6 +30,7 @@ import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTheme } from '../theme';
+import { useAuth } from '../hooks/useAuth';
 import { Ionicons } from '@expo/vector-icons';
 
 /**
@@ -48,6 +49,10 @@ export const ScreenContainer = ({
   rightAction 
 }) => {
   const { theme } = useTheme();
+  // Phase 3: show the authenticated user's actual name (display name preferred,
+  // username fallback) in the shared top header — never hardcoded, cleared on logout.
+  const { userData } = useAuth();
+  const userName = userData?.displayname || userData?.username || userData?.empname || null;
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]} edges={['top', 'left', 'right']}>
@@ -74,6 +79,11 @@ export const ScreenContainer = ({
             >
               {title}
             </Text>
+            {userName ? (
+              <Text style={[styles.nameText, { color: theme.textSecondary }]} numberOfLines={1}>
+                {userName}
+              </Text>
+            ) : null}
           </View>
           {rightAction ? (
             // Auto-width slot (no fixed 44px) so header buttons are never clipped;
@@ -125,6 +135,12 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: -0.3,
     textAlign: 'center',
+  },
+  nameText: {
+    fontSize: 11,
+    fontWeight: '600',
+    textAlign: 'center',
+    marginTop: 1,
   },
   rightAction: {
     flexShrink: 0,

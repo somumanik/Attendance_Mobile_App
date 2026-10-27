@@ -1,0 +1,26 @@
+
+=== Full & Final fix verification against http://localhost:4000 ===
+
+PASS :: Bootstrap HR login works
+PASS :: Another employee with salary data found :: 0002
+PASS :: A1. 1053 estimate loads :: HTTP 200
+PASS :: A2. Bonus flagged INVALID (not 13580%) :: amount=0
+PASS :: A3. Bonus note explains the likely correction :: Invalid bonus configuration: PERCENTAGE_BASIC rate 13580 is not a valid percentage (must b
+PASS :: A4. additionsTotal == sum of additions :: add=83055.87 adds=83055.87
+PASS :: A5. subtractionsTotal == sum of subtractions :: sub=2449.92 subs=2449.92
+PASS :: A6. estimatedTotal == additions - subtractions :: total=80605.95
+PASS :: A7. Bonus no longer dominates the total :: total=80605.95
+PASS :: C1. Leaving date echoed into recalculated estimate :: 2027-06-30
+PASS :: C2. Service period changes with the date :: y=6 vs 5
+PASS :: C3. Recalculated total stays internally consistent
+PASS :: B1. Other employee estimate loads :: HTTP 200 paycode=0002
+PASS :: B2. Identity is the OTHER employee (not 1053) :: 0002
+PASS :: B3. Salary comes from that employee, not 1053 :: basic=27000
+PASS :: D1. Missing salary -> no fabricated estimate :: reason=Salary information is not currently available for calculation.
+PASS :: E1. Dev employee login works (parity test) :: HTTP 200
+PASS :: E2. Browser-supplied paycode is ignored (identical response with/without ?paycode=1053) :: own=EMPLOYEE_NOT_FOUND spoof=EMPLOYEE_NOT_FOUND
+PASS :: E3. Employee route resolves the SESSION identity (never 1053) :: resolved=EMPLOYEE_NOT_FOUND
+NOTE :: The DEV employee is not a real dbo.tblemployee row, so the estimate returns EMPLOYEE_NOT_FOUND — this still proves the route used the session paycode (not the spoofed 1053).
+PASS :: E4. Scoped HR cannot estimate an out-of-scope employee (403) :: targetCompany=002 1053 company=001 -> HTTP 403 COMPANY_FORBIDDEN
+
+=== RESULT: 20 passed, 0 failed ===
