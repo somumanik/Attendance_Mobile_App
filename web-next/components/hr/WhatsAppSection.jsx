@@ -9,6 +9,7 @@ import useApiData from '../useApiData';
 import apiFetch from '../../lib/api';
 import { HrCan } from './HrAccess';
 import { isoToday } from '../../lib/format';
+import { manualChatUrl } from '../../lib/whatsapp';
 import LoadingState from '../LoadingState';
 import ErrorState from '../ErrorState';
 
@@ -147,7 +148,7 @@ export default function WhatsAppSection() {
   /** Run the server-side send pipeline. dryRun=true NEVER contacts Meta (default);
       dryRun=false attempts a real send but is still gated by canSendReal(). */
   async function runSend(dryRun) {
-    if (dryRun === false && !window.confirm('Send real WhatsApp messages to eligible employees? This contacts Meta.')) return;
+    if (dryRun === false && !window.confirm('Send REAL WhatsApp attendance messages? This contacts Meta and MAY INCUR per-message charges (business-initiated template — not free). Continue?')) return;
     setSendBusy(true); setSendResult(null); setMsg(null);
     try {
       const body = { date: previewDate, paycode: previewPaycode || undefined, dryRun: dryRun !== false };
@@ -192,7 +193,10 @@ export default function WhatsAppSection() {
           <p className="text-[11px] text-[var(--muted)] mt-0.5">HR-only. FREE_MANUAL preview/export + gated Cloud API sending.</p>
         </div>
         <div className="text-right">
-          <span className={`badge ${healthData.canSendReal ? 'badge--present' : 'badge--neutral'}`}>{healthData.canSendReal ? 'Cloud API: real send ARMED' : 'Real send OFF'}</span>
+          <div className="flex items-center gap-2 justify-end">
+            <span className={`badge ${cfg.mode === 'CLOUD_API' ? 'badge--absent' : 'badge--neutral'}`}>{cfg.mode === 'CLOUD_API' ? 'Mode: Cloud API' : 'Mode: Free Manual'}</span>
+            <span className={`badge ${healthData.canSendReal ? 'badge--present' : 'badge--neutral'}`}>{healthData.canSendReal ? 'Cloud API: real send ARMED' : 'Real send OFF'}</span>
+          </div>
           <p className="text-[10px] text-[var(--muted)] mt-1 max-w-xs">{healthData.hint || ''}</p>
         </div>
       </div>
@@ -219,12 +223,12 @@ export default function WhatsAppSection() {
           {providerStatus.hint ? <div className="mb-3"><Notice ok={false}>{providerStatus.hint}</Notice></div> : null}
           <form onSubmit={saveProvider} className="space-y-3">
             <div className="grid grid-cols-2 gap-3">
-              <div><label className={labelCls}>Access Token {providerStatus.hasAccessToken ? '(saved)' : ''}</label><input className={inputCls} type="password" value={prov.accessToken} onChange={(e) => setProv({ ...prov, accessToken: e.target.value })} placeholder="Leave blank to keep saved" /></div>
-              <div><label className={labelCls}>App Secret {providerStatus.hasAppSecret ? '(saved)' : ''}</label><input className={inputCls} type="password" value={prov.appSecret} onChange={(e) => setProv({ ...prov, appSecret: e.target.value })} placeholder="Webhook HMAC secret" /></div>
-              <div><label className={labelCls}>Phone Number ID</label><input className={inputCls} value={prov.phoneNumberId} onChange={(e) => setProv({ ...prov, phoneNumberId: e.target.value })} /></div>
-              <div><label className={labelCls}>Business Account ID</label><input className={inputCls} value={prov.businessAccountId} onChange={(e) => setProv({ ...prov, businessAccountId: e.target.value })} /></div>
-              <div><label className={labelCls}>API Version</label><input className={inputCls} value={prov.apiVersion} onChange={(e) => setProv({ ...prov, apiVersion: e.target.value })} /></div>
-              <div><label className={labelCls}>Webhook Verify Token</label><input className={inputCls} value={prov.webhookVerifyToken} onChange={(e) => setProv({ ...prov, webhookVerifyToken: e.target.value })} /></div>
+              <div><label className={labelCls}>Access Token {providerStatus.hasAccessToken ? '(saved)' : ''}</label><input className={inputCls} type="password" value={prov.accessToken} onChange={(e) => setProv({ ...prov, accessToken: e.target.value })} placeholder="Leave blank to keep saved" /><p className="text-[9px] text-[var(--muted)] mt-1 leading-tight">Meta WhatsApp Cloud API access token. Encrypted at rest; never echoed back.</p></div>
+              <div><label className={labelCls}>App Secret {providerStatus.hasAppSecret ? '(saved)' : ''}</label><input className={inputCls} type="password" value={prov.appSecret} onChange={(e) => setProv({ ...prov, appSecret: e.target.value })} placeholder="Webhook HMAC secret" /><p className="text-[9px] text-[var(--muted)] mt-1 leading-tight">Meta App Secret — used only to verify webhook HMAC signatures (X-Hub-Signature-256).</p></div>
+              <div><label className={labelCls}>Phone Number ID</label><input className={inputCls} value={prov.phoneNumberId} onChange={(e) => setProv({ ...prov, phoneNumberId: e.target.value })} placeholder="e.g. 1234567890" /><p className="text-[9px] text-[var(--muted)] mt-1 leading-tight">The Meta WhatsApp <b>phone-number id</b> (numeric) — NOT the visible telephone number.</p></div>
+              <div><label className={labelCls}>Business Account ID</label><input className={inputCls} value={prov.businessAccountId} onChange={(e) => setProv({ ...prov, businessAccountId: e.target.value })} placeholder="e.g. 1098765432109876" /><p className="text-[9px] text-[var(--muted)] mt-1 leading-tight">The actual Meta WhatsApp Business Account ID (numeric) — NEVER the HR login id (e.g. HR001).</p></div>
+              <div><label className={labelCls}>API Version</label><input className={inputCls} value={prov.apiVersion} onChange={(e) => setProv({ ...prov, apiVersion: e.target.value })} placeholder="v21.0" /><p className="text-[9px] text-[var(--muted)] mt-1 leading-tight">Graph API version used by this implementation (format: v21.0).</p></div>
+              <div><label className={labelCls}>Webhook Verify Token</label><input className={inputCls} value={prov.webhookVerifyToken} onChange={(e) => setProv({ ...prov, webhookVerifyToken: e.target.value })} placeholder="Set to match Meta webhook config" /><p className="text-[9px] text-[var(--muted)] mt-1 leading-tight">Token Meta sends in the webhook verification challenge (hub.verify_token).</p></div>
             </div>
             {provMsg ? <Notice ok={provMsg.ok}>{provMsg.text}</Notice> : null}
             <button disabled={provBusy} className="px-4 py-2 rounded-xl bg-[var(--accent)] text-white text-xs font-bold disabled:opacity-50">{provBusy ? 'Saving...' : 'Save Provider'}</button>
@@ -238,10 +242,10 @@ export default function WhatsAppSection() {
           <form onSubmit={saveConfig} className="space-y-3">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               <label className="flex items-center gap-2 text-xs text-[var(--text)]"><input type="checkbox" checked={cfg.enabled} onChange={(e) => setCfg({ ...cfg, enabled: e.target.checked })} className="accent-[var(--accent)]" /> Enabled</label>
-              <div><label className={labelCls}>Mode</label><select className={inputCls} value={cfg.mode} onChange={(e) => setCfg({ ...cfg, mode: e.target.value })}><option value="FREE_MANUAL">FREE_MANUAL</option><option value="CLOUD_API">CLOUD_API</option></select></div>
+              <div><label className={labelCls}>Sending Mode</label><select className={inputCls} value={cfg.mode} onChange={(e) => setCfg({ ...cfg, mode: e.target.value })}><option value="FREE_MANUAL">Free Manual (opens WhatsApp chat)</option><option value="CLOUD_API">Cloud API (scheduled, may bill)</option></select><p className="text-[9px] text-[var(--muted)] mt-1 leading-tight">Free Manual never contacts Meta. Cloud API sends automated templates and may incur per-message charges.</p></div>
               <div><label className={labelCls}>Send Time</label><input className={inputCls} value={cfg.sendtime} onChange={(e) => setCfg({ ...cfg, sendtime: e.target.value })} placeholder="21:00" /></div>
               <div><label className={labelCls}>Time Zone</label><input className={inputCls} value={cfg.timezone} onChange={(e) => setCfg({ ...cfg, timezone: e.target.value })} /></div>
-              <div><label className={labelCls}>Eligible Category (empty = staff)</label><input className={inputCls} value={cfg.eligiblecategory} onChange={(e) => setCfg({ ...cfg, eligiblecategory: e.target.value })} placeholder="e.g. STF" /></div>
+              <div><label className={labelCls}>Eligible Category (code or name, empty = staff)</label><input className={inputCls} value={cfg.eligiblecategory} onChange={(e) => setCfg({ ...cfg, eligiblecategory: e.target.value })} placeholder="e.g. STAFF or 001" /></div>
               <div><label className={labelCls}>Template Name</label><input className={inputCls} value={cfg.templatename} onChange={(e) => setCfg({ ...cfg, templatename: e.target.value })} placeholder="attendance_update" /></div>
               <div><label className={labelCls}>Language</label><input className={inputCls} value={cfg.templatelanguage} onChange={(e) => setCfg({ ...cfg, templatelanguage: e.target.value })} /></div>
               <label className="flex items-center gap-2 text-xs text-[var(--text)]"><input type="checkbox" checked={cfg.dryrun} onChange={(e) => setCfg({ ...cfg, dryrun: e.target.checked })} className="accent-[var(--accent)]" /> Dry-run</label>
@@ -262,6 +266,24 @@ export default function WhatsAppSection() {
               <div key={k} className="px-3 py-2 rounded-xl bg-white/5 border border-white/5"><span className="text-[10px] uppercase font-bold text-[var(--muted)]">{k}</span><p className="text-sm font-bold text-[var(--text)]">{v}</p></div>
             )) : null}
           </div>
+          {Array.isArray(elig?.rejected) && elig.rejected.length ? (
+            <details className="mb-3 rounded-xl border border-white/5 bg-white/5 p-3">
+              <summary className="text-[11px] font-bold text-[var(--text)] cursor-pointer">Rejection reasons ({elig.rejected.length})</summary>
+              <div className="overflow-x-auto mt-2">
+                <table className="w-full text-xs">
+                  <thead><tr className="text-left text-[var(--muted)] uppercase text-[10px]"><th className="p-2">Paycode</th><th className="p-2">Reason</th></tr></thead>
+                  <tbody>
+                    {elig.rejected.map((r) => (
+                      <tr key={r.paycode} className="border-t border-white/5">
+                        <td className="p-2 text-[var(--text)]">{r.paycode}</td>
+                        <td className="p-2 text-[var(--muted)]">{r.reason}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </details>
+          ) : null}
           <div className="flex flex-wrap items-end gap-2 mb-3">
             <div className="w-40"><label className={labelCls}>Paycode</label><input className={inputCls} value={consentPaycode} onChange={(e) => setConsentPaycode(e.target.value)} placeholder="e.g. 0328" /></div>
             <div className="w-32"><label className={labelCls}>Action</label><select className={inputCls} value={consentAction} onChange={(e) => setConsentAction(e.target.value)}><option value="Granted">Grant</option><option value="Revoked">Revoke</option></select></div>
@@ -298,6 +320,12 @@ export default function WhatsAppSection() {
             <button disabled={sendBusy} onClick={() => runSend(true)} className="px-4 py-2 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs font-bold disabled:opacity-50">Run Dry-run</button>
             <button disabled={sendBusy || !healthData.canSendReal} onClick={() => runSend(false)} title={healthData.canSendReal ? '' : 'Real send is OFF until Cloud API is configured, enabled, approved and dry-run=false'} className="px-4 py-2 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs font-bold disabled:opacity-40 disabled:cursor-not-allowed">Send Real</button>
           </div>
+          <p className="text-[10px] text-[var(--muted)] mb-3 leading-relaxed">
+            <i className="fas fa-circle-info mr-1"></i>Scheduled attendance updates are business-initiated template messages and MAY INCUR per-message charges per Meta's current pricing. There is no free automated attendance route — free replies are only permitted for a user-initiated conversation within Meta's customer-service window. Dry-run and preview never contact Meta and never incur charges.
+          </p>
+          <p className="text-[10px] text-emerald-300/80 mb-3 leading-relaxed">
+            <i className="fab fa-whatsapp mr-1"></i><span className="font-bold">Free manual sending:</span> "Open WhatsApp" opens the employee's chat (WhatsApp app or Web) with the message prefilled — the message is <span className="font-bold">not sent until you press Send in WhatsApp</span>. No Cloud API credentials are needed, and this never contacts Meta or incurs charges.
+          </p>
           {sendResult ? (
             <div className="flex flex-wrap gap-2 mb-3">
               {[['Total', sendResult.total], ['Sent', sendResult.sent], ['Failed', sendResult.failed], ['Skipped', sendResult.skipped], ['Dry-run', sendResult.dryRun]].map(([k, v]) => (
@@ -308,22 +336,32 @@ export default function WhatsAppSection() {
           {previews && (
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
-                <thead><tr className="text-left text-[var(--muted)] uppercase text-[10px]"><th className="p-2">Paycode</th><th className="p-2">Name</th><th className="p-2">Date</th><th className="p-2">In</th><th className="p-2">Out</th><th className="p-2">Punch</th><th className="p-2">Status</th><th className="p-2">Grace Used</th><th className="p-2">Message</th></tr></thead>
+                <thead><tr className="text-left text-[var(--muted)] uppercase text-[10px]"><th className="p-2">Paycode</th><th className="p-2">Name</th><th className="p-2">Date</th><th className="p-2">In</th><th className="p-2">Out</th><th className="p-2">Punch</th><th className="p-2">Status</th><th className="p-2">Grace Used</th><th className="p-2">Message</th><th className="p-2">Manual Send</th></tr></thead>
                 <tbody>
-                  {previews.map((p, i) => (
-                    <tr key={i} className="border-t border-white/5">
-                      <td className="p-2 text-[var(--text)]">{p.paycode}</td>
-                      <td className="p-2 text-[var(--text)]">{p.empname}</td>
-                      <td className="p-2 text-[var(--text)]">{p.dateIso}</td>
-                      <td className="p-2 text-[var(--text)]">{p.inTime || '—'}</td>
-                      <td className="p-2 text-[var(--text)]">{p.outTime || '—'}</td>
-                      <td className="p-2 text-[var(--text)]">{p.punchStatus}</td>
-                      <td className="p-2">{statusBadge(p.status)}</td>
-                      <td className="p-2 text-[var(--text)]">{p.graceUsed || '—'}</td>
-                      <td className="p-2 text-[var(--muted)] whitespace-pre-wrap max-w-xs">{p.text}</td>
-                    </tr>
-                  ))}
-                  {previews.length === 0 ? <tr><td colSpan="9" className="p-4 text-center text-[var(--muted)]">No eligible staff for this date (check category, number and consent).</td></tr> : null}
+                  {previews.map((p, i) => {
+                    const chatUrl = manualChatUrl(p.whatsappnumber, p.text);
+                    return (
+                      <tr key={i} className="border-t border-white/5">
+                        <td className="p-2 text-[var(--text)]">{p.paycode}</td>
+                        <td className="p-2 text-[var(--text)]">{p.empname}</td>
+                        <td className="p-2 text-[var(--text)]">{p.dateIso}</td>
+                        <td className="p-2 text-[var(--text)]">{p.inTime || '—'}</td>
+                        <td className="p-2 text-[var(--text)]">{p.outTime || '—'}</td>
+                        <td className="p-2 text-[var(--text)]">{p.punchStatus}</td>
+                        <td className="p-2">{statusBadge(p.status)}</td>
+                        <td className="p-2 text-[var(--text)]">{p.graceUsed || '—'}</td>
+                        <td className="p-2 text-[var(--muted)] whitespace-pre-wrap max-w-xs">{p.text}</td>
+                        <td className="p-2">
+                          {chatUrl ? (
+                            <a href={chatUrl} target="_blank" rel="noopener noreferrer" title="Free manual send — opens WhatsApp with the message prefilled; you must press Send" className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-600/20 border border-emerald-500/30 text-emerald-300 text-[10px] font-bold hover:bg-emerald-600/30 transition">
+                              <i className="fab fa-whatsapp"></i> Open WhatsApp
+                            </a>
+                          ) : <span className="text-[var(--muted)]">—</span>}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {previews.length === 0 ? <tr><td colSpan="10" className="p-4 text-center text-[var(--muted)]">No eligible staff for this date (check category, number and consent).</td></tr> : null}
                 </tbody>
               </table>
             </div>

@@ -7800,30 +7800,46 @@ async function loadWhatsAppEligible(pool, req, cfg) {
   for (const c of consentResult.recordset) consentByPaycode.set(String(c.paycode || '').trim(), c);
   const eligibleCats = String(cfg.eligiblecategory || '').split(',').map((c) => c.trim().toUpperCase()).filter(Boolean);
   const eligible = [];
-  const counts = { total: 0, eligible: 0, noNumber: 0, invalidNumber: 0, noConsent: 0, notStaff: 0, inactive: 0, outOfScope: 0 };
+  const rejected = [];
+  // Mutually-exclusive PRIMARY reason counters: an employee falls into exactly
+  // one of these buckets (the per-employee checks below `continue` on first hit),
+  // so no employee is double-counted across reasons.
+  const counts = { total: 0, eligible: 0, noNumber: 0, invalidNumber: 0, noConsent: 0, optedOut: 0, notStaff: 0, inactive: 0, outOfScope: 0 };
   for (const e of empResult.recordset) {
     const paycode = String(e.paycode || '').trim();
     if (!paycode) continue;
     counts.total++;
     const companycode = String(e.companycode || '').trim();
-    if (!whatsappInScope(req, companycode)) { counts.outOfScope++; continue; }
+    if (!whatsappInScope(req, companycode)) { counts.outOfScope++; rejected.push({ paycode, reason: 'OUT_OF_SCOPE' }); continue; }
     const activeRaw = e.active;
     const inactive = activeRaw === false || activeRaw === 0 || String(activeRaw || '').trim().toUpperCase() === 'N';
-    if (inactive) { counts.inactive++; continue; }
+    if (inactive) { counts.inactive++; rejected.push({ paycode, reason: 'INACTIVE' }); continue; }
     const catCode = String(e.cat || '').trim();
-    const catOk = eligibleCats.length ? eligibleCats.includes(catCode.toUpperCase()) : isStaffCategory(catCode, categoryCache);
-    if (!catOk) { counts.notStaff++; continue; }
+    // Match the configured eligible category against BOTH the raw code (e.g. '001')
+    // and its resolved name (e.g. 'STAFF'), because dbo.tblemployee.cat stores the
+    // CODE while HR may configure the NAME. Previously only the code was compared, so
+    // a configured name like 'STAFF' never matched any code and every active employee
+    // was misclassified NOTSTAFF.
+    const catCodeUpper = catCode.toUpperCase();
+    const catName = resolveCategory(catCode, categoryCache);
+    const catOk = eligibleCats.length
+      ? eligibleCats.some((c) => c === catCodeUpper || c === catName)
+      : isStaffCategory(catCode, categoryCache);
+    if (!catOk) { counts.notStaff++; rejected.push({ paycode, reason: 'CATEGORY_MISMATCH' }); continue; }
     const rawPhone = String(e.telephone1 || '').trim();
-    if (!rawPhone) { counts.noNumber++; continue; }
+    if (!rawPhone) { counts.noNumber++; rejected.push({ paycode, reason: 'NO_NUMBER' }); continue; }
     const number = normalizeWhatsAppNumber(rawPhone);
-    if (!number) { counts.invalidNumber++; continue; }
+    if (!number) { counts.invalidNumber++; rejected.push({ paycode, reason: 'INVALID_NUMBER' }); continue; }
     const consent = consentByPaycode.get(paycode);
-    const granted = consent && String(consent.consentstatus || '').trim() === 'Granted' && !consent.optedoutat;
-    if (!granted) { counts.noConsent++; continue; }
+    // Distinct primary reasons: NO_CONSENT (no Granted consent) vs OPTED_OUT
+    // (Granted but later opted out). Both block sending; they are counted separately
+    // and never both at once.
+    if (!consent || String(consent.consentstatus || '').trim() !== 'Granted') { counts.noConsent++; rejected.push({ paycode, reason: 'NO_CONSENT' }); continue; }
+    if (consent.optedoutat) { counts.optedOut++; rejected.push({ paycode, reason: 'OPTED_OUT' }); continue; }
     eligible.push({ paycode, empname: String(e.empname || '').trim(), companycode, departmentcode: String(e.departmentcode || '').trim(), cat: catCode, whatsappnumber: number, consentstatus: 'Granted' });
   }
   counts.eligible = eligible.length;
-  return { eligible, counts };
+  return { eligible, counts, rejected };
 }
 
 async function buildWhatsAppMessageForEmployee(pool, emp, cfg, dateIso) {
@@ -8073,8 +8089,8 @@ app.get('/api/whatsapp/eligibility', requireDbConfig, authenticate, requireRole(
   try {
     const pool = await getPool();
     const cfg = await getWhatsAppConfig(pool);
-    const { eligible, counts } = await loadWhatsAppEligible(pool, req, cfg);
-    return res.json({ success: true, counts, employees: eligible });
+    const { eligible, counts, rejected } = await loadWhatsAppEligible(pool, req, cfg);
+    return res.json({ success: true, counts, employees: eligible, rejected });
   } catch (error) { return whatsappErrorResponse(res, error); }
 });
 
