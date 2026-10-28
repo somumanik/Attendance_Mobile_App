@@ -13,6 +13,7 @@ const MODULES = [
   { href: '/superadmin/fullfinal', icon: 'fa-file-invoice-dollar', color: 'text-rose-400', label: 'Full & Final Management', desc: 'Settlement and full & final computation' },
   { href: '/superadmin/employees', icon: 'fa-users', color: 'text-indigo-400', label: 'Employee Management', desc: 'Employee master list and details' },
   { href: '/superadmin/email', icon: 'fa-envelope', color: 'text-teal-400', label: 'Email Management', desc: 'Email configuration, notifications and health' },
+  { href: '/superadmin/whatsapp', icon: 'fa-comment-dots', color: 'text-green-400', label: 'WhatsApp Messaging', desc: 'Attendance WhatsApp templates and sending' },
   { href: '/superadmin/hr-admins', icon: 'fa-user-shield', color: 'text-purple-400', label: 'HR Admin & Permissions', desc: 'Accounts, module and action permissions' },
   { href: '/superadmin/users', icon: 'fa-user-gear', color: 'text-pink-400', label: 'SuperAdmin Users', desc: 'Manage SuperAdmin accounts' },
 ];

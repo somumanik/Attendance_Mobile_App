@@ -102,6 +102,8 @@ export const EmployeeReportsScreen = () => {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState(null);
   const [expandedDate, setExpandedDate] = useState(null);
+  // Tapped summary card ('absent' | 'miss' | 'late' | null) — in-screen drill-down.
+  const [openDetail, setOpenDetail] = useState(null);
   const [exportMsg, setExportMsg] = useState(null);
   const [exporting, setExporting] = useState(false);
   // Stale-response guard: month change ke baad purana response kabhi paint nahi hota.
@@ -112,6 +114,7 @@ export const EmployeeReportsScreen = () => {
     if (isRefresh) setIsRefreshing(true); else setIsLoading(true);
     setError(null);
     setExpandedDate(null);
+    setOpenDetail(null);
     setPrev(null);
     const range = monthRange(targetMonth) || { from: `${targetMonth}-01`, to: `${targetMonth}-28` };
     try {
@@ -172,6 +175,33 @@ export const EmployeeReportsScreen = () => {
   const summary = useMemo(() => summariseRegister(register, data), [register, data]);
   const weeks = useMemo(() => buildWeeks(register), [register]);
   const punct = useMemo(() => punctuality(register, data), [register, data]);
+  // Configured grace allowance (real per-tier limits from the shared backend).
+  const graceLimits = useMemo(() => {
+    const elig = data?.graceEligibility;
+    if (elig && elig.isStaff && elig.limits) return elig.limits;
+    return { grace30min: 0, grace1hr: 0, grace2hr: 0 };
+  }, [data]);
+  const isStaffGrace = Boolean(data?.graceEligibility?.isStaff);
+  // Drill-down lists for the tappable summary cards (only this employee's data).
+  const absentRows = useMemo(() => register.filter((r) => r.kind === 'absent'), [register]);
+  const missRows = useMemo(() => register.filter((r) => r.kind === 'miss'), [register]);
+  const lateRows = useMemo(() => {
+    const details = Array.isArray(data?.lateDetails) ? data.lateDetails : [];
+    const att = Array.isArray(data?.attendance) ? data.attendance : [];
+    return details.map((l) => {
+      const d = clean(l.date).slice(0, 10);
+      const row = att.find((r) => clean(r.date || r.dateoffice).slice(0, 10) === d);
+      return {
+        date: d,
+        inTime: clean(row?.inTime),
+        shift: clean(data?.shift?.shiftName || data?.shift?.shiftCode || ''),
+        shiftStart: clean(data?.shift?.startTime || ''),
+        lateMinutes: Number(l.lateMinutes || 0),
+        graceUsed: clean(l.graceUsed),
+        isFinalLate: l.isFinalLate !== false,
+      };
+    });
+  }, [data]);
   const hours = useMemo(() => hoursSeries(register), [register]);
   const insights = useMemo(
     () => buildInsights({ register, weeks, summary, month, prev }),
@@ -215,16 +245,37 @@ export const EmployeeReportsScreen = () => {
   }, [exporting, register, summary, month]);
 
   // ---------- small render helpers ----------
-  const summaryCard = (label, value, color, sub) => (
-    <View style={[styles.sumBox, { borderColor: `${color}44` }]} key={label}>
-      <View style={[styles.sumIcon, { backgroundColor: `${color}18` }]}>
-        <Ionicons name={label === 'Present Days' ? 'checkmark-circle' : label === 'Absent Days' ? 'close-circle' : label === 'Miss Punch' ? 'alert-circle' : label === 'Late Arrivals' ? 'time' : label === 'Attendance %' ? 'stats-chart' : 'hourglass'} size={14} color={color} />
-      </View>
-      <Text style={[styles.sumValue, { color }]} numberOfLines={1} adjustsFontSizeToFit>{value}</Text>
-      <Text style={[styles.sumLabel, { color: theme.textSecondary }]} numberOfLines={1}>{label}</Text>
-      {sub ? <Text style={[styles.sumSub, { color: theme.textTertiary }]} numberOfLines={2}>{sub}</Text> : null}
-    </View>
-  );
+  const summaryCard = (label, value, color, sub, onPress, active) => {
+    const iconName = label === 'Present Days' ? 'checkmark-circle' : label === 'Absent Days' ? 'close-circle' : label === 'Miss Punch' ? 'alert-circle' : label === 'Late Arrivals' ? 'time' : label === 'Attendance %' ? 'stats-chart' : 'hourglass';
+    const content = (
+      <>
+        <View style={[styles.sumIcon, { backgroundColor: `${color}18` }]}>
+          <Ionicons name={iconName} size={14} color={color} />
+        </View>
+        <Text style={[styles.sumValue, { color }]} numberOfLines={1} adjustsFontSizeToFit>{value}</Text>
+        <Text style={[styles.sumLabel, { color: theme.textSecondary }]} numberOfLines={1}>{label}</Text>
+        {sub ? <Text style={[styles.sumSub, { color: theme.textTertiary }]} numberOfLines={2}>{sub}</Text> : null}
+        {onPress ? <Ionicons name="chevron-forward" size={12} color={active ? color : theme.textTertiary} style={styles.sumChevron} /> : null}
+      </>
+    );
+    if (onPress) {
+      return (
+        <TouchableOpacity
+          key={label}
+          accessibilityRole="button"
+          accessibilityLabel={`Show ${label} details`}
+          activeOpacity={0.75}
+          onPress={onPress}
+          style={[styles.sumBox, { borderColor: active ? color : `${color}44` }, active ? { backgroundColor: `${color}14` } : null]}
+        >
+          {content}
+        </TouchableOpacity>
+      );
+    }
+    return <View style={[styles.sumBox, { borderColor: `${color}44` }]} key={label}>{content}</View>;
+  };
+
+  const toggleDetail = (type) => setOpenDetail((cur) => (cur === type ? null : type));
 
   const sectionTitle = (title, sub) => (
     <View style={styles.sectionHead}>
@@ -286,13 +337,75 @@ export const EmployeeReportsScreen = () => {
               {sectionTitle('Monthly Summary', `${monthLabel(month)} · ${summary.totalDays} calendar days`)}
               <View style={styles.sumGrid}>
                 {summaryCard('Present Days', summary.present, COLORS_BY_KEY.present, '')}
-                {summaryCard('Absent Days', summary.absent, COLORS_BY_KEY.absent, 'Excl. leave / holiday / week off')}
-                {summaryCard('Miss Punch', summary.miss, COLORS_BY_KEY.miss, 'Incomplete punches')}
-                {summaryCard('Late Arrivals', summary.lateFinal, LATE_COLOR, `final after grace · ${summary.lateRaw} raw late`)}
+                {summaryCard('Absent Days', summary.absent, COLORS_BY_KEY.absent, 'Excl. leave / holiday / week off', () => toggleDetail('absent'), openDetail === 'absent')}
+                {summaryCard('Miss Punch', summary.miss, COLORS_BY_KEY.miss, 'Incomplete punches', () => toggleDetail('miss'), openDetail === 'miss')}
+                {summaryCard('Late Arrivals', summary.lateFinal, LATE_COLOR, `final after grace · ${summary.lateRaw} raw late`, () => toggleDetail('late'), openDetail === 'late')}
                 {summaryCard('Attendance %', summary.attendancePct === null ? DASH : `${summary.attendancePct}%`, '#2563EB', 'Present ÷ (P+A+Miss)')}
                 {summaryCard('Recorded Hours', summary.recordedDays > 0 ? hoursText(summary.hoursMin) : DASH, '#0891B2', summary.recordedDays > 0 ? `${summary.recordedDays} recorded day(s)` : 'No recorded hours')}
               </View>
             </Card>
+
+            {/* ---------- Card drill-down (Absent / Miss Punch / Late) ---------- */}
+            {openDetail ? (() => {
+              const detailMeta = {
+                absent: { title: 'Absent Days', rows: absentRows, color: COLORS_BY_KEY.absent },
+                miss: { title: 'Miss Punch', rows: missRows, color: COLORS_BY_KEY.miss },
+                late: { title: 'Late Arrivals', rows: lateRows, color: LATE_COLOR },
+              }[openDetail];
+              const list = detailMeta.rows;
+              return (
+                <Card style={styles.card}>
+                  <View style={styles.detailHead}>
+                    {sectionTitle(detailMeta.title, `${monthLabel(month)} · ${list.length} record${list.length === 1 ? '' : 's'}`)}
+                    <TouchableOpacity style={[styles.detailClose, { borderColor: theme.border }]} onPress={() => setOpenDetail(null)} accessibilityLabel="Close details" activeOpacity={0.7}>
+                      <Ionicons name="close" size={16} color={theme.textSecondary} />
+                    </TouchableOpacity>
+                  </View>
+                  {list.length ? (
+                    <View style={styles.detailList}>
+                      {list.map((r) => (
+                        <View key={r.date} style={[styles.detailRow, { borderColor: theme.border }]}>
+                          <View style={styles.detailTop}>
+                            <View style={styles.detailDateCol}>
+                              <Text style={[styles.detailDate, { color: theme.textPrimary }]}>{fmtDate(r.date)}</Text>
+                              <Text style={[styles.detailDay, { color: theme.textTertiary }]}>{dayNameOf(r.date)}</Text>
+                            </View>
+                            {openDetail === 'late' ? (
+                              <View style={[styles.detailBadge, { backgroundColor: r.isFinalLate ? `${COLORS_BY_KEY.absent}22` : `${COLORS_BY_KEY.leave}22`, borderColor: r.isFinalLate ? COLORS_BY_KEY.absent : COLORS_BY_KEY.leave }]}>
+                                <Text style={[styles.detailBadgeText, { color: r.isFinalLate ? COLORS_BY_KEY.absent : COLORS_BY_KEY.leave }]}>{r.isFinalLate ? 'Final late' : `Covered by ${r.graceUsed || 'grace'}`}</Text>
+                              </View>
+                            ) : (
+                              <View style={[styles.detailBadge, { backgroundColor: `${detailMeta.color}22`, borderColor: detailMeta.color }]}>
+                                <Text style={[styles.detailBadgeText, { color: detailMeta.color }]}>{openDetail === 'absent' ? 'Absent' : 'Miss Punch'}</Text>
+                              </View>
+                            )}
+                          </View>
+                          <View style={styles.detailMeta}>
+                            {openDetail === 'absent' ? (
+                              <Text style={[styles.detailMetaText, { color: theme.textSecondary }]}>{r.remark || 'No reason recorded'}</Text>
+                            ) : null}
+                            {openDetail === 'miss' ? (
+                              <>
+                                <Text style={[styles.detailMetaText, { color: theme.textSecondary }]}>In: {r.inTime || PLACEHOLDER} · Out: {r.outTime || PLACEHOLDER}</Text>
+                                <Text style={[styles.detailMetaText, { color: theme.textTertiary }]}>Incomplete punch record</Text>
+                              </>
+                            ) : null}
+                            {openDetail === 'late' ? (
+                              <>
+                                <Text style={[styles.detailMetaText, { color: theme.textSecondary }]}>In: {r.inTime || PLACEHOLDER}{r.shift ? ` · Shift: ${r.shift}` : ''}{r.shiftStart ? ` (${r.shiftStart})` : ''}</Text>
+                                <Text style={[styles.detailMetaText, { color: theme.textTertiary }]}>Late by {r.lateMinutes > 0 ? `+${r.lateMinutes} min` : PLACEHOLDER}{r.isFinalLate ? ' · not covered by grace' : ` · covered by ${r.graceUsed || 'grace'}`}</Text>
+                              </>
+                            ) : null}
+                          </View>
+                        </View>
+                      ))}
+                    </View>
+                  ) : (
+                    <Text style={[styles.empty, { color: theme.textTertiary }]}>No {detailMeta.title.toLowerCase()} for {monthLabel(month)}.</Text>
+                  )}
+                </Card>
+              );
+            })() : null}
 
             {/* ---------- Attendance distribution (compact stacked viz) ---------- */}
             <Card style={styles.card}>
@@ -382,9 +495,11 @@ export const EmployeeReportsScreen = () => {
                 ))}
               </View>
               <Text style={[styles.graceLine, { color: theme.textTertiary }]}>
-                {punct.graceRemaining
-                  ? `Grace left — 30min ${Number(punct.graceRemaining.grace30min || 0)}/2 · 1hr ${Number(punct.graceRemaining.grace1hr || 0)}/1 · 2hr ${Number(punct.graceRemaining.grace2hr || 0)}/1`
-                  : 'Grace information unavailable for this month.'}
+                {!isStaffGrace
+                  ? 'Monthly staff grace is not applicable for your category.'
+                  : punct.graceRemaining
+                    ? `Grace left — 30min ${Number(punct.graceRemaining.grace30min || 0)}/${Number(graceLimits.grace30min || 0)} · 1hr ${Number(punct.graceRemaining.grace1hr || 0)}/${Number(graceLimits.grace1hr || 0)} · 2hr ${Number(punct.graceRemaining.grace2hr || 0)}/${Number(graceLimits.grace2hr || 0)}`
+                    : 'Grace information unavailable for this month.'}
               </Text>
             </Card>
 
@@ -553,6 +668,21 @@ const styles = StyleSheet.create({
   sumValue: { fontSize: 18, fontWeight: '800' },
   sumLabel: { fontSize: 9.5, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.3, marginTop: 2, textAlign: 'center' },
   sumSub: { fontSize: 8.5, marginTop: 2, textAlign: 'center' },
+  sumChevron: { position: 'absolute', top: 6, right: 6 },
+
+  // Card drill-down detail
+  detailHead: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' },
+  detailClose: { width: 26, height: 26, borderRadius: 13, borderWidth: 1, alignItems: 'center', justifyContent: 'center', marginTop: 2 },
+  detailList: { gap: 8, marginTop: 4 },
+  detailRow: { borderRadius: 12, borderWidth: 1, padding: 10 },
+  detailTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  detailDateCol: { flexDirection: 'row', alignItems: 'baseline', gap: 8 },
+  detailDate: { fontSize: 12.5, fontWeight: '800' },
+  detailDay: { fontSize: 9.5 },
+  detailBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999, borderWidth: 1 },
+  detailBadgeText: { fontSize: 9.5, fontWeight: '800' },
+  detailMeta: { marginTop: 6, gap: 3 },
+  detailMetaText: { fontSize: 10.5 },
 
   // Distribution
   distBar: { flexDirection: 'row', height: 14, borderRadius: 7, overflow: 'hidden', marginTop: 4 },

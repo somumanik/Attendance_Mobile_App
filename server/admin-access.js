@@ -299,9 +299,20 @@ export async function hasPermission(pool, username, module, action = 'view') {
  */
 export async function moduleAllowed(pool, username, module, action = 'view', legacyAllow = false) {
   if (!module) return true;
-  const perms = await getEffectivePermissions(pool, username);
-  const mod = perms[module];
-  if (!mod) return legacyAllow === true;
+  /* Bootstrap HR account always keeps full access (recovery path). */
+  if (isBootstrapHr(username)) return true;
+  /* Read the RAW stored rows (not the filled-in effective map) so a section with
+     NO explicit row is distinguishable from a section with an explicit row.
+     `legacy: true` sections (dashboard / audit / analytics / dailymaster / reports /
+     celebrations / marriage) keep the historical ALLOW when no row exists; the
+     pre-existing module rules keep their strict deny behaviour. A brand-new account
+     with zero rows keeps the safe default (VIEW allowed). */
+  const stored = await readStoredPermissions(pool, username);
+  const mod = stored[module];
+  if (!mod) {
+    if (Object.keys(stored).length === 0) return action === 'view';
+    return legacyAllow === true;
+  }
   return mod[action] === true;
 }
 

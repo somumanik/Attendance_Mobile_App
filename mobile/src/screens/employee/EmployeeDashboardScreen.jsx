@@ -211,8 +211,18 @@ export const EmployeeDashboardScreen = () => {
   }, [data, rows]);
 
   const grace = data?.graceRemaining;
-  const graceTotal = grace ? (Number(grace.grace30min || 0) + Number(grace.grace1hr || 0) + Number(grace.grace2hr || 0)) : null;
-  const graceLeft = grace ? (Number(grace.grace30min || 0) + Number(grace.grace1hr || 0) + Number(grace.grace2hr || 0)) : null;
+  // Y = the employee's REAL configured monthly grace allowance (STAFF = 2+1+1 = 4;
+  // other categories get none). X = remaining instances after the authoritative
+  // monthly consumption. Both come from the shared backend, never hardcoded here.
+  const graceLimits = (data?.graceEligibility?.isStaff && data?.graceEligibility?.limits)
+    ? data.graceEligibility.limits
+    : { grace30min: 0, grace1hr: 0, grace2hr: 0 };
+  const graceTotal = grace
+    ? (Number(graceLimits.grace30min || 0) + Number(graceLimits.grace1hr || 0) + Number(graceLimits.grace2hr || 0))
+    : null;
+  const graceLeft = grace
+    ? (Number(grace.grace30min || 0) + Number(grace.grace1hr || 0) + Number(grace.grace2hr || 0))
+    : null;
 
   // Aggregates cover exactly the window the backend reports, so the label can
   // never disagree with the numbers (the backend never counts a future date).

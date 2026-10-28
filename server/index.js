@@ -2730,6 +2730,7 @@ app.get('/api/employee/dashboard', authenticate, requireRole('EMPLOYEE'), requir
     let finalLateCount = 0;
     let lateDetails = [];
     let graceRemaining = null;
+    let graceEligibility = null;
     for (const [monthKey, monthRows] of rowsByMonth) {
       const [year, month] = monthKey.split('-').map(Number);
       const monthlyResult = computeMonthlyLateForEmployee(monthRows, shiftMap, empInfo.cat, empInfo.companycode, req.user.paycode, year, month, shiftInfo.resolved ? shiftInfo.shiftCode : null);
@@ -2738,6 +2739,16 @@ app.get('/api/employee/dashboard', authenticate, requireRole('EMPLOYEE'), requir
       // employee's own dashboard instead of being recalculated anywhere.
       if (Array.isArray(monthlyResult.lateDetails)) lateDetails = lateDetails.concat(monthlyResult.lateDetails);
       if (monthlyResult.graceRemaining) graceRemaining = monthlyResult.graceRemaining;
+      if (monthlyResult.graceEligibility) graceEligibility = monthlyResult.graceEligibility;
+    }
+
+    // No register rows in the selected month (or an employee with no category):
+    // still report the configured allowance so the UI can render "Grace left: X of Y"
+    // consistently for zero-usage / non-staff employees too. Shape matches
+    // computeMonthlyLateForEmployee().graceEligibility exactly.
+    if (!graceEligibility) {
+      const isStaff = isStaffCategory(empInfo.cat, categoryCache);
+      graceEligibility = { isStaff, limits: { ...STAFF_MONTHLY_GRACE_LIMITS } };
     }
     
     // Calculate stats with grace-aware late computation.
@@ -2803,6 +2814,10 @@ app.get('/api/employee/dashboard', authenticate, requireRole('EMPLOYEE'), requir
       trendTo: trendRange.toDate,
       lateDetails,
       graceRemaining,
+      // Configured STAFF grace eligibility + per-tier monthly limits, so the UI can
+      // render "Grace left: X of Y" against the real allowance (backward-compatible
+      // addition; existing callers only read graceRemaining/lateDetails).
+      graceEligibility,
       // Cumulative grace position as of each late date (see buildGraceTimeline).
       graceTimeline: buildGraceTimeline(lateDetails, graceRemaining),
     });

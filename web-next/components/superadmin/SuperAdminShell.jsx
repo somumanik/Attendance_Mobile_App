@@ -25,6 +25,7 @@ const LINKS = [
   { href: '/superadmin/fullfinal', label: 'Full & Final', icon: 'fa-file-invoice-dollar', color: 'text-rose-400' },
   { href: '/superadmin/employees', label: 'Employees', icon: 'fa-users', color: 'text-indigo-400' },
   { href: '/superadmin/email', label: 'Email', icon: 'fa-envelope', color: 'text-teal-400' },
+  { href: '/superadmin/whatsapp', label: 'WhatsApp', icon: 'fa-comment-dots', color: 'text-green-400' },
   { href: '/superadmin/hr-admins', label: 'HR Admins', icon: 'fa-user-shield', color: 'text-purple-400' },
   { href: '/superadmin/users', label: 'SuperAdmin Users', icon: 'fa-user-gear', color: 'text-pink-400' },
 ];
@@ -43,7 +44,7 @@ export default function SuperAdminShell({ children, userName }) {
         className={`sa-sidebar portal-sidebar fixed inset-y-0 left-0 z-50 w-64 p-4 flex flex-col transition-transform duration-200 lg:translate-x-0 ${open ? 'translate-x-0' : '-translate-x-full'}`}
         aria-label="SuperAdmin modules"
       >
-        <div className="flex items-center gap-3 px-2 py-1 mb-6">
+        <div className="flex items-center gap-3 px-2 py-1 mb-6 shrink-0">
           <div className="w-10 h-10 rounded-xl card-gradient-1 flex items-center justify-center shadow-lg shadow-indigo-600/30 shrink-0">
             <i className="fas fa-user-shield text-lg text-white"></i>
           </div>
@@ -69,7 +70,7 @@ export default function SuperAdminShell({ children, userName }) {
           })}
         </nav>
 
-        <div className="mt-4 px-2 pt-3 border-t border-[var(--border)] text-[10px] text-[var(--muted)] leading-snug">
+        <div className="mt-4 px-2 pt-3 border-t border-[var(--border)] text-[10px] text-[var(--muted)] leading-snug shrink-0">
           <i className="fas fa-database mr-1"></i>Common backend · synced with the Mobile App
         </div>
       </aside>
