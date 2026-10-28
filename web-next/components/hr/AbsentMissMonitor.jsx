@@ -25,6 +25,7 @@ const STATUS_META = {
   Present: { label: 'Present', color: '#10b981', icon: 'fa-user-check', cls: 'text-emerald-300 bg-emerald-500/10 border-emerald-500/20' },
   Absent: { label: 'Absent', color: '#f43f5e', icon: 'fa-user-xmark', cls: 'text-rose-300 bg-rose-500/10 border-rose-500/20' },
   'Miss Punch': { label: 'Miss Punch', color: '#f97316', icon: 'fa-triangle-exclamation', cls: 'text-orange-300 bg-orange-500/10 border-orange-500/20' },
+  Late: { label: 'Late', color: '#818cf8', icon: 'fa-business-time', cls: 'text-indigo-300 bg-indigo-500/10 border-indigo-500/20' },
   'Approved Leave': { label: 'Approved Leave', color: '#06b6d4', icon: 'fa-plane-departure', cls: 'text-cyan-300 bg-cyan-500/10 border-cyan-500/20' },
   Holiday: { label: 'Holiday', color: '#8b5cf6', icon: 'fa-calendar-star', cls: 'text-violet-300 bg-violet-500/10 border-violet-500/20' },
   'Week Off': { label: 'Weekly Off', color: '#eab308', icon: 'fa-umbrella-beach', cls: 'text-yellow-300 bg-yellow-500/10 border-yellow-500/20' },
@@ -82,7 +83,8 @@ export default function AbsentMissMonitor() {
   const [cat, setCat] = useState('');
   const [dept, setDept] = useState('');
   const [search, setSearch] = useState('');
-  const [drillStatus, setDrillStatus] = useState(null); // 'Absent' | 'Miss Punch' | null
+  const [detailSearch, setDetailSearch] = useState(''); // name filter inside the drill-down section
+  const [drillStatus, setDrillStatus] = useState(null); // 'Absent' | 'Miss Punch' | 'Late' | null
   const [drillCompany, setDrillCompany] = useState('');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
@@ -107,10 +109,14 @@ export default function AbsentMissMonitor() {
     const p = new URLSearchParams(params.toString());
     if (drillStatus) p.set('status', drillStatus);
     if (drillCompany) p.set('companycode', drillCompany);
+    // The drill-down name filter overrides the main Employee Search for the detail
+    // list only (the main summary/trend still use `params` unchanged).
+    const nameQ = detailSearch.trim();
+    if (nameQ) p.set('search', nameQ);
     p.set('page', String(page));
     p.set('pageSize', String(pageSize));
     return p;
-  }, [params, drillStatus, drillCompany, page, pageSize]);
+  }, [params, drillStatus, drillCompany, detailSearch, page, pageSize]);
 
   const drill = useApiData(drillStatus ? `/hr/reports/absent-miss/employees?${drillParams.toString()}` : '');
 
@@ -135,7 +141,7 @@ export default function AbsentMissMonitor() {
 
   function clearFilters() {
     setFromDate(isoToday()); setToDate(isoToday());
-    setCompany(''); setCat(''); setDept(''); setSearch('');
+    setCompany(''); setCat(''); setDept(''); setSearch(''); setDetailSearch('');
     setDrillStatus(null); setDrillCompany(''); setPage(1); setExportMsg(null);
   }
 
@@ -168,6 +174,36 @@ export default function AbsentMissMonitor() {
       setExporting(false);
     }
   }, [params, fromDate, toDate]);
+
+  // Drill-down export: the currently selected status + company + name filter,
+  // all matching rows across every page (server-side, same Export permission).
+  const downloadDrillExport = useCallback(async () => {
+    setExporting(true);
+    setExportMsg(null);
+    try {
+      const p = new URLSearchParams(drillParams.toString());
+      p.delete('page');
+      p.delete('pageSize');
+      const res = await fetch(`/api/hr/reports/absent-miss/export?${p.toString()}`, { credentials: 'include' });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.message || `Export failed (HTTP ${res.status}).`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const statusPart = (drillStatus || 'All').replace(/[^a-z0-9]+/gi, '_');
+      a.download = `Master_Report_${statusPart}_${fromDate}_${toDate}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setExportMsg({ ok: true, text: `${drillStatus || 'Report'} export downloaded.` });
+    } catch (e) {
+      setExportMsg({ ok: false, text: e?.message || 'Export failed. Please try again.' });
+    } finally {
+      setExporting(false);
+    }
+  }, [drillParams, drillStatus, fromDate, toDate]);
 
   // Chart data
   const statusData = {
@@ -315,7 +351,7 @@ export default function AbsentMissMonitor() {
               <table className="portal-table">
                 <thead>
                   <tr>
-                    <th>Company</th><th>Employees</th><th className="text-emerald-300">Present</th><th className="text-rose-300">Absent</th><th className="text-orange-300">Miss Punch</th><th className="text-cyan-300">Leave</th><th className="text-violet-300">Holiday</th><th className="text-yellow-300">Week Off</th><th>No Record</th><th>Attendance %</th>
+                    <th>Company</th><th>Employees</th><th className="text-emerald-300">Present</th><th className="text-rose-300">Absent</th><th className="text-orange-300">Miss Punch</th><th className="text-indigo-300">Late</th><th className="text-cyan-300">Leave</th><th className="text-violet-300">Holiday</th><th className="text-yellow-300">Week Off</th><th>No Record</th><th>Attendance %</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -330,6 +366,9 @@ export default function AbsentMissMonitor() {
                       <td>
                         <button type="button" onClick={() => openDrill('Miss Punch', g.key)} className="text-orange-300 font-bold underline decoration-dotted underline-offset-2 hover:text-orange-200" title={`Show Miss Punch employees for ${g.label}`}>{num(g.missPunch)}</button>
                       </td>
+                      <td>
+                        <button type="button" onClick={() => openDrill('Late', g.key)} className="text-indigo-300 font-bold underline decoration-dotted underline-offset-2 hover:text-indigo-200" title={`Show Late employees for ${g.label}`}>{num(g.late)}</button>
+                      </td>
                       <td className="text-cyan-300 font-semibold">{num(g.approvedLeave)}</td>
                       <td className="text-violet-300 font-semibold">{num(g.holiday)}</td>
                       <td className="text-yellow-300 font-semibold">{num(g.weekOff)}</td>
@@ -340,7 +379,7 @@ export default function AbsentMissMonitor() {
                 </tbody>
               </table>
             </div>
-            <p className="text-[10px] text-[var(--muted)] mt-2">Click an <span className="text-rose-300 font-bold">Absent</span> or <span className="text-orange-300 font-bold">Miss Punch</span> count to open the matching employees below.</p>
+            <p className="text-[10px] text-[var(--muted)] mt-2">Click an <span className="text-rose-300 font-bold">Absent</span>, <span className="text-orange-300 font-bold">Miss Punch</span> or <span className="text-indigo-300 font-bold">Late</span> count to open the matching employees below.</p>
           </div>
 
           {/* ---------- drill-down employee register ---------- */}
@@ -350,7 +389,8 @@ export default function AbsentMissMonitor() {
                 <h4 className="text-xs font-bold uppercase tracking-wider text-[var(--text)]">
                   <i className={`fas ${STATUS_META[drillStatus].icon} mr-1`}></i>
                   {STATUS_META[drillStatus].label} employees
-                  {drillCompany ? ` — ${drillCompany}` : ''} ({num(reg.total || 0)})
+                  {drillCompany ? ` — ${drillCompany}` : ''}
+                  <span className="font-normal text-[var(--muted)]"> ({fromDate === toDate ? fromDate : `${fromDate} → ${toDate}`} · {num(reg.total || 0)})</span>
                 </h4>
                 <button type="button" onClick={() => setDrillStatus(null)} className="px-3 py-1.5 rounded-lg bg-white/5 border border-[var(--border)] text-[var(--text)] text-xs font-bold hover:bg-white/10">Close</button>
               </div>
@@ -358,17 +398,30 @@ export default function AbsentMissMonitor() {
                 {rows.length ? (
                   <>
                     <div className="flex flex-wrap items-center justify-between gap-3 mb-3 p-3 rounded-xl bg-white/5 border border-[var(--border)]">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs text-[var(--muted)]">Show</span>
-                        <select value={pageSize} onChange={(e) => { setPageSize(parseInt(e.target.value, 10)); setPage(1); }} className="bg-[var(--input-bg)] border border-[var(--border)] rounded-xl px-2 py-1 text-xs text-[var(--text)] outline-none focus:border-[var(--accent)]">
-                          <option value={25}>25</option><option value={50}>50</option><option value={100}>100</option><option value={200}>200</option>
-                        </select>
-                        <span className="text-xs text-[var(--muted)]">per page</span>
+                      <div className="flex flex-wrap items-end gap-3">
+                        <div className="flex flex-col gap-1">
+                          <label className="text-[10px] uppercase font-bold text-[var(--muted)]">Search Employee Name</label>
+                          <input type="text" value={detailSearch} onChange={(e) => { setDetailSearch(e.target.value); setPage(1); }} placeholder="Name or Paycode..." className={inputCls} />
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-[var(--muted)]">Show</span>
+                          <select value={pageSize} onChange={(e) => { setPageSize(parseInt(e.target.value, 10)); setPage(1); }} className="bg-[var(--input-bg)] border border-[var(--border)] rounded-xl px-2 py-1 text-xs text-[var(--text)] outline-none focus:border-[var(--accent)]">
+                            <option value={25}>25</option><option value={50}>50</option><option value={100}>100</option><option value={200}>200</option>
+                          </select>
+                          <span className="text-xs text-[var(--muted)]">per page</span>
+                        </div>
                       </div>
-                      <span className="text-xs text-[var(--muted)]">Page {reg.page || 1} of {reg.totalPages || 1}</span>
-                      <div className="flex items-center gap-1">
-                        <button type="button" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={(reg.page || 1) <= 1} className="px-3 py-1.5 rounded-lg bg-white/5 border border-[var(--border)] text-[var(--text)] text-xs font-bold transition disabled:opacity-50 hover:bg-white/10"><i className="fas fa-chevron-left"></i></button>
-                        <button type="button" onClick={() => setPage((p) => p + 1)} disabled={(reg.page || 1) >= (reg.totalPages || 1)} className="px-3 py-1.5 rounded-lg bg-white/5 border border-[var(--border)] text-[var(--text)] text-xs font-bold transition disabled:opacity-50 hover:bg-white/10"><i className="fas fa-chevron-right"></i></button>
+                      <div className="flex items-center gap-3">
+                        <HrCan module="reports" action="export">
+                          <button type="button" onClick={downloadDrillExport} disabled={exporting} className="px-4 py-2 rounded-xl bg-emerald-600/20 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-600/30 text-xs font-bold transition disabled:opacity-50">
+                            <i className="fas fa-file-excel mr-1"></i>{exporting ? 'Exporting...' : 'Export Excel'}
+                          </button>
+                        </HrCan>
+                        <span className="text-xs text-[var(--muted)]">Page {reg.page || 1} of {reg.totalPages || 1}</span>
+                        <div className="flex items-center gap-1">
+                          <button type="button" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={(reg.page || 1) <= 1} className="px-3 py-1.5 rounded-lg bg-white/5 border border-[var(--border)] text-[var(--text)] text-xs font-bold transition disabled:opacity-50 hover:bg-white/10"><i className="fas fa-chevron-left"></i></button>
+                          <button type="button" onClick={() => setPage((p) => p + 1)} disabled={(reg.page || 1) >= (reg.totalPages || 1)} className="px-3 py-1.5 rounded-lg bg-white/5 border border-[var(--border)] text-[var(--text)] text-xs font-bold transition disabled:opacity-50 hover:bg-white/10"><i className="fas fa-chevron-right"></i></button>
+                        </div>
                       </div>
                     </div>
                     <div className="overflow-x-auto">
@@ -391,7 +444,7 @@ export default function AbsentMissMonitor() {
                               <td className="mono text-emerald-300">{r.inTime || '—'}</td>
                               <td className="mono text-rose-300">{r.outTime || '—'}</td>
                               <td className="font-semibold">{r.hoursworked === null || r.hoursworked === undefined ? '--' : hoursText(Number(r.hoursworked))}</td>
-                              <td>{r.isLate ? <span className="px-2 py-1 rounded-lg border border-indigo-500/30 bg-indigo-500/15 text-[10px] font-bold text-indigo-300">Late</span> : '—'}</td>
+                              <td>{r.isLate ? <span className="px-2 py-1 rounded-lg border border-indigo-500/30 bg-indigo-500/15 text-[10px] font-bold text-indigo-300">Late{r.lateMinutes ? ` +${Math.round(r.lateMinutes)}m` : ''}</span> : '—'}</td>
                               <td className="text-[var(--muted)]">{r.holidayName || r.leaveType || '—'}</td>
                             </tr>
                           ))}
