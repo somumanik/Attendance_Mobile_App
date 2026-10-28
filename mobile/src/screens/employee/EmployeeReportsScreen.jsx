@@ -182,6 +182,23 @@ export const EmployeeReportsScreen = () => {
     return { grace30min: 0, grace1hr: 0, grace2hr: 0 };
   }, [data]);
   const isStaffGrace = Boolean(data?.graceEligibility?.isStaff);
+  // Per-bucket grace utilisation: used = limit − remaining. This is the authoritative
+  // inverse of the backend's `graceRemaining` (computeMonthlyLateForEmployee starts at
+  // the limit and decrements per covered event), so it is NOT a second engine.
+  const graceBuckets = useMemo(() => {
+    const rem = punct.graceRemaining;
+    if (!rem) return null;
+    const mk = (label, remaining, limit) => {
+      const lim = Math.max(0, Number(limit) || 0);
+      const remN = Math.min(lim, Math.max(0, Number(remaining) || 0));
+      return { label, limit: lim, remaining: remN, used: lim - remN };
+    };
+    return [
+      mk('30 min', rem.grace30min, graceLimits.grace30min),
+      mk('1 hour', rem.grace1hr, graceLimits.grace1hr),
+      mk('2 hour', rem.grace2hr, graceLimits.grace2hr),
+    ];
+  }, [punct.graceRemaining, graceLimits]);
   // Drill-down lists for the tappable summary cards (only this employee's data).
   const absentRows = useMemo(() => register.filter((r) => r.kind === 'absent'), [register]);
   const missRows = useMemo(() => register.filter((r) => r.kind === 'miss'), [register]);
@@ -494,13 +511,29 @@ export const EmployeeReportsScreen = () => {
                   </View>
                 ))}
               </View>
-              <Text style={[styles.graceLine, { color: theme.textTertiary }]}>
-                {!isStaffGrace
-                  ? 'Monthly staff grace is not applicable for your category.'
-                  : punct.graceRemaining
-                    ? `Grace left — 30min ${Number(punct.graceRemaining.grace30min || 0)}/${Number(graceLimits.grace30min || 0)} · 1hr ${Number(punct.graceRemaining.grace1hr || 0)}/${Number(graceLimits.grace1hr || 0)} · 2hr ${Number(punct.graceRemaining.grace2hr || 0)}/${Number(graceLimits.grace2hr || 0)}`
-                    : 'Grace information unavailable for this month.'}
-              </Text>
+              {!isStaffGrace ? (
+                <Text style={[styles.graceLine, { color: theme.textTertiary }]}>
+                  Monthly staff grace is not applicable for your category.
+                </Text>
+              ) : graceBuckets ? (
+                <View style={styles.graceGrid}>
+                  {graceBuckets.map((g) => {
+                    const usedColor = g.used > 0 ? COLORS_BY_KEY.absent : theme.textTertiary;
+                    const leftColor = g.remaining > 0 ? COLORS_BY_KEY.present : theme.textTertiary;
+                    return (
+                      <View key={g.label} style={[styles.graceBucket, { borderColor: `${g.used > 0 ? COLORS_BY_KEY.absent : COLORS_BY_KEY.present}33` }]}>
+                        <Text style={[styles.graceBucketLabel, { color: theme.textSecondary }]} numberOfLines={1}>{g.label}</Text>
+                        <Text style={[styles.graceUsedText, { color: usedColor }]} numberOfLines={1}>Used {g.used}/{g.limit}</Text>
+                        <Text style={[styles.graceLeftText, { color: leftColor }]} numberOfLines={1}>Left {g.remaining}</Text>
+                      </View>
+                    );
+                  })}
+                </View>
+              ) : (
+                <Text style={[styles.graceLine, { color: theme.textTertiary }]}>
+                  Grace information unavailable for this month.
+                </Text>
+              )}
             </Card>
 
             {/* ---------- Working hours trend (recorded values only) ---------- */}
@@ -708,6 +741,15 @@ const styles = StyleSheet.create({
   punctValue: { fontSize: 17, fontWeight: '800' },
   punctLabel: { fontSize: 9, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.2, marginTop: 2 },
   graceLine: { fontSize: 10, marginTop: 10, textAlign: 'center' },
+  // Per-bucket grace utilisation (Used / Left) — compact, colour-coded rows.
+  graceGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 },
+  graceBucket: {
+    flexGrow: 1, flexBasis: '30%', minWidth: 96, borderRadius: 12, borderWidth: 1,
+    paddingVertical: 8, paddingHorizontal: 6, alignItems: 'center', gap: 2,
+  },
+  graceBucketLabel: { fontSize: 9.5, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.2 },
+  graceUsedText: { fontSize: 11.5, fontWeight: '800' },
+  graceLeftText: { fontSize: 11.5, fontWeight: '800' },
 
   // Working hours trend
   hoursRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 3, height: 96, marginTop: 4 },
