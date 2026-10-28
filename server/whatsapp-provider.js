@@ -227,6 +227,23 @@ export async function saveWhatsAppProviderSettings(pool, sql, body, updatedBy) {
   const table = process.env.HR_WHATSAPP_CONFIG_TABLE || DEFAULT_CONFIG_TABLE;
   await ensureWhatsAppProviderColumns(pool);
   const b = body || {};
+
+  // Server-side format validation (safety rule): reject malformed provider
+  // identifiers before anything is persisted. Real tokens/secrets are never
+  // validated against Meta here — no network call is made.
+  const apiVersionRaw = pickText(b, 'apiVersion', 'apiversion');
+  if (apiVersionRaw && !/^v\d+(\.\d+)*$/i.test(apiVersionRaw)) {
+    throw new Error('WhatsApp API version must look like "v21.0".');
+  }
+  const businessAccountIdRaw = pickText(b, 'businessAccountId', 'businessaccountid');
+  if (businessAccountIdRaw && !/^\d+$/.test(businessAccountIdRaw)) {
+    throw new Error('Business Account ID must be numeric (a Meta business account id — never a login username).');
+  }
+  const phoneNumberIdRaw = pickText(b, 'phoneNumberId', 'phonenumberid');
+  if (phoneNumberIdRaw && !/^\d+$/.test(phoneNumberIdRaw)) {
+    throw new Error('Phone Number ID must be numeric.');
+  }
+
   const request = pool.request();
   const sets = [];
 

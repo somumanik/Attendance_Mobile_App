@@ -58,6 +58,8 @@ export default function WhatsAppSection() {
   const [previewPaycode, setPreviewPaycode] = useState('');
   const [previews, setPreviews] = useState(null);
   const [previewBusy, setPreviewBusy] = useState(false);
+  const [sendBusy, setSendBusy] = useState(false);
+  const [sendResult, setSendResult] = useState(null);
 
   const [logDate, setLogDate] = useState('');
   const [logPaycode, setLogPaycode] = useState('');
@@ -140,6 +142,22 @@ export default function WhatsAppSection() {
       const a = document.createElement('a'); a.href = url; a.download = `whatsapp-attendance-${previewDate}.csv`; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
     } catch (err) { setMsg({ ok: false, text: err.message }); }
     finally { setPreviewBusy(false); }
+  }
+
+  /** Run the server-side send pipeline. dryRun=true NEVER contacts Meta (default);
+      dryRun=false attempts a real send but is still gated by canSendReal(). */
+  async function runSend(dryRun) {
+    if (dryRun === false && !window.confirm('Send real WhatsApp messages to eligible employees? This contacts Meta.')) return;
+    setSendBusy(true); setSendResult(null); setMsg(null);
+    try {
+      const body = { date: previewDate, paycode: previewPaycode || undefined, dryRun: dryRun !== false };
+      const res = await apiFetch('/whatsapp/send', { method: 'POST', body });
+      setSendResult(res);
+      if (res.real) setMsg({ ok: true, text: `Real send dispatched: ${res.sent || 0} sent, ${res.failed || 0} failed, ${res.skipped || 0} skipped.` });
+      else setMsg({ ok: true, text: `Dry-run complete: ${res.dryRun || 0} message(s) would be sent (${res.skipped || 0} skipped). No real messages sent.` });
+      loadLogs().catch(() => {});
+    } catch (err) { setMsg({ ok: false, text: err.message }); }
+    finally { setSendBusy(false); }
   }
 
   async function loadLogs() {
@@ -277,7 +295,16 @@ export default function WhatsAppSection() {
             <div><label className={labelCls}>Paycode (optional)</label><input className={inputCls} value={previewPaycode} onChange={(e) => setPreviewPaycode(e.target.value)} /></div>
             <button disabled={previewBusy} onClick={generatePreview} className="px-4 py-2 rounded-xl bg-[var(--accent)] text-white text-xs font-bold disabled:opacity-50">Generate Preview</button>
             <button disabled={previewBusy} onClick={exportCsv} className="px-4 py-2 rounded-xl bg-white/10 border border-white/10 text-[var(--text)] text-xs font-bold disabled:opacity-50">Export CSV</button>
+            <button disabled={sendBusy} onClick={() => runSend(true)} className="px-4 py-2 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs font-bold disabled:opacity-50">Run Dry-run</button>
+            <button disabled={sendBusy || !healthData.canSendReal} onClick={() => runSend(false)} title={healthData.canSendReal ? '' : 'Real send is OFF until Cloud API is configured, enabled, approved and dry-run=false'} className="px-4 py-2 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs font-bold disabled:opacity-40 disabled:cursor-not-allowed">Send Real</button>
           </div>
+          {sendResult ? (
+            <div className="flex flex-wrap gap-2 mb-3">
+              {[['Total', sendResult.total], ['Sent', sendResult.sent], ['Failed', sendResult.failed], ['Skipped', sendResult.skipped], ['Dry-run', sendResult.dryRun]].map(([k, v]) => (
+                <div key={k} className="px-3 py-2 rounded-xl bg-white/5 border border-white/5"><span className="text-[10px] uppercase font-bold text-[var(--muted)]">{k}</span><p className="text-sm font-bold text-[var(--text)]">{v ?? '—'}</p></div>
+              ))}
+            </div>
+          ) : null}
           {previews && (
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
