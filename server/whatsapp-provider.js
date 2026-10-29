@@ -222,25 +222,40 @@ function pickText(body, ...keys) {
   return '';
 }
 
-/* Merge-safe save: only provided fields change; empty secret = keep existing. */
+/* Merge-safe save: only provided fields change; empty secret = keep existing.
+   Non-secret provider fields (Phone Number ID, Business Account ID, API version,
+   webhook verify token) follow the same documented rule: empty/absent = leave
+   as-is, so a blank form can NEVER wipe the saved production configuration.
+   An explicit removal needs the '*Clear' sentinel or a boolean <field>Clear flag. */
+const PROVIDER_CLEAR_SENTINEL = '*clear';
+function isClearRequest(value) { return String(value == null ? '' : value).trim().toLowerCase() === PROVIDER_CLEAR_SENTINEL; }
+
 export async function saveWhatsAppProviderSettings(pool, sql, body, updatedBy) {
   const table = process.env.HR_WHATSAPP_CONFIG_TABLE || DEFAULT_CONFIG_TABLE;
   await ensureWhatsAppProviderColumns(pool);
   const b = body || {};
 
+  const plainFields = [
+    { keys: ['phoneNumberId', 'phonenumberid'], clearFlags: ['phoneNumberIdClear', 'clearPhoneNumberId'], input: 'phonenumberid', type: () => sql.VarChar(60) },
+    { keys: ['businessAccountId', 'businessaccountid'], clearFlags: ['businessAccountIdClear', 'clearBusinessAccountId'], input: 'businessaccountid', type: () => sql.VarChar(60) },
+    { keys: ['apiVersion', 'apiversion'], clearFlags: ['apiVersionClear', 'clearApiVersion'], input: 'apiversion', type: () => sql.VarChar(20) },
+    { keys: ['webhookVerifyToken', 'webhookverifytoken'], clearFlags: ['webhookVerifyTokenClear', 'clearWebhookVerifyToken'], input: 'webhookverifytoken', type: () => sql.VarChar(200) },
+  ];
+  const clearing = (f) => f.clearFlags.some((k) => b[k] === true) || f.keys.some((k) => isClearRequest(b[k]));
+
   // Server-side format validation (safety rule): reject malformed provider
   // identifiers before anything is persisted. Real tokens/secrets are never
   // validated against Meta here — no network call is made.
   const apiVersionRaw = pickText(b, 'apiVersion', 'apiversion');
-  if (apiVersionRaw && !/^v\d+(\.\d+)*$/i.test(apiVersionRaw)) {
+  if (apiVersionRaw && !isClearRequest(apiVersionRaw) && !/^v\d+(\.\d+)*$/i.test(apiVersionRaw)) {
     throw new Error('WhatsApp API version must look like "v21.0".');
   }
   const businessAccountIdRaw = pickText(b, 'businessAccountId', 'businessaccountid');
-  if (businessAccountIdRaw && !/^\d+$/.test(businessAccountIdRaw)) {
+  if (businessAccountIdRaw && !isClearRequest(businessAccountIdRaw) && !/^\d+$/.test(businessAccountIdRaw)) {
     throw new Error('Business Account ID must be numeric (a Meta business account id — never a login username).');
   }
   const phoneNumberIdRaw = pickText(b, 'phoneNumberId', 'phonenumberid');
-  if (phoneNumberIdRaw && !/^\d+$/.test(phoneNumberIdRaw)) {
+  if (phoneNumberIdRaw && !isClearRequest(phoneNumberIdRaw) && !/^\d+$/.test(phoneNumberIdRaw)) {
     throw new Error('Phone Number ID must be numeric.');
   }
 
@@ -255,10 +270,12 @@ export async function saveWhatsAppProviderSettings(pool, sql, body, updatedBy) {
   if (b.appSecretClear === true || b.clearAppSecret === true) { request.input('appsecret', sql.NVarChar(600), null); sets.push('appsecret = @appsecret'); }
   else if (appSecret) { request.input('appsecret', sql.NVarChar(600), encryptSecret(appSecret)); sets.push('appsecret = @appsecret'); }
 
-  if (b.phoneNumberId !== undefined || b.phonenumberid !== undefined) { const v = pickText(b, 'phoneNumberId', 'phonenumberid'); request.input('phonenumberid', sql.VarChar(60), v || null); sets.push('phonenumberid = @phonenumberid'); }
-  if (b.businessAccountId !== undefined || b.businessaccountid !== undefined) { const v = pickText(b, 'businessAccountId', 'businessaccountid'); request.input('businessaccountid', sql.VarChar(60), v || null); sets.push('businessaccountid = @businessaccountid'); }
-  if (b.apiVersion !== undefined || b.apiversion !== undefined) { const v = pickText(b, 'apiVersion', 'apiversion'); request.input('apiversion', sql.VarChar(20), v || null); sets.push('apiversion = @apiversion'); }
-  if (b.webhookVerifyToken !== undefined || b.webhookverifytoken !== undefined) { const v = pickText(b, 'webhookVerifyToken', 'webhookverifytoken'); request.input('webhookverifytoken', sql.VarChar(200), v || null); sets.push('webhookverifytoken = @webhookverifytoken'); }
+  for (const f of plainFields) {
+    const v = pickText(b, ...f.keys);
+    if (clearing(f)) { request.input(f.input, f.type(), null); sets.push(`${f.input} = @${f.input}`); }
+    else if (v) { request.input(f.input, f.type(), v); sets.push(`${f.input} = @${f.input}`); }
+    // empty/absent -> leave the saved value as-is (never silently wipe).
+  }
 
   if (!sets.length) throw new Error('No provider fields to update.');
   request.input('provider', sql.VarChar(20), 'cloudapi');

@@ -83,6 +83,22 @@ import {
   sendWhatsAppTemplate,
   verifyWhatsAppWebhookSignature,
 } from './whatsapp-provider.js';
+// WhatsApp message text + phone-number normalisation (pure, WhatsApp-specific).
+// Shared with the focused tests so they exercise the exact production code.
+import {
+  WHATSAPP_DEFAULT_TEMPLATE,
+  WHATSAPP_LEGACY_DEFAULT_TEMPLATE,
+  renderWhatsAppTemplate,
+  normalizeWhatsAppNumber,
+  completionSentence,
+} from './whatsapp-message.mjs';
+// WhatsApp recipient storage (managed number + consent) — the only writer of
+// dbo.HR_EmployeeWhatsApp. A number save never touches consent columns.
+import {
+  getWhatsAppRecipientRow,
+  setWhatsAppRecipientNumber,
+  upsertWhatsAppConsent,
+} from './whatsapp-recipients.mjs';
 // HR Admin accounts + per-module/action permissions (SuperAdmin console).
 // Application-owned tables only; the env HR/SA accounts remain the bootstrap.
 import {
@@ -674,8 +690,15 @@ function computeLateStatus(row, shiftMap, employeeCategory, companycode, paycode
   const lateMinutes = Math.max(0, punchMinutes - graceThreshold);
   
   if (lateMinutes <= 0) {
-    // Within 5-minute grace - NOT late
-    return { isLate: false, lateMinutes: 0, graceUsed: '5min' };
+    // NOT late. The universal 5-minute grace allowance is CONSUMED only when the
+    // arrival is actually AFTER the shift start (the grace was needed to cover a
+    // small lateness). Early / exactly-on-time arrivals consume no grace at all
+    // and must never be labelled '5min' (V4 fix — traced callers: the HR analytics
+    // "arrived early" vs "ontime" split expects exactly this distinction, and
+    // computeMonthlyLateForEmployee skips non-late rows entirely, so monthly staff
+    // grace accounting is unchanged).
+    const graceConsumed = punchMinutes > shiftStartMinutes;
+    return { isLate: false, lateMinutes: 0, graceUsed: graceConsumed ? '5min' : null };
   }
   
   // Raw late after 5-minute grace - monthly grace consumption is handled by computeMonthlyLateForEmployee
@@ -7562,7 +7585,7 @@ const WHATSAPP_DEFAULTS = {
   timezone: 'Asia/Kolkata',
   templatename: 'attendance_update',
   templatelanguage: 'en',
-  templatebody: 'Hello {{EmployeeName}} ({{Paycode}}),\nDate: {{AttendanceDate}}\nIn: {{InTime}} | Out: {{OutTime}}\nPunch: {{PunchStatus}} | Status: {{Status}}\nGrace Used: {{GraceUsed}} | Grace Remaining: {{GraceRemaining}}',
+  templatebody: WHATSAPP_DEFAULT_TEMPLATE,
 };
 
 function whatsappErrorResponse(res, error) {
@@ -7645,6 +7668,18 @@ CREATE TABLE ${whatsappJobRunTable} (
 );`);
     // Provider/credential columns are owned by the isolated whatsapp-provider module.
     await ensureWhatsAppProviderColumns(pool, sql);
+    // One-time, additive migration (WhatsApp-specific table only): a config row
+    // still on the exact legacy plain-text default template is upgraded to the
+    // formatted WhatsApp default. Any HR-customised template body is NEVER
+    // touched — the WHERE clause matches only the unmodified legacy default.
+    try {
+      await pool.request()
+        .input('newtpl', sql.NVarChar(sql.MAX), WHATSAPP_DEFAULT_TEMPLATE)
+        .input('legacytpl', sql.NVarChar(sql.MAX), WHATSAPP_LEGACY_DEFAULT_TEMPLATE)
+        .query(`UPDATE ${whatsappConfigTable} SET templatebody = @newtpl WHERE templatebody IS NULL OR templatebody = @legacytpl`);
+    } catch (migError) {
+      console.error('[WHATSAPP_TEMPLATE_UPGRADE]', (migError && migError.message || migError).toString().slice(0, 200));
+    }
     whatsappTablesState = true;
   } catch (error) {
     whatsappTablesState = 'WhatsApp tables unavailable. Run server/whatsapp-schema.sql on the database (SQL login needs CREATE rights on HR_ tables). Detail: ' + (error && error.message || error).toString().slice(0, 140);
@@ -7665,28 +7700,11 @@ async function getWhatsAppConfig(pool) {
   return inserted.recordset[0];
 }
 
-// Case-insensitive placeholders: {{EmployeeName}}, {{Paycode}}, {{AttendanceDate}},
-// {{InTime}}, {{OutTime}}, {{PunchStatus}}, {{Status}}, {{GraceUsed}},
-// {{GraceRemaining}}, {{CompanyCode}}, {{Department}} — unknown ones stay untouched.
-function renderWhatsAppTemplate(tpl, vars) {
-  const map = {};
-  Object.entries(vars || {}).forEach(([k, v]) => { map[String(k).toLowerCase()] = (v === undefined || v === null) ? '' : String(v); });
-  return String(tpl || '').replace(/\{\{(\w+)\}\}/g, (m, k) => (k.toLowerCase() in map) ? map[k.toLowerCase()] : m);
-}
-
-// Normalize a phone number to E.164 (default country 91 for a 10-digit local
-// number). Masked/legacy values (e.g. "XXXXXX9155") and invalid inputs return ''.
-function normalizeWhatsAppNumber(raw) {
-  let s = String(raw == null ? '' : raw).trim();
-  if (!s) return '';
-  s = s.replace(/[^\d]/g, '');
-  if (!s) return '';
-  if (s.startsWith('00')) s = s.slice(2);
-  else if (s.startsWith('0')) s = s.slice(1);
-  if (s.length === 10) s = WHATSAPP_DEFAULT_COUNTRY + s;
-  if (!/^[1-9]\d{9,14}$/.test(s)) return '';
-  return s;
-}
+// Template rendering + number normalisation live in server/whatsapp-message.mjs
+// (imported above) so server and tests share the exact same implementation.
+// Placeholder comment kept here to mark the old definition site:
+//   renderWhatsAppTemplate(tpl, vars)     -> case-insensitive {{Var}} replacement
+//   normalizeWhatsAppNumber(raw, country) -> E.164 digits, '' when invalid
 
 function safeJsonParse(buf) {
   try { return JSON.parse(Buffer.isBuffer(buf) ? buf.toString('utf8') : String(buf || '')); }
@@ -7801,6 +7819,9 @@ async function loadWhatsAppEligible(pool, req, cfg) {
   const eligibleCats = String(cfg.eligiblecategory || '').split(',').map((c) => c.trim().toUpperCase()).filter(Boolean);
   const eligible = [];
   const rejected = [];
+  // Full recipient rows (additive response data): one entry per employee with the
+  // display fields HR needs (number source, consent, category, active, reason).
+  const rows = [];
   // Mutually-exclusive PRIMARY reason counters: an employee falls into exactly
   // one of these buckets (the per-employee checks below `continue` on first hit),
   // so no employee is double-counted across reasons.
@@ -7810,10 +7831,8 @@ async function loadWhatsAppEligible(pool, req, cfg) {
     if (!paycode) continue;
     counts.total++;
     const companycode = String(e.companycode || '').trim();
-    if (!whatsappInScope(req, companycode)) { counts.outOfScope++; rejected.push({ paycode, reason: 'OUT_OF_SCOPE' }); continue; }
     const activeRaw = e.active;
     const inactive = activeRaw === false || activeRaw === 0 || String(activeRaw || '').trim().toUpperCase() === 'N';
-    if (inactive) { counts.inactive++; rejected.push({ paycode, reason: 'INACTIVE' }); continue; }
     const catCode = String(e.cat || '').trim();
     // Match the configured eligible category against BOTH the raw code (e.g. '001')
     // and its resolved name (e.g. 'STAFF'), because dbo.tblemployee.cat stores the
@@ -7822,24 +7841,48 @@ async function loadWhatsAppEligible(pool, req, cfg) {
     // was misclassified NOTSTAFF.
     const catCodeUpper = catCode.toUpperCase();
     const catName = resolveCategory(catCode, categoryCache);
+    const consent = consentByPaycode.get(paycode);
+    const consentStatus = consent ? String(consent.consentstatus || '').trim() : '';
+    const optedOut = !!(consent && consent.optedoutat);
+    // Effective WhatsApp destination: the HR-managed number in the WhatsApp-specific
+    // table (dbo.HR_EmployeeWhatsApp.whatsappnumber) wins when present; otherwise the
+    // Savior master phone (dbo.tblemployee.telephone1, READ-ONLY) is used. The managed
+    // number is written only by the WhatsApp recipient-number endpoint / consent flow —
+    // Savior's employee master is never written.
+    const managedNumber = String((consent && consent.whatsappnumber) || '').trim();
+    const masterPhone = String(e.telephone1 || '').trim();
+    const rawPhone = managedNumber || masterPhone;
+    const numberSource = managedNumber ? 'whatsapp' : (masterPhone ? 'telephone1' : 'none');
+    const baseRow = {
+      paycode, empname: String(e.empname || '').trim(), companycode,
+      departmentcode: String(e.departmentcode || '').trim(), cat: catCode, catname: catName,
+      active: !inactive, rawphone: rawPhone, numbersource: numberSource,
+      consentstatus: consentStatus || 'None', optedout: optedOut,
+    };
+    const rejectRow = (reason) => {
+      counts[reason === 'OUT_OF_SCOPE' ? 'outOfScope' : reason === 'INACTIVE' ? 'inactive' : reason === 'CATEGORY_MISMATCH' ? 'notStaff' : reason === 'NO_NUMBER' ? 'noNumber' : reason === 'INVALID_NUMBER' ? 'invalidNumber' : reason === 'OPTED_OUT' ? 'optedOut' : 'noConsent']++;
+      rejected.push({ paycode, reason });
+      rows.push({ ...baseRow, whatsappnumber: '', eligible: false, reason });
+    };
+    if (!whatsappInScope(req, companycode)) { rejectRow('OUT_OF_SCOPE'); continue; }
+    if (inactive) { rejectRow('INACTIVE'); continue; }
     const catOk = eligibleCats.length
       ? eligibleCats.some((c) => c === catCodeUpper || c === catName)
       : isStaffCategory(catCode, categoryCache);
-    if (!catOk) { counts.notStaff++; rejected.push({ paycode, reason: 'CATEGORY_MISMATCH' }); continue; }
-    const rawPhone = String(e.telephone1 || '').trim();
-    if (!rawPhone) { counts.noNumber++; rejected.push({ paycode, reason: 'NO_NUMBER' }); continue; }
+    if (!catOk) { rejectRow('CATEGORY_MISMATCH'); continue; }
+    if (!rawPhone) { rejectRow('NO_NUMBER'); continue; }
     const number = normalizeWhatsAppNumber(rawPhone);
-    if (!number) { counts.invalidNumber++; rejected.push({ paycode, reason: 'INVALID_NUMBER' }); continue; }
-    const consent = consentByPaycode.get(paycode);
+    if (!number) { rejectRow('INVALID_NUMBER'); continue; }
     // Distinct primary reasons: NO_CONSENT (no Granted consent) vs OPTED_OUT
     // (Granted but later opted out). Both block sending; they are counted separately
     // and never both at once.
-    if (!consent || String(consent.consentstatus || '').trim() !== 'Granted') { counts.noConsent++; rejected.push({ paycode, reason: 'NO_CONSENT' }); continue; }
-    if (consent.optedoutat) { counts.optedOut++; rejected.push({ paycode, reason: 'OPTED_OUT' }); continue; }
-    eligible.push({ paycode, empname: String(e.empname || '').trim(), companycode, departmentcode: String(e.departmentcode || '').trim(), cat: catCode, whatsappnumber: number, consentstatus: 'Granted' });
+    if (!consent || consentStatus !== 'Granted') { rows.push({ ...baseRow, whatsappnumber: number, eligible: false, reason: 'NO_CONSENT' }); counts.noConsent++; rejected.push({ paycode, reason: 'NO_CONSENT' }); continue; }
+    if (optedOut) { rows.push({ ...baseRow, whatsappnumber: number, eligible: false, reason: 'OPTED_OUT' }); counts.optedOut++; rejected.push({ paycode, reason: 'OPTED_OUT' }); continue; }
+    eligible.push({ paycode, empname: String(e.empname || '').trim(), companycode, departmentcode: String(e.departmentcode || '').trim(), cat: catCode, catname: catName, whatsappnumber: number, consentstatus: 'Granted' });
+    rows.push({ ...baseRow, whatsappnumber: number, eligible: true, reason: 'ELIGIBLE' });
   }
   counts.eligible = eligible.length;
-  return { eligible, counts, rejected };
+  return { eligible, counts, rejected, rows };
 }
 
 async function buildWhatsAppMessageForEmployee(pool, emp, cfg, dateIso) {
@@ -7852,9 +7895,11 @@ async function buildWhatsAppMessageForEmployee(pool, emp, cfg, dateIso) {
   const normalized = dayRows.map((r) => normalizeAttendance(r, shiftMap, cat, companycode, shiftInfo));
   const row = normalized[0];
   const tpl = cfg.templatebody || WHATSAPP_DEFAULTS.templatebody;
-  const base = { paycode, empname: emp.empname, companycode, departmentcode: emp.departmentcode || '', whatsappnumber: emp.whatsappnumber, dateIso };
+  const base = { paycode, empname: emp.empname, companycode, departmentcode: emp.departmentcode || '', whatsappnumber: emp.whatsappnumber, dateIso, cat: cat || '', catname: String(emp.catname || '') };
   if (!row) {
-    return { ...base, status: 'No Record', punchStatus: 'No punch', inTime: null, outTime: null, graceUsed: '—', graceRemaining: '—', text: renderWhatsAppTemplate(tpl, { EmployeeName: emp.empname, Paycode: paycode, AttendanceDate: dateIso, InTime: '—', OutTime: '—', PunchStatus: 'No punch', Status: 'No Record', GraceUsed: '—', GraceRemaining: '—', CompanyCode: companycode, Department: emp.departmentcode || '' }) };
+    // No attendance row: punch/status meanings kept ('—' / 'No punch' / 'No Record'),
+    // but NO fabricated grace values — the grace lines are omitted entirely.
+    return { ...base, status: 'No Record', punchStatus: 'No punch', inTime: null, outTime: null, graceUsed: '', graceRemaining: '', text: renderWhatsAppTemplate(tpl, { EmployeeName: emp.empname, Paycode: paycode, AttendanceDate: dateIso, InTime: '—', OutTime: '—', PunchStatus: 'No punch', Status: 'No Record', GraceUsed: '', GraceRemaining: '', Completion: '', CompanyCode: companycode, Department: emp.departmentcode || '' }) };
   }
   const monthKey = dateIso.slice(0, 7);
   const [y, m] = monthKey.split('-').map(Number);
@@ -7862,19 +7907,39 @@ async function buildWhatsAppMessageForEmployee(pool, emp, cfg, dateIso) {
   const monthly = computeMonthlyLateForEmployee(monthRows, shiftMap, cat, companycode, paycode, y, m, shiftInfo.resolved ? shiftInfo.shiftCode : null);
   const lateDetail = (monthly.lateDetails || []).find((d) => rowDateIso(d.date) === dateIso);
   const isStaff = isStaffCategory(cat, categoryCache);
-  const graceUsed = (lateDetail && lateDetail.graceUsed) ? lateDetail.graceUsed : (row.graceUsed || '—');
+  // V4 grace mapping (reuses the authoritative values — no new formula):
+  //  - GraceUsed shows ONLY an allowance that was actually consumed today
+  //    ('5min' universal / '30min' / '1hr' / '2hr' staff monthly). Empty value
+  //    makes renderWhatsAppTemplate omit the entire line — never a misleading
+  //    '0min' / '—' line for early, on-time, or grace-free days.
+  //  - GraceRemaining shows the staff monthly allowance counts ONLY when a valid
+  //    value exists (staff eligibility); omitted for non-staff.
+  const graceUsed = (lateDetail && lateDetail.graceUsed) ? lateDetail.graceUsed : (row.graceUsed || '');
   const graceRemaining = isStaff && monthly.graceRemaining
-    ? `30m:${monthly.graceRemaining.grace30min ?? 0} 1h:${monthly.graceRemaining.grace1hr ?? 0} 2h:${monthly.graceRemaining.grace2hr ?? 0}`
-    : '—';
+    ? `30min x${monthly.graceRemaining.grace30min ?? 0} | 1hr x${monthly.graceRemaining.grace1hr ?? 0} | 2hr x${monthly.graceRemaining.grace2hr ?? 0}`
+    : '';
   const hasIn = Boolean(row.in1 || row.in2);
   const hasOut = Boolean(row.out1 || row.out2);
   const punchStatus = (!hasIn && !hasOut) ? 'No punch' : (!hasIn ? 'Missing IN' : (!hasOut ? 'Missing OUT' : 'Complete'));
   const status = row.computedStatus || row.statusLabel || '—';
+  // Optional completion sentence — built ONLY from the existing authoritative
+  // attendance/shift data (punches + recorded worked minutes vs the employee's
+  // OWN shift duration). Empty -> the {{Completion}} line is omitted entirely and
+  // the existing attendance status stays as-is. No new attendance rule is created.
+  const completion = completionSentence({
+    hasIn, hasOut, presentDay: status === 'Present',
+    shiftStartMinutes: shiftInfo.resolved ? shiftInfo.startMinutes : null,
+    shiftEndMinutes: shiftInfo.resolved ? shiftInfo.endMinutes : null,
+    crossMidnight: shiftInfo.resolved ? (shiftInfo.endMinutes <= shiftInfo.startMinutes) : false,
+    nowMinutes: indiaNowMinutes(),
+    workedMinutes: row.hoursworked,
+  });
   const text = renderWhatsAppTemplate(tpl, {
     EmployeeName: emp.empname, Paycode: paycode, AttendanceDate: dateIso,
     InTime: row.inTime || '—', OutTime: row.outTime || '—',
     PunchStatus: punchStatus, Status: status,
     GraceUsed: graceUsed, GraceRemaining: graceRemaining,
+    Completion: completion,
     CompanyCode: companycode, Department: emp.departmentcode || '',
   });
   return { ...base, status, punchStatus, inTime: row.inTime || null, outTime: row.outTime || null, graceUsed, graceRemaining, text };
@@ -7999,22 +8064,9 @@ async function resolveWhatsAppEmployee(pool, paycode) {
   return { paycode: String(row.paycode).trim(), empname: String(row.empname || '').trim(), companycode: String(row.companycode || '').trim(), departmentcode: String(row.departmentcode || '').trim(), telephone1: String(row.telephone1 || '').trim() };
 }
 
-async function upsertWhatsAppConsent(pool, entry) {
-  await pool.request()
-    .input('paycode', sql.VarChar(50), entry.paycode)
-    .input('whatsappnumber', sql.VarChar(20), entry.whatsappnumber || '')
-    .input('consentstatus', sql.VarChar(20), entry.consentstatus)
-    .input('consentat', sql.DateTime2, entry.consentat || null)
-    .input('consentsource', sql.VarChar(50), entry.consentsource || null)
-    .input('optedoutat', sql.DateTime2, entry.optedoutat || null)
-    .input('companycode', sql.VarChar(30), entry.companycode || null)
-    .input('departmentcode', sql.VarChar(30), entry.departmentcode || null)
-    .input('employeename', sql.NVarChar(120), entry.employeename || null)
-    .query(`MERGE ${whatsappEmployeeTable} WITH (HOLDLOCK) AS t USING (SELECT @paycode AS paycode) AS s ON t.paycode = s.paycode
-WHEN MATCHED THEN UPDATE SET whatsappnumber = @whatsappnumber, consentstatus = @consentstatus, consentat = COALESCE(@consentat, t.consentat), consentsource = COALESCE(@consentsource, t.consentsource), optedoutat = @optedoutat, companycode = COALESCE(@companycode, t.companycode), departmentcode = COALESCE(@departmentcode, t.departmentcode), employeename = COALESCE(@employeename, t.employeename), updateddate = SYSUTCDATETIME()
-WHEN NOT MATCHED THEN INSERT (paycode, whatsappnumber, consentstatus, consentat, consentsource, optedoutat, companycode, departmentcode, employeename) VALUES (@paycode, @whatsappnumber, @consentstatus, @consentat, @consentsource, @optedoutat, @companycode, @departmentcode, @employeename)
-OUTPUT $action;`);
-}
+/* Recipient-row reads/writes live in server/whatsapp-recipients.mjs (imported
+   above): getWhatsAppRecipientRow / setWhatsAppRecipientNumber /
+   upsertWhatsAppConsent — the ONLY writers of dbo.HR_EmployeeWhatsApp. */
 
 /* ---- WhatsApp endpoints (HR-only, mirroring the Email endpoints) ---- */
 app.get('/api/whatsapp/config', requireDbConfig, authenticate, requireRole('HR'), async (req, res) => {
@@ -8027,6 +8079,8 @@ app.get('/api/whatsapp/config', requireDbConfig, authenticate, requireRole('HR')
       timezone: String(cfg.timezone || 'Asia/Kolkata'), eligiblecategory: String(cfg.eligiblecategory || ''),
       dryrun: !!(cfg.dryrun), sendername: String(cfg.sendername || ''), templatename: String(cfg.templatename || ''),
       templatelanguage: String(cfg.templatelanguage || 'en'), templatebody: String(cfg.templatebody || ''), approved: !!cfg.approved,
+      // Additive: the canonical formatted default template (for the UI reset button).
+      defaulttemplate: WHATSAPP_DEFAULT_TEMPLATE,
     }, providerStatus, sqlPhoneField: 'telephone1' });
   } catch (error) { return whatsappErrorResponse(res, error); }
 });
@@ -8089,8 +8143,58 @@ app.get('/api/whatsapp/eligibility', requireDbConfig, authenticate, requireRole(
   try {
     const pool = await getPool();
     const cfg = await getWhatsAppConfig(pool);
-    const { eligible, counts, rejected } = await loadWhatsAppEligible(pool, req, cfg);
-    return res.json({ success: true, counts, employees: eligible, rejected });
+    const { eligible, counts, rejected, rows } = await loadWhatsAppEligible(pool, req, cfg);
+    // `employees`/`counts`/`rejected` keep their existing contract; `recipients`
+    // is additive full-list display data (number source, consent, category, active,
+    // eligibility + rejection reason per paycode).
+    return res.json({ success: true, counts, employees: eligible, rejected, recipients: rows });
+  } catch (error) { return whatsappErrorResponse(res, error); }
+});
+
+/* Real employee categories (dbo.tblcategory lookup + codes actually in use).
+   READ-ONLY — feeds the Eligibility category filter dropdown so the filter is
+   never a hardcoded list. Changing the filter never changes eligibility. */
+app.get('/api/whatsapp/categories', requireDbConfig, authenticate, requireRole('HR'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    await ensureWhatsAppTables(pool);
+    const map = await loadCategoryNames(pool); // real dbo.tblcategory master (cached)
+    const used = await pool.request().query(`SELECT DISTINCT LTRIM(RTRIM(cat)) AS code FROM dbo.tblemployee WHERE LTRIM(RTRIM(cat)) <> ''`);
+    const seen = new Map();
+    for (const [code, name] of map.entries()) seen.set(String(code).trim().toUpperCase(), { code: String(code).trim(), name: String(name || code).trim() });
+    for (const r of used.recordset) {
+      const code = String(r.code || '').trim();
+      if (!code) continue;
+      const key = code.toUpperCase();
+      if (!seen.has(key)) seen.set(key, { code, name: resolveCategory(code, map) });
+    }
+    const categories = [...seen.values()].sort((a, b) => String(a.code).localeCompare(String(b.code)));
+    return res.json({ success: true, categories });
+  } catch (error) { return whatsappErrorResponse(res, error); }
+});
+
+/* WhatsApp recipient-number management (WhatsApp-specific storage ONLY).
+   Saves/updates the WhatsApp destination number for a Paycode in
+   dbo.HR_EmployeeWhatsApp — NEVER in Savior's dbo.tblemployee. A number save
+   NEVER grants consent, NEVER changes active status or category, and NEVER
+   opts anyone in/out (consent columns are not written here at all). */
+app.put('/api/whatsapp/recipient-number', requireDbConfig, authenticate, requireRole('HR'), async (req, res) => {
+  try {
+    const pool = await getPool();
+    await ensureWhatsAppTables(pool);
+    const paycode = String(req.body?.paycode || '').trim();
+    const rawNumber = String(req.body?.whatsappnumber ?? req.body?.number ?? '').trim();
+    if (!paycode) return res.status(400).json({ success: false, message: 'paycode is required.' });
+    const emp = await resolveWhatsAppEmployee(pool, paycode);
+    if (!emp) return res.status(404).json({ success: false, message: 'Employee not found.' });
+    if (!whatsappInScope(req, emp.companycode)) return res.status(403).json({ success: false, message: 'Employee belongs to a company outside your access.' });
+    const number = normalizeWhatsAppNumber(rawNumber);
+    if (!number) return res.status(400).json({ success: false, message: 'Invalid WhatsApp number — enter a valid international number (E.164), e.g. 919876543210 or +91 98765 43210.' });
+    // Durable WhatsApp-specific write (server/whatsapp-recipients.mjs): updates
+    // ONLY whatsappnumber + identity metadata; consent columns are never written,
+    // so a number save never grants consent or changes opt-out state.
+    await setWhatsAppRecipientNumber(pool, sql, { paycode, whatsappnumber: number, companycode: emp.companycode, departmentcode: emp.departmentcode, employeename: emp.empname });
+    return res.json({ success: true, paycode, whatsappnumber: number, consentUnchanged: true, note: 'Number saved (E.164). Consent status unchanged — grant consent separately.' });
   } catch (error) { return whatsappErrorResponse(res, error); }
 });
 
@@ -8181,9 +8285,14 @@ app.put('/api/whatsapp/consent', requireDbConfig, authenticate, requireRole('HR'
       const emp = await resolveWhatsAppEmployee(pool, paycode);
       if (!emp) { skipped++; errors.push(`${paycode}: not found`); continue; }
       if (!whatsappInScope(req, emp.companycode)) { skipped++; errors.push(`${paycode}: out of scope`); continue; }
-      const number = normalizeWhatsAppNumber(req.body?.whatsappnumber || emp.telephone1);
+      // Number priority: explicit request value -> HR-managed WhatsApp number
+      // (dbo.HR_EmployeeWhatsApp.whatsappnumber) -> Savior telephone1. Consent
+      // changes never silently discard a managed recipient number.
+      const existing = await getWhatsAppRecipientRow(pool, sql, paycode);
+      const managed = String((existing && existing.whatsappnumber) || '').trim();
+      const number = normalizeWhatsAppNumber(req.body?.whatsappnumber || managed || emp.telephone1);
       if (status === 'Granted' && !number) { skipped++; errors.push(`${paycode}: no valid number`); continue; }
-      await upsertWhatsAppConsent(pool, { paycode, whatsappnumber: number || '', consentstatus: status, consentat: status === 'Granted' ? new Date() : null, consentsource: source, optedoutat: (status === 'Revoked' || status === 'None') ? new Date() : null, companycode: emp.companycode, departmentcode: emp.departmentcode, employeename: emp.empname });
+      await upsertWhatsAppConsent(pool, sql, { paycode, whatsappnumber: number || managed, consentstatus: status, consentat: status === 'Granted' ? new Date() : null, consentsource: source, optedoutat: (status === 'Revoked' || status === 'None') ? new Date() : null, companycode: emp.companycode, departmentcode: emp.departmentcode, employeename: emp.empname });
       done++;
     }
     return res.json({ success: true, done, skipped, errors });
@@ -8200,9 +8309,14 @@ app.post('/api/whatsapp/consent/:paycode', requireDbConfig, authenticate, requir
     const emp = await resolveWhatsAppEmployee(pool, paycode);
     if (!emp) return res.status(404).json({ success: false, message: 'Employee not found.' });
     if (!whatsappInScope(req, emp.companycode)) return res.status(403).json({ success: false, message: 'Employee belongs to a company outside your access.' });
-    const number = normalizeWhatsAppNumber(req.body?.whatsappnumber || emp.telephone1);
+    // Number priority: explicit request value -> HR-managed WhatsApp number ->
+    // Savior telephone1. Granting consent NEVER auto-grants anything else, and a
+    // managed recipient number is never silently replaced by the master phone.
+    const existing = await getWhatsAppRecipientRow(pool, sql, paycode);
+    const managed = String((existing && existing.whatsappnumber) || '').trim();
+    const number = normalizeWhatsAppNumber(req.body?.whatsappnumber || managed || emp.telephone1);
     if (status === 'Granted' && !number) return res.status(400).json({ success: false, message: 'No valid WhatsApp number for this employee.' });
-    await upsertWhatsAppConsent(pool, { paycode, whatsappnumber: number || '', consentstatus: status, consentat: status === 'Granted' ? new Date() : null, consentsource: String(req.body?.source || 'HR').slice(0, 50), optedoutat: (status === 'Revoked' || status === 'None') ? new Date() : null, companycode: emp.companycode, departmentcode: emp.departmentcode, employeename: emp.empname });
+    await upsertWhatsAppConsent(pool, sql, { paycode, whatsappnumber: number || managed, consentstatus: status, consentat: status === 'Granted' ? new Date() : null, consentsource: String(req.body?.source || 'HR').slice(0, 50), optedoutat: (status === 'Revoked' || status === 'None') ? new Date() : null, companycode: emp.companycode, departmentcode: emp.departmentcode, employeename: emp.empname });
     return res.json({ success: true, paycode, status });
   } catch (error) { return whatsappErrorResponse(res, error); }
 });
