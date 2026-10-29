@@ -10,9 +10,9 @@ import { useCallback, useEffect, useState } from 'react';
 
 const LABELS = {
   checking: 'Checking connection…',
-  connected: 'Savior SQL Server: Connected',
-  disconnected: 'Savior SQL Server: Disconnected',
-  unavailable: 'Savior SQL Server: Status unavailable',
+  connected: 'Savior PORTAL Server: Connected',
+  disconnected: 'Savior PORTAL Server: Disconnected',
+  unavailable: 'Savior PORTAL Server: Status unavailable',
 };
 
 export default function DbStatusBadge() {
