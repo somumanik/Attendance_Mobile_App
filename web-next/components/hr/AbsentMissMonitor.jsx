@@ -10,7 +10,7 @@
 // the Holiday > Approved Leave > register precedence. This component only filters
 // what it asks for — hiding a dropdown/button is never the security boundary.
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import AsyncBox from '../employee/AsyncBox';
 import ChartCanvas from '../ChartCanvas';
 import useApiData from '../useApiData';
@@ -90,6 +90,8 @@ export default function AbsentMissMonitor() {
   const [pageSize, setPageSize] = useState(50);
   const [exporting, setExporting] = useState(false);
   const [exportMsg, setExportMsg] = useState(null);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const exportMenuRef = useRef(null);
 
   const filtersData = useApiData('/hr/reports/filters');
   const f = filtersData.data || {};
@@ -204,6 +206,47 @@ export default function AbsentMissMonitor() {
       setExporting(false);
     }
   }, [drillParams, drillStatus, fromDate, toDate]);
+
+  // Summary / Pivot export: the SAME scoped status + filters as the details export,
+  // but as a 4-sheet aggregated workbook (Executive / Company / Date / Employee).
+  const downloadSummaryExport = useCallback(async () => {
+    setExportMenuOpen(false);
+    setExporting(true);
+    setExportMsg(null);
+    try {
+      const p = new URLSearchParams(drillParams.toString());
+      p.delete('page');
+      p.delete('pageSize');
+      p.set('format', 'summary');
+      const res = await fetch(`/api/hr/reports/absent-miss/export?${p.toString()}`, { credentials: 'include' });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.message || `Export failed (HTTP ${res.status}).`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Master-Reports-Summary-Pivot_${fromDate}_${toDate}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setExportMsg({ ok: true, text: 'Summary / Pivot register downloaded.' });
+    } catch (e) {
+      setExportMsg({ ok: false, text: e?.message || 'Export failed. Please try again.' });
+    } finally {
+      setExporting(false);
+    }
+  }, [drillParams, fromDate, toDate]);
+
+  // Close the export menu when the user clicks outside it.
+  useEffect(() => {
+    if (!exportMenuOpen) return undefined;
+    const onMouseDown = (e) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target)) setExportMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onMouseDown);
+    return () => document.removeEventListener('mousedown', onMouseDown);
+  }, [exportMenuOpen]);
 
   // Chart data
   const statusData = {
@@ -413,9 +456,30 @@ export default function AbsentMissMonitor() {
                       </div>
                       <div className="flex items-center gap-3">
                         <HrCan module="reports" action="export">
-                          <button type="button" onClick={downloadDrillExport} disabled={exporting} className="px-4 py-2 rounded-xl bg-emerald-600/20 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-600/30 text-xs font-bold transition disabled:opacity-50">
-                            <i className="fas fa-file-excel mr-1"></i>{exporting ? 'Exporting...' : 'Export Excel'}
-                          </button>
+                          <div className="relative" ref={exportMenuRef}>
+                            <button type="button" onClick={() => setExportMenuOpen((v) => !v)} disabled={exporting} className="px-4 py-2 rounded-xl bg-emerald-600/20 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-600/30 text-xs font-bold transition disabled:opacity-50 flex items-center gap-1">
+                              <i className="fas fa-file-excel"></i>{exporting ? 'Exporting...' : 'Export Excel'}
+                              <i className={`fas fa-chevron-down text-[9px] transition-transform ${exportMenuOpen ? 'rotate-180' : ''}`}></i>
+                            </button>
+                            {exportMenuOpen ? (
+                              <div className="absolute right-0 mt-2 w-64 rounded-xl bg-[var(--surface-solid)] border border-[var(--border)] shadow-2xl z-40 overflow-hidden">
+                                <button type="button" onClick={() => { setExportMenuOpen(false); downloadDrillExport(); }} disabled={exporting} className="w-full text-left px-4 py-3 hover:bg-white/5 transition disabled:opacity-50 flex items-start gap-3">
+                                  <i className="fas fa-table text-emerald-300 mt-0.5"></i>
+                                  <span className="flex flex-col gap-0.5">
+                                    <span className="text-xs font-bold text-[var(--text)]">Details Register</span>
+                                    <span className="text-[10px] text-[var(--muted)]">.xlsx — employee-wise details</span>
+                                  </span>
+                                </button>
+                                <button type="button" onClick={() => { setExportMenuOpen(false); downloadSummaryExport(); }} disabled={exporting} className="w-full text-left px-4 py-3 hover:bg-white/5 transition disabled:opacity-50 flex items-start gap-3 border-t border-[var(--border)]">
+                                  <i className="fas fa-chart-pie text-indigo-300 mt-0.5"></i>
+                                  <span className="flex flex-col gap-0.5">
+                                    <span className="text-xs font-bold text-[var(--text)]">Summary / Pivot Register</span>
+                                    <span className="text-[10px] text-[var(--muted)]">.xlsx — 4-sheet summary</span>
+                                  </span>
+                                </button>
+                              </div>
+                            ) : null}
+                          </div>
                         </HrCan>
                         <span className="text-xs text-[var(--muted)]">Page {reg.page || 1} of {reg.totalPages || 1}</span>
                         <div className="flex items-center gap-1">

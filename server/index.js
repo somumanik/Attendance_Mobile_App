@@ -114,6 +114,7 @@ import {
 // so no new package is introduced. Server-side generation keeps the export under
 // the SAME server-side company/module authorisation as every report API.
 import * as XLSX from 'xlsx';
+import zlib from 'node:zlib';
 
 const app = express();
 const port = Number(process.env.PORT || process.env.API_PORT || 4000);
@@ -4105,6 +4106,7 @@ function applyReportFilterConditions(request, filters, req) {
  */
 async function loadReportRegisterRows(pool, req, filters) {
   const shiftMap = await loadShiftEndTimes(pool);
+  await loadCategoryNames(pool); // warm category cache so isStaffCategory() resolves STAFF for monthly grace
   const request = pool.request()
     .input('fromDate', sql.Date, filters.fromDate)
     .input('toDate', sql.Date, filters.toDate);
@@ -4148,7 +4150,14 @@ async function loadReportRegisterRows(pool, req, filters) {
     }
     const normInput = { ...row, shift: row.registershift };
     if (hasRow) rawRows.push(normInput);
-    const n = normalizeAttendance(normInput, shiftMap, row.cat, row.companycode);
+    // Deterministic authoritative shift: Master Reports MUST use the employee's
+    // CURRENT assigned shift (dbo.tblemployeeshiftmaster -> esm.shiftcode) for Late,
+    // exactly like the Single Employee Audit — never the register's stale shift and
+    // never the process-level empShiftCache (which is empty on a cold process and was
+    // the root cause of the 17-vs-3 Late discrepancy).
+    const currentShift = String(row.shiftcode || '').trim();
+    const shiftInfo = currentShift ? { resolved: true, shiftCode: currentShift, shiftName: currentShift, startTime: null, endTime: null } : null;
+    const n = normalizeAttendance(normInput, shiftMap, row.cat, row.companycode, shiftInfo);
     rows.push({
       date: hasRow ? rowDateIso(row.dateoffice) : null,
       paycode,
@@ -4380,13 +4389,99 @@ async function loadHolidayCategoryMap(pool) {
     classification strings as classifyRow()/Daily Master: "Week Off" (not "Weekly"). */
 const MONITOR_STATUSES = ['Present', 'Absent', 'Miss Punch', 'Approved Leave', 'Holiday', 'Week Off', 'No Record'];
 
+/** Day-of-week (SUN..SAT) for a 'YYYY-MM-DD' calendar date (UTC-anchored, no drift). */
+function dayOfWeekOfIso(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || '').slice(0, 10));
+  if (!m) return null;
+  const dt = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  return ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'][dt.getUTCDay()];
+}
+
+/** Authoritative week-off days per paycode (firstoffday/secondoffday in the shift master). */
+let weekOffCache = null;
+let weekOffLoadedAt = 0;
+const WEEK_OFF_TTL_MS = 10 * 60 * 1000;
+async function loadPopulationWeekOffDays(pool) {
+  if (weekOffCache && Date.now() - weekOffLoadedAt < WEEK_OFF_TTL_MS) return weekOffCache;
+  const map = new Map();
+  try {
+    const r = await pool.request().query(
+      `SELECT LTRIM(RTRIM(paycode)) AS paycode, LTRIM(RTRIM(firstoffday)) AS firstoffday, LTRIM(RTRIM(secondoffday)) AS secondoffday
+       FROM dbo.tblemployeeshiftmaster`);
+    for (const row of r.recordset || []) {
+      const pc = String(row.paycode || '').trim();
+      if (!pc) continue;
+      const set = new Set();
+      for (const v of [row.firstoffday, row.secondoffday]) {
+        const code = String(v || '').trim().toUpperCase();
+        if (/^(SUN|MON|TUE|WED|THU|FRI|SAT)$/.test(code)) set.add(code);
+      }
+      if (!set.size) set.add('SUN'); // fallback (same as leave-service)
+      map.set(pc, set);
+    }
+  } catch (_) { /* no week-off data -> leave empty */ }
+  weekOffCache = map;
+  weekOffLoadedAt = Date.now();
+  return map;
+}
+
+/**
+ * Per-employee grace-aware late summary over the SCOPED raw register rows, using the
+ * SAME computeMonthlyLateForEmployee() the Single Employee Audit and mobile dashboard
+ * use. Returns:
+ *   finalLateByKey: "paycode|YYYY-MM-DD" -> { isFinalLate, graceUsed }
+ *   summaries:      paycode -> { totalLate, graceCovered, finalLate, graceRemaining, isStaff }
+ */
+function computePopulationLateInfo(rawRows, employees, shiftMap) {
+  const byPay = new Map();
+  for (const r of rawRows || []) {
+    const pc = String(r.paycode || '').trim();
+    if (!pc) continue;
+    if (!byPay.has(pc)) byPay.set(pc, []);
+    byPay.get(pc).push(r);
+  }
+  const finalLateByKey = new Map();
+  const summaries = new Map();
+  for (const [pc, rows] of byPay) {
+    const emp = employees.get(pc);
+    if (!emp) continue;
+    const byMonth = new Map();
+    for (const r of rows) {
+      const d = r.dateoffice instanceof Date ? r.dateoffice : new Date(r.dateoffice);
+      if (Number.isNaN(d.valueOf())) continue;
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      if (!byMonth.has(key)) byMonth.set(key, []);
+      byMonth.get(key).push(r);
+    }
+    let totalLate = 0;
+    let graceCovered = 0;
+    let finalLate = 0;
+    let graceRemaining = { grace30min: 0, grace1hr: 0, grace2hr: 0 };
+    const isStaff = isStaffCategory(emp.category, categoryCache);
+    for (const [monthKey, monthRows] of byMonth) {
+      const [year, month] = monthKey.split('-').map(Number);
+      const res = computeMonthlyLateForEmployee(monthRows, shiftMap, emp.category, emp.companycode, pc, year, month, emp.shiftcode || null);
+      totalLate += res.lateDetails.length;
+      graceCovered += res.lateDetails.filter((d) => !d.isFinalLate).length;
+      finalLate += res.finalLateCount;
+      if (res.graceRemaining) graceRemaining = res.graceRemaining;
+      for (const d of res.lateDetails || []) {
+        const iso = rowDateIso(d.date);
+        if (iso) finalLateByKey.set(`${pc}|${iso}`, { isFinalLate: d.isFinalLate === true, graceUsed: d.graceUsed || null });
+      }
+    }
+    summaries.set(pc, { totalLate, graceCovered, finalLate, graceRemaining, isStaff });
+  }
+  return { finalLateByKey, summaries };
+}
+
 /**
  * Core monitor dataset: every scoped employee's final status for every date in the
  * window. `employees` + `rows` come from the existing scoped register loader, so
  * company/category/department/search filters and company scope are already applied.
  */
 async function buildAbsentMissMonitor(pool, req, filters) {
-  const { rows, employees } = await loadReportRegisterRows(pool, req, filters);
+  const { rows, rawRows, employees, shiftMap } = await loadReportRegisterRows(pool, req, filters);
   const dates = [];
   const start = Date.parse(`${filters.fromDate}T00:00:00Z`);
   const end = Date.parse(`${filters.toDate}T00:00:00Z`);
@@ -4440,7 +4535,31 @@ async function buildAbsentMissMonitor(pool, req, filters) {
     }
     perDate.set(date, day);
   }
-  return { employees, dates, perDate, regByKey };
+
+  // --- Authoritative week-off + grace-aware late overlay --------------------
+  // Week-off days come from the employee's REAL shift assignment (firstoffday /
+  // secondoffday in dbo.tblemployeeshiftmaster) — never assumed as Sunday and never
+  // derived only from register "WO" rows (some employees' register lacks WO rows).
+  // A week-off day with no punch is "Week Off", never "Absent" / "No Record".
+  // Grace-aware Late (final vs grace-covered) uses the SAME
+  // computeMonthlyLateForEmployee() the Single Employee Audit / mobile dashboard use,
+  // so every report distinguishes total late occurrences vs actual late marks.
+  const weekOffDays = await loadPopulationWeekOffDays(pool);
+  const lateInfo = computePopulationLateInfo(rawRows, employees, shiftMap);
+  for (const [date, day] of perDate) {
+    const dow = dayOfWeekOfIso(date);
+    for (const [paycode, entry] of day) {
+      const offDays = weekOffDays.get(paycode);
+      if (entry.status !== 'Holiday' && entry.status !== 'Approved Leave' && offDays && offDays.has(dow)) {
+        const hasPunch = Boolean(entry.reg && (entry.reg.inTime || entry.reg.outTime));
+        if (!hasPunch) entry.status = 'Week Off';
+      }
+      const lk = lateInfo.finalLateByKey.get(`${paycode}|${date}`);
+      entry.isFinalLate = lk ? lk.isFinalLate === true : (entry.reg?.isLate === true);
+      entry.lateGraceUsed = lk ? (lk.graceUsed || null) : null;
+    }
+  }
+  return { employees, dates, perDate, regByKey, lateSummaries: lateInfo.summaries };
 }
 
 function emptyMonitorBucket() {
@@ -4455,12 +4574,10 @@ function accumulateMonitorDay(bucket, entry) {
   else if (entry.status === 'Holiday') bucket.holiday += 1;
   else if (entry.status === 'Week Off') bucket.weekOff += 1;
   else bucket.noRecord += 1;
-  // Late is an ORTHOGONAL flag beside the status (same rule as Daily Master /
-  // Single Employee Audit). It comes from the authoritative register row already
-  // normalised via normalizeAttendance() -> computeLateStatus(), so no guessed
-  // shift times are used. A (paycode, date) entry appears exactly once in
-  // perDate, so duplicate raw punches can never double-count an employee.
-  if (entry.reg && entry.reg.isLate === true) bucket.late += 1;
+  // Late is an ORTHOGONAL flag beside the status. It now counts ACTUAL late marks
+  // after the monthly STAFF grace (entry.isFinalLate), matching the Single Employee
+  // Audit "Late Marks" — grace-covered arrivals are NOT late marks.
+  if (entry.isFinalLate === true) bucket.late += 1;
 }
 
 function monitorAttendancePct(bucket) {
@@ -4486,7 +4603,9 @@ function flattenMonitorRows(perDate, dates, status) {
       // isLate flag is true qualify (same normalizeAttendance() late computation).
       if (status) {
         if (status === 'Late') {
-          if (entry.reg?.isLate !== true) continue;
+          // "Late" drill-down = ACTUAL late marks after monthly grace, consistent
+          // with the Single Employee Audit "Late Marks" (grace-covered excluded).
+          if (entry.isFinalLate !== true) continue;
         } else if (entry.status !== status) continue;
       }
       const emp = entry.emp;
@@ -4500,11 +4619,14 @@ function flattenMonitorRows(perDate, dates, status) {
         departmentcode: emp.departmentcode,
         departmentname: emp.departmentname,
         status: entry.status,
+        shiftcode: entry.reg?.shiftcode || emp.shiftcode || null,
         inTime: entry.reg?.inTime || null,
         outTime: entry.reg?.outTime || null,
         hoursworked: entry.reg?.hoursworked ?? null,
         isLate: entry.reg?.isLate === true,
+        isFinalLate: entry.isFinalLate === true,
         lateMinutes: entry.reg?.lateMinutes ?? null,
+        graceUsed: entry.lateGraceUsed || null,
         holidayName: entry.holiday?.name || null,
         leaveType: entry.leave?.typename || null,
       });
@@ -4629,12 +4751,12 @@ function buildMonitorWorkbook({ filters, status, comparison, allRows, absentRows
     ...comparison.map((g) => [safeText(g.label || g.key), g.employees, g.present, g.absent, g.missPunch, g.late, g.approvedLeave, g.holiday, g.weekOff, g.noRecord, pctText(g.attendancePct)]),
   ];
 
-  const detailHeader = ['Date', 'Paycode', 'Name', 'Company', 'Category', 'Department', 'Status', 'In', 'Out', 'Hours', 'Late', 'Late Minutes', 'Holiday/Leave'];
+  const detailHeader = ['Date', 'Paycode', 'Name', 'Company', 'Category', 'Department', 'Status', 'Shift', 'In', 'Out', 'Hours', 'Late', 'Late Minutes', 'Grace', 'Holiday/Leave'];
   const toRow = (r) => [
     r.date, r.paycode, safeText(r.empname || ''), safeText(r.companyname || r.companycode || ''), safeText(r.category || ''),
-    safeText(r.departmentname || r.departmentcode || ''), safeText(r.status), r.inTime || '', r.outTime || '',
+    safeText(r.departmentname || r.departmentcode || ''), safeText(r.status), safeText(r.shiftcode || ''), r.inTime || '', r.outTime || '',
     r.hoursworked == null ? '' : r.hoursworked, r.isLate ? 'Yes' : 'No', r.isLate ? (r.lateMinutes ?? 0) : '',
-    safeText(r.holidayName || r.leaveType || ''),
+    r.graceUsed || '', safeText(r.holidayName || r.leaveType || ''),
   ];
 
   const book = XLSX.utils.book_new();
@@ -4654,7 +4776,15 @@ app.get('/api/hr/reports/absent-miss/export', authenticate, requireRole('HR'), r
     if (!filters) return;
     const status = String(req.query.status || '').trim() || null;
     const pool = await getPool();
-    const { dates, perDate } = await buildAbsentMissMonitor(pool, req, filters);
+    const { dates, perDate, lateSummaries } = await buildAbsentMissMonitor(pool, req, filters);
+    const wantSummary = String(req.query.format || '').trim().toLowerCase() === 'summary';
+    if (wantSummary) {
+      const workbook = buildSummaryPivotWorkbook({ filters, status, dates, perDate, generatedBy: req.user?.sub || '', lateSummaries });
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename="Master-Reports-Summary-Pivot_${filters.fromDate}_${filters.toDate}.xlsx"`);
+      res.send(Buffer.from(workbook));
+      return;
+    }
     const allRows = flattenMonitorRows(perDate, dates, status);
     const absentRows = flattenMonitorRows(perDate, dates, 'Absent');
     const missRows = flattenMonitorRows(perDate, dates, 'Miss Punch');
@@ -4666,6 +4796,324 @@ app.get('/api/hr/reports/absent-miss/export', authenticate, requireRole('HR'), r
     res.send(Buffer.from(workbook));
   } catch (error) { sendDbError(res, error); }
 });
+
+/* -------------------- Summary / Pivot register (Option 2) -------------------- */
+// Builds a 4-sheet management workbook from the SAME authoritative monitor data
+// and filters as the website (buildAbsentMissMonitor -> flattenMonitorRows), so the
+// numbers reconcile with the Company-wise Status Summary / KPI cards / drill-down.
+// No new attendance rules are invented; the buckets reuse the shared status strings
+// and the Late orthogonal flag. `status` scopes the whole workbook to the clicked
+// Absent / Miss Punch / Late context when present.
+
+// SheetJS CE (0.18.5) writes column widths (!cols), auto-filters (!autofilter) and
+// number formats (cell.z), but NOT cell fonts/fills or freeze panes. To keep the
+// workbook professional (bold headers, frozen header rows, highlighted totals) we
+// post-process the generated .xlsx (a STORE-method ZIP container) and inject a bold
+// font, header/total fills and freeze panes directly into the sheet + styles XML.
+// Data, widths, filters and every other entry are preserved byte-for-byte.
+
+const PRESENTATION_STYLES_XML = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="4"><font><sz val="11"/><color theme="1"/><name val="Calibri"/><family val="2"/><scheme val="minor"/></font><font><b/><sz val="11"/><color theme="1"/><name val="Calibri"/><family val="2"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/><family val="2"/></font><font><b/><sz val="11"/><color rgb="FF9A3412"/><name val="Calibri"/><family val="2"/></font></fonts><fills count="5"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF4338CA"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFEEF2FF"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFEDD5"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="5"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/><xf numFmtId="0" fontId="2" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/><xf numFmtId="0" fontId="1" fillId="3" borderId="0" xfId="0" applyFont="1" applyFill="1"/><xf numFmtId="0" fontId="3" fillId="4" borderId="0" xfId="0" applyFont="1" applyFill="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles><dxfs count="0"/><tableStyles count="0" defaultTableStyle="TableStyleMedium9" defaultPivotStyle="PivotStyleMedium4"/></styleSheet>';
+
+/** CRC-32 (ZIP) over a Buffer — table-based, no extra dependency. */
+function zipCrc32(buf) {
+  let table = zipCrc32._table;
+  if (!table) {
+    table = zipCrc32._table = new Int32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+      table[n] = c;
+    }
+  }
+  let crc = -1;
+  for (let i = 0; i < buf.length; i++) crc = (crc >>> 8) ^ table[(crc ^ buf[i]) & 0xFF];
+  return (crc ^ -1) >>> 0;
+}
+
+
+/** Reads every entry (name + uncompressed data) from a ZIP buffer. */
+function readZipEntries(buf) {
+  let eocd = -1;
+  const min = Math.max(0, buf.length - 22 - 65536);
+  for (let i = buf.length - 22; i >= min; i--) {
+    if (buf[i] === 0x50 && buf[i + 1] === 0x4b && buf[i + 2] === 0x05 && buf[i + 3] === 0x06) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error('Invalid .xlsx container (no ZIP EOCD found).');
+  const count = buf.readUInt16LE(eocd + 10);
+  let p = buf.readUInt32LE(eocd + 16);
+  const entries = [];
+  for (let i = 0; i < count; i++) {
+    if (buf.readUInt32LE(p) !== 0x02014b50) throw new Error('Invalid .xlsx container (bad central directory).');
+    const method = buf.readUInt16LE(p + 10);
+    const compSize = buf.readUInt32LE(p + 20);
+    const nameLen = buf.readUInt16LE(p + 28);
+    const extraLen = buf.readUInt16LE(p + 30);
+    const commentLen = buf.readUInt16LE(p + 32);
+    const localOffset = buf.readUInt32LE(p + 42);
+    const name = buf.toString('utf8', p + 46, p + 46 + nameLen);
+    const lNameLen = buf.readUInt16LE(localOffset + 26);
+    const lExtraLen = buf.readUInt16LE(localOffset + 28);
+    const dataStart = localOffset + 30 + lNameLen + lExtraLen;
+    let data = buf.subarray(dataStart, dataStart + compSize);
+    if (method === 8) data = zlib.inflateRawSync(data);
+    entries.push({ name, data });
+    p += 46 + nameLen + extraLen + commentLen;
+  }
+  return entries;
+}
+
+/** Rebuilds a ZIP (STORE method) from name + data pairs, preserving order. */
+function buildZip(entries) {
+  const chunks = [];
+  const centrals = [];
+  let offset = 0;
+  for (const e of entries) {
+    const nameBuf = Buffer.from(e.name, 'utf8');
+    const data = e.data;
+    const crc = zipCrc32(data);
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(0x0800, 6); // UTF-8 names
+    local.writeUInt16LE(0, 8);      // STORE
+    local.writeUInt16LE(0, 10);
+    local.writeUInt16LE(0x21, 12);  // DOS date 1980-01-01
+    local.writeUInt32LE(crc, 14);
+    local.writeUInt32LE(data.length, 18);
+    local.writeUInt32LE(data.length, 22);
+    local.writeUInt16LE(nameBuf.length, 26);
+    local.writeUInt16LE(0, 28);
+    chunks.push(local, nameBuf, data);
+    centrals.push({ nameBuf, crc, size: data.length, offset });
+    offset += 30 + nameBuf.length + data.length;
+  }
+  const cdStart = offset;
+  for (const c of centrals) {
+    const ch = Buffer.alloc(46);
+    ch.writeUInt32LE(0x02014b50, 0);
+    ch.writeUInt16LE(20, 4);
+    ch.writeUInt16LE(20, 6);
+    ch.writeUInt16LE(0x0800, 8);
+    ch.writeUInt16LE(0, 10);
+    ch.writeUInt16LE(0, 12);
+    ch.writeUInt16LE(0x21, 14);
+    ch.writeUInt32LE(c.crc, 16);
+    ch.writeUInt32LE(c.size, 20);
+    ch.writeUInt32LE(c.size, 24);
+    ch.writeUInt16LE(c.nameBuf.length, 28);
+    ch.writeUInt16LE(0, 30);
+    ch.writeUInt16LE(0, 32);
+    ch.writeUInt16LE(0, 34);
+    ch.writeUInt16LE(0, 36);
+    ch.writeUInt32LE(0, 38);
+    ch.writeUInt32LE(c.offset, 42);
+    chunks.push(ch, c.nameBuf);
+    offset += 46 + c.nameBuf.length;
+  }
+  const cdSize = offset - cdStart;
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(0, 4);
+  eocd.writeUInt16LE(0, 6);
+  eocd.writeUInt16LE(centrals.length, 8);
+  eocd.writeUInt16LE(centrals.length, 10);
+  eocd.writeUInt32LE(cdSize, 12);
+  eocd.writeUInt32LE(cdStart, 16);
+  eocd.writeUInt16LE(0, 20);
+  chunks.push(eocd);
+  return Buffer.concat(chunks);
+}
+
+/** Excel column letter(s) for a 1-based column index (11 -> "K", 14 -> "N"). */
+function xlsxColName(n) {
+  let s = '';
+  while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); }
+  return s;
+}
+
+// style index map (matches PRESENTATION_STYLES_XML cellXfs order):
+//   1 = bold, 2 = header (white on indigo), 3 = total (bold on light indigo), 4 = grand total.
+function applySheetPresentation(xml, spec) {
+  let out = xml;
+  if (spec.freezeRows > 0) {
+    const pane = `<pane ySplit="${spec.freezeRows}" topLeftCell="A${spec.freezeRows + 1}" activePane="bottomLeft" state="frozen"/>`;
+    out = out.replace(/<sheetView([^>]*)\/>/, `<sheetView$1>${pane}</sheetView>`);
+  }
+  const styleFor = new Map();
+  for (const rn of spec.header || []) styleFor.set(rn, 2);
+  for (const rn of spec.bold || []) styleFor.set(rn, 1);
+  for (const rn of spec.total || []) styleFor.set(rn, 3);
+  for (const rn of spec.grand || []) styleFor.set(rn, 4);
+  for (const [rn, s] of styleFor) {
+    const re = new RegExp(`<row r="${rn}"([^>]*)>([\\s\\S]*?)<\\/row>`);
+    out = out.replace(re, (m0, attrs, inner) => {
+      const styledInner = inner.replace(/<c ([^>]*?)(\/>|>)/g, (m1, cattrs, close) => {
+        if (/\bs="\d+"\b/.test(cattrs)) return m1;
+        return `<c s="${s}" ${cattrs}${close}`;
+      });
+      return `<row r="${rn}"${attrs}>${styledInner}</row>`;
+    });
+  }
+  return out;
+}
+
+function applyXlsxPresentation(raw, sheets) {
+  const entries = readZipEntries(raw);
+  const styled = entries.map((e) => {
+    if (e.name === 'xl/styles.xml') return { name: e.name, data: Buffer.from(PRESENTATION_STYLES_XML, 'utf8') };
+    const m = /^xl\/worksheets\/sheet(\d+)\.xml$/.exec(e.name);
+    if (m) {
+      const spec = sheets[Number(m[1]) - 1];
+      if (spec) return { name: e.name, data: Buffer.from(applySheetPresentation(e.data.toString('utf8'), spec), 'utf8') };
+    }
+    return e;
+  });
+  return buildZip(styled);
+}
+
+
+function buildSummaryPivotWorkbook({ filters, status, dates, perDate, generatedBy, lateSummaries }) {
+  const rows = flattenMonitorRows(perDate, dates, status);
+  const pctText = (v) => (v === null || v === undefined ? '' : `${v}%`);
+  const safeText = (v) => {
+    const s = String(v ?? '');
+    return /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
+  };
+  const bucket = () => ({ present: 0, absent: 0, missPunch: 0, late: 0, lateOccurrences: 0, leave: 0, holiday: 0, weekOff: 0, noRecord: 0, set: new Set() });
+  const acc = (b, r) => {
+    if (r.status === 'Present') b.present += 1;
+    else if (r.status === 'Absent') b.absent += 1;
+    else if (r.status === 'Miss Punch') b.missPunch += 1;
+    else if (r.status === 'Approved Leave') b.leave += 1;
+    else if (r.status === 'Holiday') b.holiday += 1;
+    else if (r.status === 'Week Off') b.weekOff += 1;
+    else b.noRecord += 1;
+    // Total late occurrences (raw) vs actual late marks (after monthly STAFF grace).
+    if (r.isLate) b.lateOccurrences += 1;
+    if (r.isFinalLate) b.late += 1;
+    if (r.paycode) b.set.add(r.paycode);
+  };
+  const pctOf = (b) => {
+    const denom = b.present + b.absent + b.missPunch;
+    return denom ? Number(((b.present / denom) * 100).toFixed(1)) : null;
+  };
+  const finish = (b) => ({ present: b.present, absent: b.absent, missPunch: b.missPunch, late: b.late, lateOccurrences: b.lateOccurrences, leave: b.leave, holiday: b.holiday, weekOff: b.weekOff, noRecord: b.noRecord, employees: b.set.size, attendancePct: pctOf(b) });
+
+  const totals = finish(rows.reduce((b, r) => { acc(b, r); return b; }, bucket()));
+
+  const byCompany = new Map();
+  for (const r of rows) {
+    const key = r.companycode || '';
+    if (!byCompany.has(key)) byCompany.set(key, { key, label: r.companyname || r.companycode || '—', ...bucket() });
+    acc(byCompany.get(key), r);
+  }
+  const companyRows = [...byCompany.values()]
+    .map((g) => ({ key: g.key, label: g.label, ...finish(g) }))
+    .sort((a, b) => b.employees - a.employees || String(a.label).localeCompare(String(b.label)));
+
+  const byDate = new Map();
+  for (const r of rows) {
+    if (!byDate.has(r.date)) byDate.set(r.date, { date: r.date, ...bucket() });
+    acc(byDate.get(r.date), r);
+  }
+  const dateRows = dates.map((d) => ({ date: d, ...finish(byDate.get(d) || bucket()) }));
+
+  const byEmp = new Map();
+  for (const r of rows) {
+    if (!byEmp.has(r.paycode)) {
+      byEmp.set(r.paycode, { paycode: r.paycode, empname: r.empname, companycode: r.companycode, companyname: r.companyname, category: r.category, departmentcode: r.departmentcode, departmentname: r.departmentname, ...bucket() });
+    }
+    acc(byEmp.get(r.paycode), r);
+  }
+  const empRows = [...byEmp.values()]
+    .map((e) => ({ paycode: e.paycode, empname: e.empname, companycode: e.companycode, companyname: e.companyname, category: e.category, departmentcode: e.departmentcode, departmentname: e.departmentname, ...finish(e) }))
+    .sort((a, b) => String(a.empname || '').localeCompare(String(b.empname || '')) || String(a.paycode || '').localeCompare(String(b.paycode || '')));
+
+  const daysInPeriod = dates.length;
+
+  const sheets = [];
+  const newSheet = (name, freezeRows) => { const sh = { name, freezeRows, aoa: [], header: [], total: [], grand: [], bold: [] }; sheets.push(sh); return sh; };
+  const push = (sh, cells, kind) => { sh.aoa.push(cells); const rn = sh.aoa.length; if (kind === 'header') sh.header.push(rn); else if (kind === 'total') sh.total.push(rn); else if (kind === 'grand') sh.grand.push(rn); else if (kind === 'bold') sh.bold.push(rn); };
+
+  // Sheet 1 — Executive Summary
+  const s1 = newSheet('Executive Summary', 3);
+  push(s1, ['Master Reports — Summary / Pivot Register'], 'bold');
+  push(s1, []);
+  push(s1, ['Metric', 'Value'], 'header');
+  push(s1, ['Report Start Date', filters.fromDate]);
+  push(s1, ['Report End Date', filters.toDate]);
+  push(s1, ['Selected Company', filters.companycode || 'All Companies']);
+  push(s1, ['Report Context', status || 'All statuses (full period)']);
+  push(s1, ['Category Filter', filters.cat || 'All']);
+  push(s1, ['Department Filter', filters.departmentcode || 'All']);
+  push(s1, ['Employee Search', filters.search || 'All']);
+  push(s1, []);
+  push(s1, ['Total Employees in Scope', totals.employees]);
+  push(s1, ['Present Count', totals.present]);
+  push(s1, ['Absent Count', totals.absent]);
+  push(s1, ['Miss Punch Count', totals.missPunch]);
+  push(s1, ['Late Count', totals.late]);
+  push(s1, ['Leave Count', totals.leave]);
+  push(s1, ['Holiday Count', totals.holiday]);
+  push(s1, ['Week Off Count', totals.weekOff]);
+  push(s1, ['No Record Count', totals.noRecord]);
+  push(s1, ['Attendance Percentage', pctText(totals.attendancePct)], 'bold');
+  push(s1, []);
+  push(s1, ['Generated', new Date().toISOString()]);
+  push(s1, ['Generated by (HR Admin)', generatedBy || '']);
+  push(s1, []);
+  push(s1, ['Business Rules', 'Holiday / Week Off / full-day approved Leave are never counted as Absent. Days with no register row are "No Record", never invented as Absent. Late is an orthogonal flag from the shared late-arrival calculation. Attendance % = Present / (Present + Absent + Miss Punch). Employee-wise "Days in Period" = number of calendar days in the selected range (every in-scope employee is evaluated for every day).']);
+
+  // Sheet 2 — Company-wise Summary (reconciles with the website Company-wise status summary)
+  const compHeader = ['Company', 'Total Employees', 'Present', 'Absent', 'Miss Punch', 'Late', 'Leave', 'Holiday', 'Week Off', 'No Record', 'Attendance %'];
+  const s2 = newSheet('Company-wise Summary', 1);
+  push(s2, compHeader, 'header');
+  for (const g of companyRows) push(s2, [safeText(g.label), g.employees, g.present, g.absent, g.missPunch, g.late, g.leave, g.holiday, g.weekOff, g.noRecord, pctText(g.attendancePct)]);
+  push(s2, ['Total', totals.employees, totals.present, totals.absent, totals.missPunch, totals.late, totals.leave, totals.holiday, totals.weekOff, totals.noRecord, pctText(totals.attendancePct)], 'total');
+
+
+  // Sheet 3 — Date-wise Summary (weekly / monthly reporting without manual counting)
+  const dateHeader = ['Date', 'Total Employees', 'Present', 'Absent', 'Miss Punch', 'Late', 'Leave', 'Holiday', 'Week Off', 'No Record', 'Attendance %'];
+  const s3 = newSheet('Date-wise Summary', 1);
+  push(s3, dateHeader, 'header');
+  for (const d of dateRows) push(s3, [d.date, d.employees, d.present, d.absent, d.missPunch, d.late, d.leave, d.holiday, d.weekOff, d.noRecord, pctText(d.attendancePct)]);
+  push(s3, ['Total / Overall', totals.employees, totals.present, totals.absent, totals.missPunch, totals.late, totals.leave, totals.holiday, totals.weekOff, totals.noRecord, pctText(totals.attendancePct)], 'total');
+
+  // Sheet 4 — Employee-wise Summary (one row per employee for the selected period).
+  // Late is split into: total occurrences (raw) / grace-covered / actual late marks,
+  // so HR never confuses total late arrivals with late marks after grace.
+  const empHeader = ['Employee ID / Paycode', 'Employee Name', 'Company', 'Category', 'Department', 'Days in Period', 'Present Count', 'Absent Count', 'Miss Punch Count', 'Total Late Occurrences', 'Grace Covered Count', 'Actual Late Marks', 'Leave Count', 'Holiday Count', 'Week Off Count', 'No Record Count'];
+  const s4 = newSheet('Employee-wise Summary', 1);
+  push(s4, empHeader, 'header');
+  const useLateSummaries = !status;
+  for (const e of empRows) {
+    const ls = useLateSummaries && lateSummaries ? lateSummaries.get(String(e.paycode).trim()) : null;
+    const totalLate = ls ? ls.totalLate : e.lateOccurrences;
+    const graceCovered = ls ? ls.graceCovered : (e.lateOccurrences - e.late);
+    const actualLate = ls ? ls.finalLate : e.late;
+    push(s4, [e.paycode, safeText(e.empname || ''), safeText(e.companyname || e.companycode || ''), safeText(e.category || ''), safeText(e.departmentname || e.departmentcode || ''), daysInPeriod, e.present, e.absent, e.missPunch, totalLate, graceCovered, actualLate, e.leave, e.holiday, e.weekOff, e.noRecord]);
+  }
+  push(s4, ['Total', '', '', '', '', '', totals.present, totals.absent, totals.missPunch, totals.lateOccurrences, totals.lateOccurrences - totals.late, totals.late, totals.leave, totals.holiday, totals.weekOff, totals.noRecord], 'total');
+
+  const book = XLSX.utils.book_new();
+  for (const sh of sheets) {
+    const ws = XLSX.utils.aoa_to_sheet(sh.aoa);
+    let widths;
+    if (sh.name === 'Executive Summary') widths = [{ wch: 34 }, { wch: 46 }];
+    else if (sh.name === 'Employee-wise Summary') widths = [{ wch: 20 }, { wch: 26 }, { wch: 22 }, { wch: 14 }, { wch: 22 }, { wch: 14 }, { wch: 12 }, { wch: 12 }, { wch: 16 }, { wch: 18 }, { wch: 16 }, { wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 14 }];
+    else widths = [{ wch: 24 }, { wch: 16 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 14 }];
+    ws['!cols'] = widths;
+    const headerRow = sh.header[0];
+    const dataEndRow = sh.aoa.length - (sh.total.length + sh.grand.length);
+    if (headerRow && sh.name !== 'Executive Summary' && dataEndRow >= headerRow) {
+      ws['!autofilter'] = { ref: `A${headerRow}:${xlsxColName(sh.aoa[headerRow - 1].length)}${dataEndRow}` };
+    }
+    XLSX.utils.book_append_sheet(book, ws, sh.name);
+  }
+  const raw = XLSX.write(book, { type: 'buffer', bookType: 'xlsx' });
+  return applyXlsxPresentation(raw, sheets);
+}
+
 
 // Scoped filter options for the Reports tab: company / category / department /
 // shift values DERIVED from the authorised population only. Every employee-
