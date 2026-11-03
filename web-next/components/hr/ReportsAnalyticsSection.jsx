@@ -32,6 +32,7 @@ import { isoToday, prettyDate, dayName, fmtPunch } from '../../lib/format';
 import { statusBadgeClass, hoursText } from '../../lib/hr';
 import { HrCan } from './HrAccess';
 import AbsentMissMonitor from './AbsentMissMonitor';
+import { useSearchParams } from 'next/navigation';
 
 const REPORT_TYPES = [
   { key: 'company', label: 'Company-wise', icon: 'fa-building' },
@@ -92,6 +93,8 @@ const NOTES = [
 ];
 
 export default function ReportsAnalyticsSection() {
+  const searchParams = useSearchParams();
+  const isEmbeddedMobile = searchParams?.get('embed') === 'mobile';
   const [reportType, setReportType] = useState('company');
   const [fromDate, setFromDate] = useState(isoToday());
   const [toDate, setToDate] = useState(isoToday());
@@ -233,8 +236,8 @@ export default function ReportsAnalyticsSection() {
   }, [JSON.stringify(breakdown)]);
 
   const statusData = {
-    labels: ['Present', 'Absent', 'Miss Punch', 'Week Off'],
-    datasets: [{ data: [Number(kpis.presentDays || 0), Number(kpis.absentDays || 0), Number(kpis.missDays || 0), Number(kpis.weekOffDays || 0)], backgroundColor: ['#10b981', '#f43f5e', '#f59e0b', '#64748b'], borderWidth: 0 }],
+    labels: ['Present', 'Absent', 'Miss Punch', 'Leave', 'Holiday', 'Week Off', 'No Record'],
+    datasets: [{ data: [Number(kpis.presentDays || 0), Number(kpis.absentDays || 0), Number(kpis.missDays || 0), Number(kpis.approvedLeaveDays || 0), Number(kpis.holidayDays || 0), Number(kpis.weekOffDays || 0), Number(kpis.noRecordDays || 0)], backgroundColor: ['#10b981', '#f43f5e', '#f59e0b', '#06b6d4', '#8b5cf6', '#eab308', '#64748b'], borderWidth: 0 }],
   };
 
   const dimensionTitle = {
@@ -264,11 +267,12 @@ export default function ReportsAnalyticsSection() {
             {dimensionTitle} • KPIs, charts, detailed register and Excel export — limited to the companies assigned to your HR Admin account
           </p>
         </div>
-        <HrCan module="reports" action="export">
+{!isEmbeddedMobile && <HrCan module="reports" action="export">
           <button type="button" onClick={downloadExport} disabled={exporting || !readyForData} className="px-4 py-2 rounded-xl bg-emerald-600/20 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-600/30 text-xs font-bold transition disabled:opacity-50 disabled:cursor-not-allowed">
             <i className="fas fa-file-excel mr-1"></i>{exporting ? 'Exporting...' : 'Export Excel'}
           </button>
         </HrCan>
+        }
       </div>
       {exportMsg ? (
         <p className={`text-[11px] font-semibold mb-4 ${exportMsg.ok ? 'text-emerald-300' : 'text-rose-300'}`}>{exportMsg.text}</p>
@@ -407,6 +411,9 @@ export default function ReportsAnalyticsSection() {
               <ReportKpiCard title="Attendance %" period="Present ÷ (P + A + Miss)" value={pctText(kpis.attendancePct)} icon="fa-chart-pie" color="bg-cyan-500/20 text-cyan-400" barClass="bg-cyan-500/10 border border-cyan-500/20" subClass="text-cyan-300" barPct={Number(kpis.attendancePct || 0)} />
               <ReportKpiCard title="Recorded Hours" period="Sum of hoursworked only" value={hoursText(Number(kpis.hoursMinutes || 0))} icon="fa-hourglass-half" color="bg-teal-500/20 text-teal-400" barClass="bg-teal-500/10 border border-teal-500/20" subClass="text-teal-300" />
               <ReportKpiCard title="Week Off Days" period="Excluded from Attendance %" value={num(kpis.weekOffDays)} icon="fa-umbrella-beach" color="bg-slate-500/20 text-slate-300" barClass="bg-slate-500/10 border border-slate-500/20" subClass="text-slate-200" />
+              <ReportKpiCard title="Holiday Days" period="Applicable configured holidays" value={num(kpis.holidayDays)} icon="fa-calendar-star" color="bg-violet-500/20 text-violet-400" barClass="bg-violet-500/10 border border-violet-500/20" subClass="text-violet-300" />
+              <ReportKpiCard title="Approved Leave Days" period="Full-day approved leave" value={num(kpis.approvedLeaveDays)} icon="fa-plane-departure" color="bg-cyan-500/20 text-cyan-400" barClass="bg-cyan-500/10 border border-cyan-500/20" subClass="text-cyan-300" />
+              <ReportKpiCard title="No Record Days" period="No register row (not Absent)" value={num(kpis.noRecordDays)} icon="fa-circle-question" color="bg-slate-500/20 text-slate-300" barClass="bg-slate-500/10 border border-slate-500/20" subClass="text-slate-200" />
             </div>
             {singleMode && employeeInfo && employeeInfo.lateFinal !== null && employeeInfo.lateFinal !== undefined ? (
               <div className="mb-6 p-4 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 text-[11px] text-indigo-200">
@@ -457,7 +464,7 @@ export default function ReportsAnalyticsSection() {
                 <table className="portal-table">
                   <thead>
                     <tr>
-                      <th>Group</th><th>Employees</th><th>Present</th><th>Absent</th><th>Miss Punch</th><th>Week Off</th><th>Late</th><th>Hours</th><th>Attendance %</th>
+                      <th>Group</th><th>Employees</th><th>Present</th><th>Absent</th><th>Miss Punch</th><th>Late</th><th>Leave</th><th>Holiday</th><th>Week Off</th><th>No Record</th><th>Hours</th><th>Attendance %</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -468,8 +475,11 @@ export default function ReportsAnalyticsSection() {
                         <td className="text-emerald-300 font-semibold">{num(g.presentDays)}</td>
                         <td className="text-rose-300 font-semibold">{num(g.absentDays)}</td>
                         <td className="text-amber-300 font-semibold">{num(g.missDays)}</td>
-                        <td>{num(g.weekOffDays)}</td>
                         <td className="text-indigo-300 font-semibold">{num(g.lateDays)}</td>
+                        <td className="text-cyan-300 font-semibold">{num(g.approvedLeaveDays)}</td>
+                        <td className="text-violet-300 font-semibold">{num(g.holidayDays)}</td>
+                        <td className="text-yellow-300 font-semibold">{num(g.weekOffDays)}</td>
+                        <td>{num(g.noRecordDays)}</td>
                         <td>{hoursText(Number(g.hoursMinutes || 0))}</td>
                         <td className="mono text-[var(--accent-soft)] font-bold">{pctText(g.attendancePct)}</td>
                       </tr>

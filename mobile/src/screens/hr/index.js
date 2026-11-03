@@ -6,6 +6,7 @@
 export { HRDashboardScreen } from './HRDashboardScreen';
 export { HREmployeesScreen } from './HREmployeesScreen';
 export { HRAuditScreen } from './HRAuditScreen';
+export { HRMasterReportsScreen } from './HRMasterReportsScreen';
 export { HRAnalyticsScreen } from './HRAnalyticsScreen';
 export { HRDailyMasterScreen } from './HRDailyMasterScreen';
 export { HRCelebrationsScreen } from './HRCelebrationsScreen';

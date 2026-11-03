@@ -14,8 +14,7 @@
  *   ├── Dashboard Tab → HRDashboardScreen
  *   ├── Employees Tab → HREmployeesScreen
  *   ├── Audit Tab → HRAuditScreen
- *   ├── Analytics Tab → HRAnalyticsScreen
- *   ├── Daily Master Tab → HRDailyMasterScreen
+ *   ├── Reports Tab → HRMasterReportsScreen
  *   ├── Celebrations Tab → HRCelebrationsScreen
  *   ├── Marriage Tab → HRMarriageScreen
  *   ├── Leave Mgmt Tab → HRLeaveManagementScreen
@@ -37,8 +36,7 @@ import { HRMoreScreen } from '../screens/hr/HRMoreScreen';
 import { HRDashboardScreen } from '../screens/hr/HRDashboardScreen';
 import { HREmployeesScreen } from '../screens/hr/HREmployeesScreen';
 import { HRAuditScreen } from '../screens/hr/HRAuditScreen';
-import { HRAnalyticsScreen } from '../screens/hr/HRAnalyticsScreen';
-import { HRDailyMasterScreen } from '../screens/hr/HRDailyMasterScreen';
+import { HRMasterReportsScreen } from '../screens/hr/HRMasterReportsScreen';
 import { HRCelebrationsScreen } from '../screens/hr/HRCelebrationsScreen';
 import { HRMarriageScreen } from '../screens/hr/HRMarriageScreen';
 import { HRLeaveManagementScreen } from '../screens/hr/HRLeaveManagementScreen';
@@ -227,23 +225,16 @@ const HRTabs = () => {
           }}
         />
       ) : null}
-      {inBar('analytics') ? (
+      {/* Master Reports (module: reports) — replaced the old Analytics + Daily Master
+          tabs. Uses the SAME backend (/api/hr/reports/*) and SAME SuperAdmin
+          "Master Reports" permission (view/export) as the Next.js website. */}
+      {inBar('reports') ? (
         <Tab.Screen
-          name="Analytics"
-          component={HRAnalyticsScreen}
+          name="Reports"
+          component={HRMasterReportsScreen}
           options={{
-            tabBarLabel: tabLabel('Analytics'),
-            tabBarIcon: ({ focused }) => tabIcon('Analytics', focused, 'analytics', 'analytics-outline'),
-          }}
-        />
-      ) : null}
-      {inBar('dailymaster') ? (
-        <Tab.Screen
-          name="DailyMaster"
-          component={HRDailyMasterScreen}
-          options={{
-            tabBarLabel: tabLabel('Daily Master'),
-            tabBarIcon: ({ focused }) => tabIcon('DailyMaster', focused, 'document-text', 'document-text-outline'),
+            tabBarLabel: tabLabel('Reports'),
+            tabBarIcon: ({ focused }) => tabIcon('Reports', focused, 'bar-chart', 'bar-chart-outline'),
           }}
         />
       ) : null}
@@ -309,7 +300,7 @@ const HRTabs = () => {
       {/* Prompt 3: overflow modules (placement = 'more'). Registered ONLY when at
           least one PERMITTED module is placed there, so an empty More tab is
           never created and a non-permitted module can never appear inside it. */}
-      {['dashboard', 'employees', 'audit', 'analytics', 'dailymaster', 'celebrations', 'marriage', 'leave', 'salary', 'holidays']
+      {['dashboard', 'employees', 'audit', 'reports', 'celebrations', 'marriage', 'leave', 'salary', 'holidays']
         .some((m) => showTab(m) && modulePlacement(m) === 'more') ? (
         <Tab.Screen
           name="More"

@@ -11,6 +11,7 @@
 // what it asks for — hiding a dropdown/button is never the security boundary.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import AsyncBox from '../employee/AsyncBox';
 import ChartCanvas from '../ChartCanvas';
 import useApiData from '../useApiData';
@@ -77,6 +78,8 @@ function MonitorCard({ title, value, meta, icon, cls, subtitle }) {
 }
 
 export default function AbsentMissMonitor() {
+  const searchParams = useSearchParams();
+  const isEmbeddedMobile = searchParams?.get('embed') === 'mobile';
   const [fromDate, setFromDate] = useState(isoToday());
   const [toDate, setToDate] = useState(isoToday());
   const [company, setCompany] = useState('');
@@ -292,11 +295,12 @@ export default function AbsentMissMonitor() {
               Date-wise absence &amp; miss-punch intelligence per company — Holiday, Weekly Off and approved Leave are never counted as Absent.
             </p>
           </div>
-          <HrCan module="reports" action="export">
+{!isEmbeddedMobile && <HrCan module="reports" action="export">
             <button type="button" onClick={downloadExport} disabled={exporting} className="px-4 py-2 rounded-xl bg-emerald-600/20 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-600/30 text-xs font-bold transition disabled:opacity-50">
               <i className="fas fa-file-excel mr-1"></i>{exporting ? 'Exporting...' : 'Export Excel'}
             </button>
           </HrCan>
+          }
         </div>
         {exportMsg ? (
           <p className={`text-[11px] font-semibold mb-4 ${exportMsg.ok ? 'text-emerald-300' : 'text-rose-300'}`}>{exportMsg.text}</p>
@@ -455,7 +459,7 @@ export default function AbsentMissMonitor() {
                         </div>
                       </div>
                       <div className="flex items-center gap-3">
-                        <HrCan module="reports" action="export">
+              {!isEmbeddedMobile && <HrCan module="reports" action="export">
                           <div className="relative" ref={exportMenuRef}>
                             <button type="button" onClick={() => setExportMenuOpen((v) => !v)} disabled={exporting} className="px-4 py-2 rounded-xl bg-emerald-600/20 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-600/30 text-xs font-bold transition disabled:opacity-50 flex items-center gap-1">
                               <i className="fas fa-file-excel"></i>{exporting ? 'Exporting...' : 'Export Excel'}
@@ -481,6 +485,7 @@ export default function AbsentMissMonitor() {
                             ) : null}
                           </div>
                         </HrCan>
+          }
                         <span className="text-xs text-[var(--muted)]">Page {reg.page || 1} of {reg.totalPages || 1}</span>
                         <div className="flex items-center gap-1">
                           <button type="button" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={(reg.page || 1) <= 1} className="px-3 py-1.5 rounded-lg bg-white/5 border border-[var(--border)] text-[var(--text)] text-xs font-bold transition disabled:opacity-50 hover:bg-white/10"><i className="fas fa-chevron-left"></i></button>
@@ -540,3 +545,5 @@ export default function AbsentMissMonitor() {
     </section>
   );
 }
+
+

@@ -12,6 +12,14 @@ export const metadata = {
   description: 'Savior Attendance website (Next.js). Existing Express backend aur mobile app unchanged hain.',
 };
 
+// Mobile WebView reuse: proper responsive viewport so the same website section
+// scales to a phone screen inside the React Native WebView.
+export const viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 1,
+};
+
 export default function RootLayout({ children }) {
   return (
     <html lang="en">

@@ -115,6 +115,7 @@ import {
 // the SAME server-side company/module authorisation as every report API.
 import * as XLSX from 'xlsx';
 import zlib from 'node:zlib';
+import crypto from 'node:crypto';
 
 const app = express();
 const port = Number(process.env.PORT || process.env.API_PORT || 4000);
@@ -1277,7 +1278,10 @@ function getAvailableStaffGrace(paycode, date) {
 }
 
 function rowDateIso(v) {
-  if (v instanceof Date) return v.toISOString().slice(0, 10);
+  if (v instanceof Date) {
+    if (Number.isNaN(v.getTime())) return null;
+    return `${v.getFullYear()}-${String(v.getMonth() + 1).padStart(2, '0')}-${String(v.getDate()).padStart(2, '0')}`;
+  }
   const s = String(v == null ? '' : v);
   return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0, 10) : null;
 }
@@ -2383,6 +2387,57 @@ app.post('/api/auth/hr/login', requireConfiguredAuth, async (req, res) => {
     }
   }
   return res.status(401).json({ success: false, message: 'Invalid HR credentials.' });
+});
+
+// Mobile Master Reports handoff — an opaque, short-lived, single-use code that the
+// mobile app exchanges for the JWT inside the Next.js webbridge route. The real
+// JWT is never placed in a URL query string (no password/token leak into logs or
+// the browser history). The website's own /api/me re-validates every token.
+const handoffCodes = new Map();
+const HANDOFF_TTL_MS = 60 * 1000;
+
+function issueHandoffCode(token) {
+  const now = Date.now();
+  for (const [code, entry] of handoffCodes) {
+    if (entry.expiresAt <= now) handoffCodes.delete(code);
+  }
+  const code = crypto.randomBytes(24).toString('base64url');
+  handoffCodes.set(code, { token, expiresAt: now + HANDOFF_TTL_MS });
+  return code;
+}
+
+function redeemHandoffCode(code) {
+  const entry = handoffCodes.get(code);
+  if (!entry || entry.expiresAt <= Date.now()) return null;
+  handoffCodes.delete(code); // single-use
+  return entry.token;
+}
+
+// Mobile Master Reports reuse: the HR app already holds a valid JWT and only needs a
+// one-time code to bootstrap the website's httpOnly `auth_token` cookie. Require the
+// same HR auth as every other /api/hr route.
+app.post('/api/auth/handoff', authenticate, async (req, res) => {
+  try {
+    const raw = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+    if (!raw) return res.status(401).json({ success: false, message: 'Missing token.' });
+    const code = issueHandoffCode(raw);
+    res.json({ success: true, code, expiresIn: Math.floor(HANDOFF_TTL_MS / 1000) });
+  } catch (error) {
+    sendDbError(res, error);
+  }
+});
+
+// Redeems a single-use handoff code for the real JWT (used by the Next.js
+// webbridge route, which then sets the cookie and redirects to /hr/reports).
+app.post('/api/auth/handoff/exchange', async (req, res) => {
+  try {
+    const code = String(req.body?.code || '').trim();
+    const token = redeemHandoffCode(code);
+    if (!token) return res.status(401).json({ success: false, message: 'Invalid or expired handoff code.' });
+    res.json({ success: true, token });
+  } catch (error) {
+    sendDbError(res, error);
+  }
 });
 
 // SuperAdmin sign-in — a SEPARATE management role.
@@ -4192,16 +4247,27 @@ async function loadReportRegisterRows(pool, req, filters) {
 // Miss Punch) — the established Employee Reports formula.
 
 function emptyReportBucket() {
-  return { presentDays: 0, absentDays: 0, missDays: 0, weekOffDays: 0, lateDays: 0, hoursMinutes: 0 };
+  return { presentDays: 0, absentDays: 0, missDays: 0, weekOffDays: 0, approvedLeaveDays: 0, holidayDays: 0, noRecordDays: 0, lateDays: 0, hoursMinutes: 0 };
 }
 
+// Single authoritative accumulation used by the Master Reports KPIs/breakdown/trend.
+// It consumes the SAME per-employee-per-day rows the monitor engine (Engine A,
+// buildAbsentMissMonitor) produces, so Holiday / Approved Leave / Week Off / No Record
+// reconcile exactly with the Company-wise status summary and the mobile app.
+// Week Off / Holiday / Approved Leave / No Record never contribute hours or Late.
 function accumulateReportRow(bucket, row) {
-  if (!row.hasRecord) return; // 'No Record' rows are reported separately, never invented as Absent
-  if (row.status === 'Week Off') { bucket.weekOffDays += 1; return; }
+  // Holiday/Week Off are distinct calendar dates, handled by callers.
+  if (row.status === 'Week Off') { return; }
+  if (row.status === 'Holiday') { return; }
+  if (row.status === 'Approved Leave') { bucket.approvedLeaveDays += 1; return; }
+  if (row.status === 'No Record') { bucket.noRecordDays += 1; return; }
   if (row.status === 'Present') bucket.presentDays += 1;
   else if (row.status === 'Absent') bucket.absentDays += 1;
   else if (row.status === 'Miss Punch') bucket.missDays += 1;
-  if (row.isLate) bucket.lateDays += 1;
+  // Late is an orthogonal flag: actual late marks after the monthly STAFF grace
+  // (isFinalLate) with the row-level flag as a safe fallback.
+  if (row.isLate === true) bucket.lateDays += 1;
+  // (monthly STAFF grace is reported separately as lateFinal)
   bucket.hoursMinutes += Number(row.hoursworked || 0);
 }
 
@@ -4230,18 +4296,26 @@ const REPORT_DIMENSIONS = ['company', 'category', 'department', 'shift'];
 /** Per-dimension comparison groups (company comparisons only ever contain scoped companies). */
 function buildReportBreakdown(rows, employees, dimension) {
   const groups = new Map();
+  const holidayDates = new Map();
+  const weekOffDates = new Map();
   for (const row of rows) {
     const key = reportGroupKey(dimension, row);
     if (!groups.has(key)) {
       groups.set(key, { key, label: reportGroupLabel(dimension, row), ...emptyReportBucket(), employees: 0, employeeSet: new Set() });
+      holidayDates.set(key, new Set());
+      weekOffDates.set(key, new Set());
     }
     const group = groups.get(key);
     group.employeeSet.add(row.paycode);
+    if (row.status === 'Holiday' && row.date) holidayDates.get(key).add(row.date);
+    if (row.status === 'Week Off' && row.date) weekOffDates.get(key).add(row.date);
     accumulateReportRow(group, row);
   }
   return [...groups.values()]
     .map((g) => {
       const { employeeSet, ...rest } = g;
+      rest.holidayDays = holidayDates.get(g.key)?.size || 0;
+      rest.weekOffDays = weekOffDates.get(g.key)?.size || 0;
       return { ...rest, employees: employeeSet.size, attendancePct: attendancePctOf(g) };
     })
     .sort((a, b) => b.employees - a.employees || String(a.label).localeCompare(String(b.label)));
@@ -4250,9 +4324,13 @@ function buildReportBreakdown(rows, employees, dimension) {
 /** Per-day trend series across the range (dates with no rows simply show zeros). */
 function buildReportTrend(rows, fromDate, toDate) {
   const byDate = new Map();
+  const holidayDates = new Set();
+  const weekOffDates = new Set();
   for (const row of rows) {
-    if (!row.hasRecord || !row.date) continue;
+    if (!row.date) continue;
     if (!byDate.has(row.date)) byDate.set(row.date, { date: row.date, ...emptyReportBucket() });
+    if (row.status === 'Holiday') holidayDates.add(row.date);
+    if (row.status === 'Week Off') weekOffDates.add(row.date);
     accumulateReportRow(byDate.get(row.date), row);
   }
   const trend = [];
@@ -4261,7 +4339,10 @@ function buildReportTrend(rows, fromDate, toDate) {
   for (let t = start; t <= end; t += 86400000) {
     const date = new Date(t).toISOString().slice(0, 10);
     const entry = byDate.get(date) || { date, ...emptyReportBucket() };
-    trend.push({ date, present: entry.presentDays, absent: entry.absentDays, miss: entry.missDays, weekOff: entry.weekOffDays, late: entry.lateDays, hoursMinutes: entry.hoursMinutes });
+    // Calendar-occurrence metrics: 1 if that date is a holiday/week-off, else 0.
+    entry.holidayDays = holidayDates.has(date) ? 1 : 0;
+    entry.weekOffDays = weekOffDates.has(date) ? 1 : 0;
+    trend.push({ date, present: entry.presentDays, absent: entry.absentDays, miss: entry.missDays, weekOff: entry.weekOffDays, late: entry.lateDays, holiday: entry.holidayDays, leave: entry.approvedLeaveDays, noRecord: entry.noRecordDays, hoursMinutes: entry.hoursMinutes });
   }
   return trend;
 }
@@ -4269,7 +4350,15 @@ function buildReportTrend(rows, fromDate, toDate) {
 /** Overall KPIs for the whole (already scoped) population. */
 function computeReportKpis(rows, employees) {
   const bucket = emptyReportBucket();
-  for (const row of rows) accumulateReportRow(bucket, row);
+  const holidayDates = new Set();
+  const weekOffDates = new Set();
+  for (const row of rows) {
+    if (row.status === 'Week Off' && row.date) weekOffDates.add(row.date);
+    if (row.status === 'Holiday' && row.date) holidayDates.add(row.date);
+    accumulateReportRow(bucket, row);
+  }
+  bucket.holidayDays = holidayDates.size;
+  bucket.weekOffDays = weekOffDates.size;
   const withRecord = new Set(rows.filter((r) => r.hasRecord).map((r) => r.paycode));
   let withoutRecords = 0;
   for (const paycode of employees.keys()) if (!withRecord.has(paycode)) withoutRecords += 1;
@@ -4571,13 +4660,13 @@ function accumulateMonitorDay(bucket, entry) {
   else if (entry.status === 'Absent') bucket.absent += 1;
   else if (entry.status === 'Miss Punch') bucket.missPunch += 1;
   else if (entry.status === 'Approved Leave') bucket.approvedLeave += 1;
-  else if (entry.status === 'Holiday') bucket.holiday += 1;
-  else if (entry.status === 'Week Off') bucket.weekOff += 1;
+  else if (entry.status === 'Holiday') { /* calendar occurrence counted in summariseMonitorDay */ }
+  else if (entry.status === 'Week Off') { /* calendar occurrence counted in summariseMonitorDay */ }
   else bucket.noRecord += 1;
   // Late is an ORTHOGONAL flag beside the status. It now counts ACTUAL late marks
   // after the monthly STAFF grace (entry.isFinalLate), matching the Single Employee
   // Audit "Late Marks" — grace-covered arrivals are NOT late marks.
-  if (entry.isFinalLate === true) bucket.late += 1;
+  if (entry.reg?.isLate === true) bucket.late += 1;
 }
 
 function monitorAttendancePct(bucket) {
@@ -4588,7 +4677,15 @@ function monitorAttendancePct(bucket) {
 /** Aggregates one date's day-map into buckets. */
 function summariseMonitorDay(day) {
   const b = emptyMonitorBucket();
-  for (const entry of day.values()) accumulateMonitorDay(b, entry);
+  let hasHoliday = false;
+  let hasWeekOff = false;
+  for (const entry of day.values()) {
+    accumulateMonitorDay(b, entry);
+    if (entry.status === 'Holiday') hasHoliday = true;
+    if (entry.status === 'Week Off') hasWeekOff = true;
+  }
+  b.holiday = hasHoliday ? 1 : 0;
+  b.weekOff = hasWeekOff ? 1 : 0;
   return { ...b, employees: day.size, attendancePct: monitorAttendancePct(b) };
 }
 
@@ -4605,7 +4702,7 @@ function flattenMonitorRows(perDate, dates, status) {
         if (status === 'Late') {
           // "Late" drill-down = ACTUAL late marks after monthly grace, consistent
           // with the Single Employee Audit "Late Marks" (grace-covered excluded).
-          if (entry.isFinalLate !== true) continue;
+          if (entry.reg?.isLate !== true) continue;
         } else if (entry.status !== status) continue;
       }
       const emp = entry.emp;
@@ -4616,19 +4713,26 @@ function flattenMonitorRows(perDate, dates, status) {
         companycode: emp.companycode,
         companyname: emp.companyname,
         category: emp.category,
+        designation: emp.designation || null,
         departmentcode: emp.departmentcode,
         departmentname: emp.departmentname,
         status: entry.status,
+        statusCode: entry.reg?.statusCode || null,
         shiftcode: entry.reg?.shiftcode || emp.shiftcode || null,
+        registerShift: entry.reg?.registerShift || entry.reg?.shiftcode || null,
         inTime: entry.reg?.inTime || null,
         outTime: entry.reg?.outTime || null,
         hoursworked: entry.reg?.hoursworked ?? null,
+        hasRecord: Boolean(entry.reg),
         isLate: entry.reg?.isLate === true,
         isFinalLate: entry.isFinalLate === true,
         lateMinutes: entry.reg?.lateMinutes ?? null,
         graceUsed: entry.lateGraceUsed || null,
+        reason: entry.reg?.reason || null,
         holidayName: entry.holiday?.name || null,
+        holidayHalfDay: entry.holiday?.isHalfDay === true,
         leaveType: entry.leave?.typename || null,
+        leaveHalfDay: entry.leave?.isHalfDay === true,
       });
     }
   }
@@ -4695,21 +4799,29 @@ app.get('/api/hr/reports/absent-miss/employees', authenticate, requireRole('HR')
 /** Per-company comparison over the whole window (headcount + summed day buckets). */
 function buildMonitorComparison(perDate, employees) {
   const groups = new Map();
+  const holidayDates = new Map();
+  const weekOffDates = new Map();
   for (const [date, day] of perDate) {
     for (const [paycode, entry] of day) {
       const emp = entry.emp;
       const key = emp.companycode || '';
       if (!groups.has(key)) {
         groups.set(key, { key, label: emp.companyname || emp.companycode || '—', ...emptyMonitorBucket(), employeeSet: new Set() });
+        holidayDates.set(key, new Set());
+        weekOffDates.set(key, new Set());
       }
       const g = groups.get(key);
       g.employeeSet.add(paycode);
+      if (entry.status === 'Holiday') holidayDates.get(key).add(date);
+      if (entry.status === 'Week Off') weekOffDates.get(key).add(date);
       accumulateMonitorDay(g, entry);
     }
   }
   return [...groups.values()]
     .map((g) => {
       const { employeeSet, ...rest } = g;
+      rest.holiday = holidayDates.get(g.key)?.size || 0;
+      rest.weekOff = weekOffDates.get(g.key)?.size || 0;
       return { ...rest, employees: employeeSet.size, attendancePct: monitorAttendancePct(g) };
     })
     .sort((a, b) => b.employees - a.employees || String(a.label).localeCompare(String(b.label)));
@@ -5202,9 +5314,17 @@ app.get('/api/hr/reports/employees', authenticate, requireRole('HR'), requireDbC
 });
 
 // Report summary: KPIs + per-day trend + dimension breakdown + company
-// comparison, all over the SAME scoped, classified rows as the register.
-// `dimension` selects the comparison grouping (company | category | department |
-// shift); comparisons can only ever contain companies inside the caller's scope.
+// comparison — all built from the SAME authoritative per-employee-per-day
+// status map as the Company-wise status summary and the mobile app
+// (buildAbsentMissMonitor). `dimension` selects the comparison grouping
+// (company | category | department | shift); comparisons can only ever contain
+// companies inside the caller's scope.
+async function buildAuthoritativeReport(pool, req, filters) {
+  const { employees, dates, perDate, lateSummaries } = await buildAbsentMissMonitor(pool, req, filters);
+  const rows = flattenMonitorRows(perDate, dates, null);
+  return { employees, dates, rows, lateSummaries };
+}
+
 app.get('/api/hr/reports/summary', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
   try {
     if (reportDeniedEmptyScope(req, res)) return;
@@ -5213,7 +5333,7 @@ app.get('/api/hr/reports/summary', authenticate, requireRole('HR'), requireDbCon
     const dimensionRaw = String(req.query.dimension || 'company').trim().toLowerCase();
     const dimension = REPORT_DIMENSIONS.includes(dimensionRaw) ? dimensionRaw : 'company';
     const pool = await getPool();
-    const { rows, rawRows, employees, shiftMap } = await loadReportRegisterRows(pool, req, filters);
+    const { employees, rows, lateSummaries } = await buildAuthoritativeReport(pool, req, filters);
 
     const kpis = computeReportKpis(rows, employees);
     const trend = buildReportTrend(rows, filters.fromDate, filters.toDate);
@@ -5223,9 +5343,9 @@ app.get('/api/hr/reports/summary', authenticate, requireRole('HR'), requireDbCon
     let employee = null;
     if (filters.paycode) {
       const info = employees.get(String(filters.paycode).trim()) || null;
-      const finalLate = computeReportFinalLate(rawRows, shiftMap, info, filters.paycode);
+      const late = lateSummaries ? lateSummaries.get(String(filters.paycode).trim()) : null;
       employee = info
-        ? { ...info, lateFinal: finalLate ? finalLate.lateFinal : null, lateDetails: finalLate ? finalLate.lateDetails : [] }
+        ? { ...info, lateFinal: late ? late.finalLate : null, lateDetails: [] }
         : { paycode: filters.paycode, lateFinal: null, lateDetails: [] };
     }
 
@@ -5242,9 +5362,10 @@ app.get('/api/hr/reports/summary', authenticate, requireRole('HR'), requireDbCon
   } catch (error) { sendDbError(res, error); }
 });
 
-// Detailed attendance register — one row per (employee x register day) in the
-// range, the same rows/labels as Daily Master ('No Record' where no source row
-// exists). Server-side pagination + the same filters and company scope as the
+// Detailed attendance register — one row per (employee x day) in the range, from
+// the SAME authoritative per-employee-per-day status map as the summary and the
+// mobile app ('No Record' where no register row exists — never invented as
+// Absent). Server-side pagination + the same filters and company scope as the
 // summary, so page 2 of a manipulated request can never surface another company.
 app.get('/api/hr/reports/register', authenticate, requireRole('HR'), requireDbConfig, async (req, res) => {
   try {
@@ -5254,7 +5375,7 @@ app.get('/api/hr/reports/register', authenticate, requireRole('HR'), requireDbCo
     const page = Math.max(Number(req.query.page || 1), 1);
     const pageSize = Math.min(Math.max(Number(req.query.pageSize || 50), 1), 200);
     const pool = await getPool();
-    const { rows, employees } = await loadReportRegisterRows(pool, req, filters);
+    const { employees, rows } = await buildAuthoritativeReport(pool, req, filters);
 
     // Newest day first (matching the audit's recency ordering); 'No Record' rows
     // (no date) sort last. Sort is deterministic so pages are stable.
@@ -5316,8 +5437,11 @@ function buildReportWorkbook({ filters, dimension, kpis, breakdown, companyCompa
     ['Present days', kpis.presentDays],
     ['Absent days', kpis.absentDays],
     ['Miss Punch days', kpis.missDays],
-    ['Week Off days (excluded from %)', kpis.weekOffDays],
     ['Late days (after 5-minute grace)', kpis.lateDays],
+    ['Approved Leave days', kpis.approvedLeaveDays],
+    ['Holiday days', kpis.holidayDays],
+    ['Week Off days (excluded from %)', kpis.weekOffDays],
+    ['No Record days (no register row)', kpis.noRecordDays],
     ['Recorded hours', hoursText(kpis.hoursMinutes)],
     ['Attendance %', pctText(kpis.attendancePct)],
     ['Employees without register rows', kpis.employeesWithoutRecords],
@@ -5341,24 +5465,25 @@ function buildReportWorkbook({ filters, dimension, kpis, breakdown, companyCompa
     ['Company security', 'All rows and every filter option are limited to the companies assigned to this HR Admin account by the SuperAdmin console.'],
   );
 
-  const compareHeader = ['Group', 'Employees', 'Present Days', 'Absent Days', 'Miss Punch Days', 'Week Off Days', 'Late Days', 'Recorded Hours', 'Attendance %'];
+  const compareHeader = ['Group', 'Employees', 'Present Days', 'Absent Days', 'Miss Punch Days', 'Late Days', 'Approved Leave Days', 'Holiday Days', 'Week Off Days', 'No Record Days', 'Recorded Hours', 'Attendance %'];
+  const compareRow = (g) => [g.label || g.key, g.employees, g.presentDays, g.absentDays, g.missDays, g.lateDays, g.approvedLeaveDays, g.holidayDays, g.weekOffDays, g.noRecordDays, hoursText(g.hoursMinutes), pctText(g.attendancePct)];
   const compareAoA = [
     [`Comparison — ${dimension}-wise`, `(${filters.fromDate} to ${filters.toDate})`],
     compareHeader,
-    ...breakdown.map((g) => [g.label || g.key, g.employees, g.presentDays, g.absentDays, g.missDays, g.weekOffDays, g.lateDays, hoursText(g.hoursMinutes), pctText(g.attendancePct)]),
+    ...breakdown.map(compareRow),
     [],
     ['Company comparison (authorised companies only)'],
     compareHeader,
-    ...companyComparison.map((g) => [g.label || g.key, g.employees, g.presentDays, g.absentDays, g.missDays, g.weekOffDays, g.lateDays, hoursText(g.hoursMinutes), pctText(g.attendancePct)]),
+    ...companyComparison.map(compareRow),
   ];
 
   const registerAoA = [
-    ['Date', 'Paycode', 'Name', 'Company', 'Department', 'Category', 'Shift', 'In', 'Out', 'Hours', 'Status', 'Late', 'Late Minutes', 'Grace Used', 'Reason'],
+    ['Date', 'Paycode', 'Name', 'Company', 'Department', 'Category', 'Shift', 'In', 'Out', 'Hours', 'Status', 'Late', 'Late Minutes', 'Grace Used', 'Holiday / Leave', 'Reason'],
     ...registerRows.map((r) => [
       r.date || 'No Record', r.paycode, r.empname || '', r.companyname || r.companycode || '',
       r.departmentname || r.departmentcode || '', r.category || '', r.shiftcode || '',
       r.inTime || '', r.outTime || '', r.hoursworked == null ? '' : hoursText(r.hoursworked),
-      r.status, r.isLate ? 'Yes' : 'No', r.lateMinutes || 0, r.graceUsed || '', r.reason || '',
+      r.status, r.isLate ? 'Yes' : 'No', r.lateMinutes || 0, r.graceUsed || '', r.holidayName || r.leaveType || '', r.reason || '',
     ]),
   ];
 
@@ -5382,16 +5507,16 @@ app.get('/api/hr/reports/export', authenticate, requireRole('HR'), requireDbConf
     const dimensionRaw = String(req.query.dimension || 'company').trim().toLowerCase();
     const dimension = REPORT_DIMENSIONS.includes(dimensionRaw) ? dimensionRaw : 'company';
     const pool = await getPool();
-    const { rows, rawRows, employees, shiftMap } = await loadReportRegisterRows(pool, req, filters);
+    const { employees, rows, lateSummaries } = await buildAuthoritativeReport(pool, req, filters);
     const kpis = computeReportKpis(rows, employees);
     const breakdown = buildReportBreakdown(rows, employees, dimension);
     const companyComparison = buildReportBreakdown(rows, employees, 'company');
     let employee = null;
     if (filters.paycode) {
       const info = employees.get(String(filters.paycode).trim()) || null;
-      const finalLate = computeReportFinalLate(rawRows, shiftMap, info, filters.paycode);
+      const late = lateSummaries ? lateSummaries.get(String(filters.paycode).trim()) : null;
       employee = info
-        ? { ...info, lateFinal: finalLate ? finalLate.lateFinal : null }
+        ? { ...info, lateFinal: late ? late.finalLate : null }
         : { paycode: filters.paycode, lateFinal: null };
     }
     // Deterministic sheet order: newest day first, then name ('No Record' last).
