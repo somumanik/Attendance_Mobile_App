@@ -4187,7 +4187,25 @@ async function loadReportRegisterRows(pool, req, filters) {
   const rows = [];
   const rawRows = [];
   const employees = new Map(); // paycode -> employee header info
+
+  // De-duplicate register rows per (paycode, dateoffice). The OUTER APPLY above
+  // returns EVERY matching register row, so a duplicate (paycode, date) would
+  // otherwise inflate Present/Absent/Miss/Late counts and the Excel export.
+  // Keep the most complete row: prefer one with an OUT punch, then the highest
+  // hoursworked. Paycodes stay strings (no numeric coercion / leading-zero loss).
+  const bestByDay = new Map();
   for (const row of result.recordset) {
+    const paycode = String(row.paycode || '').trim();
+    const dateKey = row.dateoffice ? rowDateIso(row.dateoffice) : null;
+    const key = `${paycode}|${dateKey || '__NORECORD__'}`;
+    const prev = bestByDay.get(key);
+    if (!prev) { bestByDay.set(key, row); continue; }
+    const score = (r) => (r.out1 || r.out2 ? 1000 : 0) + Number(r.hoursworked || 0);
+    if (score(row) > score(prev)) bestByDay.set(key, row);
+  }
+  const deduped = [...bestByDay.values()];
+
+  for (const row of deduped) {
     const paycode = String(row.paycode || '').trim();
     const hasRow = Boolean(row.dateoffice);
     if (!employees.has(paycode)) {

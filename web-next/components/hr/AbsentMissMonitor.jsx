@@ -406,7 +406,9 @@ export default function AbsentMissMonitor() {
                     <tr key={g.key || g.label}>
                       <td className="font-semibold">{g.label || g.key || '—'}</td>
                       <td>{num(g.employees)}</td>
-                      <td className="text-emerald-300 font-semibold">{num(g.present)}</td>
+                      <td>
+                        <button type="button" onClick={() => openDrill('Present', g.key)} className="text-emerald-300 font-bold underline decoration-dotted underline-offset-2 hover:text-emerald-200" title={`Show Present employees for ${g.label}`}>{num(g.present)}</button>
+                      </td>
                       <td>
                         <button type="button" onClick={() => openDrill('Absent', g.key)} className="text-rose-300 font-bold underline decoration-dotted underline-offset-2 hover:text-rose-200" title={`Show Absent employees for ${g.label}`}>{num(g.absent)}</button>
                       </td>
@@ -426,7 +428,7 @@ export default function AbsentMissMonitor() {
                 </tbody>
               </table>
             </div>
-            <p className="text-[10px] text-[var(--muted)] mt-2">Click an <span className="text-rose-300 font-bold">Absent</span>, <span className="text-orange-300 font-bold">Miss Punch</span> or <span className="text-indigo-300 font-bold">Late</span> count to open the matching employees below.</p>
+            <p className="text-[10px] text-[var(--muted)] mt-2">Click a <span className="text-emerald-300 font-bold">Present</span>, <span className="text-rose-300 font-bold">Absent</span>, <span className="text-orange-300 font-bold">Miss Punch</span> or <span className="text-indigo-300 font-bold">Late</span> count to open the matching employees below.</p>
           </div>
 
           {/* ---------- drill-down employee register ---------- */}
